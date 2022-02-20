@@ -1,0 +1,52 @@
+package io.emeraldpay.dshackle.archive
+
+import io.emeraldpay.dshackle.archive.config.RunConfig
+import io.emeraldpay.dshackle.archive.config.RunConfigHolder
+import io.emeraldpay.dshackle.archive.config.RunConfigInitializer
+import io.emeraldpay.dshackle.archive.runner.RunArchive
+import io.emeraldpay.dshackle.archive.runner.RunCopy
+import io.emeraldpay.dshackle.archive.runner.RunStream
+import io.emeraldpay.grpc.BlockchainType
+import java.util.*
+import kotlin.collections.ArrayList
+import org.slf4j.LoggerFactory
+import org.springframework.boot.Banner
+import org.springframework.boot.SpringApplication
+import org.springframework.boot.autoconfigure.SpringBootApplication
+import org.springframework.context.annotation.Import
+
+@SpringBootApplication(scanBasePackages = ["io.emeraldpay.dshackle.archive"])
+@Import(Config::class)
+open class App
+
+fun main(args: Array<String>) {
+    val log = LoggerFactory.getLogger(App::class.java)
+    val config = RunConfigInitializer().create(args)
+    RunConfigHolder.value = config
+
+    log.info("Run: ${config.command}")
+
+    val app = SpringApplication(App::class.java)
+    app.setBannerMode(Banner.Mode.OFF)
+
+    val profiles = ArrayList<String>()
+    profiles.add("run-" + config.command.name.lowercase(Locale.getDefault()))
+
+    when (BlockchainType.from(config.blockchain)) {
+        BlockchainType.ETHEREUM -> profiles.add("ethereum")
+        BlockchainType.BITCOIN -> profiles.add("bitcoin")
+        else -> throw IllegalStateException("Unsupported blockchain: ${config.blockchain}")
+    }
+
+    if (config.useGCP()) {
+        profiles.add("with-gcp")
+    }
+
+    app.setAdditionalProfiles(*profiles.toTypedArray())
+    val ctx = app.run(*args)
+    when (config.command) {
+        RunConfig.Command.ARCHIVE -> ctx.getBean(RunArchive::class.java).run()
+        RunConfig.Command.COPY -> ctx.getBean(RunCopy::class.java).run()
+        RunConfig.Command.STREAM -> ctx.getBean(RunStream::class.java).run()
+    }
+}

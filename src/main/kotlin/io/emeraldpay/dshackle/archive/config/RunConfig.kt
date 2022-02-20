@@ -1,0 +1,124 @@
+package io.emeraldpay.dshackle.archive.config
+
+import io.emeraldpay.dshackle.archive.avro.BlockchainType
+import io.emeraldpay.grpc.Chain
+
+data class RunConfig(
+        val command: Command,
+        val blockchain: Chain,
+        val connection: Connection?,
+        val options: ArchiveOptions,
+        val range: Range,
+        val files: Files,
+        val inputFiles: InputFiles? = null,
+        val export: Export = Export.default()
+) {
+    companion object {
+        @JvmStatic
+        fun default(): RunConfig {
+            return RunConfig(
+                    Command.ARCHIVE,
+                    Chain.ETHEREUM,
+                    Connection.default(),
+                    ArchiveOptions(),
+                    Range.default(),
+                    Files(),
+                    null
+            )
+        }
+    }
+
+    val chainType: BlockchainType = when (io.emeraldpay.grpc.BlockchainType.from(blockchain)) {
+        io.emeraldpay.grpc.BlockchainType.ETHEREUM -> BlockchainType.ETHEREUM
+        io.emeraldpay.grpc.BlockchainType.BITCOIN -> BlockchainType.BITCOIN
+        else -> throw IllegalStateException("Unsupported chain: $blockchain")
+    }
+
+    fun getChainId(): String {
+        return blockchain.chainCode
+    }
+
+    fun useGCP(): Boolean {
+        return export.gs != null
+    }
+
+    enum class Command {
+        ARCHIVE,
+        COPY,
+        STREAM
+    }
+
+    data class Connection(
+            val host: String,
+            val port: Int
+    ) {
+        companion object {
+            fun default(): Connection {
+                return Connection("127.0.0.1", 2448)
+            }
+        }
+    }
+
+    data class ArchiveOptions(
+            val trace: Boolean = false,
+            val stateDiff: Boolean = false
+    )
+
+    data class Range(
+            val start: Long,
+            val count: Long,
+            val chunk: Long,
+            val individual: Boolean,
+            val tail: Long = 100
+    ) {
+        companion object {
+            private const val DEFAULT_CHUNK: Long = 1_000
+            private const val DEFAULT_INDIVIDUAL: Boolean = false
+
+            fun default(): Range {
+                return Range(0, 0, DEFAULT_CHUNK, DEFAULT_INDIVIDUAL)
+            }
+
+            private fun parseNumber(s: String): Long {
+                return s.replace("_", "").trim().toLong()
+            }
+
+            fun parse(range: String): Range {
+                return if (range.contains("..")) {
+                    range.split("..").let {
+                        Range(parseNumber(it[0]), parseNumber(it[1]) - parseNumber(it[0]), DEFAULT_CHUNK, DEFAULT_INDIVIDUAL)
+                    }
+                } else {
+                    Range(parseNumber(range), 1, DEFAULT_CHUNK, true)
+                }
+            }
+        }
+    }
+
+    data class Files(
+            val dir: String = ".",
+            val prefix: String = "",
+            val dirBlockSizeL1: Long = 1_000_000,
+            val dirBlockSizeL2: Long = 1_000,
+    )
+
+    data class Export(
+            val gs: ExportGS? = null
+    ) {
+        companion object {
+            fun default(): Export {
+                return Export(null)
+            }
+        }
+    }
+
+    data class ExportGS(
+            val bucket: String,
+            val path: String,
+            val credentials: String? = null
+    )
+
+    data class InputFiles(
+            val files: List<String>
+    )
+}
