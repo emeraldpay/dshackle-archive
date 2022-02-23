@@ -19,8 +19,8 @@ open class BlocksRange(
     }
 
     val length: Long = range.count
-    val startBlock: Long = range.start
-    val endBlock: Long = startBlock + length - 1
+    var startBlock: Long = range.start
+    val endBlock: Long = range.start + length - 1
     val isUsingRanges: Boolean = !range.individual
 
     fun getChunks(): List<Chunk> {

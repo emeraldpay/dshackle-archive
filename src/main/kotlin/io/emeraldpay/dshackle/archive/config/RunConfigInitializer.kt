@@ -40,6 +40,10 @@ class RunConfigInitializer {
             it.isRequired = false
             options.addOption(it)
         }
+        Option(null, "continue", false, "Continue from the last file if set").let {
+            it.isRequired = false
+            options.addOption(it)
+        }
 
         Option("d", "dir", true, "Target directory").let {
             it.isRequired = false
@@ -156,6 +160,9 @@ class RunConfigInitializer {
             range = range.copy(
                     chunk = value.toLong()
             )
+        }
+        if (cmd.hasOption("continue")) {
+            range = range.copy(continueFromLast = true)
         }
         if (command == RunConfig.Command.STREAM) {
             range = range.copy(

@@ -30,13 +30,13 @@ open class FilenameGenerator(
     }
 
     fun parseRange(filename: String): BlocksRange.Chunk? {
-        val range = rangeRegex.matchEntire(filename)
+        val range = rangeRegex.matchEntire(filename.substringAfterLast("/"))
         if (range != null) {
             val start = range.groupValues[1].toLong()
             val end = range.groupValues[2].toLong()
             return BlocksRange.Chunk(start, end - start + 1)
         }
-        val single = singleRegex.matchEntire(filename)
+        val single = singleRegex.matchEntire(filename.substringAfterLast("/"))
         if (single != null) {
             val height = single.groupValues[1].toLong()
             return BlocksRange.Chunk(height, 1)

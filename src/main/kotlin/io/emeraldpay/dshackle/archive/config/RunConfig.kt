@@ -69,7 +69,8 @@ data class RunConfig(
             val count: Long,
             val chunk: Long,
             val individual: Boolean,
-            val tail: Long = 100
+            val tail: Long = 100,
+            val continueFromLast: Boolean = false,
     ) {
         companion object {
             private const val DEFAULT_CHUNK: Long = 1_000
