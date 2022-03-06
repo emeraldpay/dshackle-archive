@@ -24,19 +24,14 @@ open class BlocksRange(
     val isUsingRanges: Boolean = !range.individual
 
     fun getChunks(): List<Chunk> {
-        val endBlock = startBlock + length
-        val result = ArrayList<Chunk>()
-        var currentStart = startBlock
-        while (true) {
-            val currentLength = range.chunk
-                    .coerceAtMost(endBlock - currentStart)
-            result.add(Chunk(currentStart, currentLength))
-            if (currentStart + currentLength >= endBlock) {
-                return result
-            }
-            currentStart += currentLength
+        // note that the startBlock may change after startup, because archive can rewind to after the latest archive block,
+        // so we cannot initialize the iterator as a field
+        val chunkIterator: ChunkIterator = if (range.positioned) {
+            AlignedChunkIterator(startBlock, length, range.chunk)
+        } else {
+            StandardChunkIterator(startBlock, length, range.chunk)
         }
-        return result
+        return chunkIterator.getChunks()
     }
 
     fun getChunkAt(height: Long): Chunk {
@@ -55,15 +50,15 @@ open class BlocksRange(
         return height in startBlock..endBlock
     }
 
-    data class Chunk(val startBlock: Long, val length: Long) {
+    data class Chunk(val startBlock: Long, public val length: Long) {
 
-        fun endBlock(): Long {
+        fun getEndBlock(): Long {
             return startBlock + length - 1
         }
 
         fun intersects(o: Chunk): Boolean {
-            val oEnd = o.endBlock()
-            val end = endBlock()
+            val oEnd = o.getEndBlock()
+            val end = getEndBlock()
 
             val crossLeft = startBlock in o.startBlock..oEnd
             val crossRight = end in o.startBlock..oEnd
@@ -73,5 +68,66 @@ open class BlocksRange(
             return crossLeft || crossRight || includes || inside
         }
 
+    }
+
+    interface ChunkIterator {
+        fun getChunks(): List<Chunk>
+    }
+
+    class StandardChunkIterator(
+            val startBlock: Long,
+            val length: Long,
+            val chunk: Long,
+    ) : ChunkIterator {
+
+        override fun getChunks(): List<Chunk> {
+            val endBlock = startBlock + length
+            val result = ArrayList<Chunk>()
+            var currentStart = startBlock
+            while (true) {
+                val currentLength = chunk.coerceAtMost(endBlock - currentStart)
+                result.add(Chunk(currentStart, currentLength))
+                if (currentStart + currentLength >= endBlock) {
+                    return result
+                }
+                currentStart += currentLength
+            }
+            return result
+        }
+    }
+
+    /**
+     * Chunks are aligned by chunk size. I.e. if chunk size is 100 and range started at 80 then the first chunk
+     * is 80..99, then next is 100..200
+     */
+    class AlignedChunkIterator(
+            val startBlock: Long,
+            val length: Long,
+            val chunk: Long,
+    ) : ChunkIterator {
+
+        override fun getChunks(): List<Chunk> {
+            val result = ArrayList<Chunk>()
+            val fistPosition = startBlock.floorDiv(chunk).times(chunk).let {
+                if (it == startBlock) {
+                    it
+                } else {
+                    result.add(Chunk(startBlock, it + chunk - startBlock))
+                    it + chunk
+                }
+            }
+
+            val endBlock = startBlock + length
+            var currentStart = fistPosition
+            while (true) {
+                val currentLength = chunk.coerceAtMost(endBlock - currentStart)
+                result.add(Chunk(currentStart, currentLength))
+                if (currentStart + currentLength >= endBlock) {
+                    return result
+                }
+                currentStart += currentLength
+            }
+            return result
+        }
     }
 }

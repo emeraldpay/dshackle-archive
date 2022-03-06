@@ -41,4 +41,76 @@ class BlocksRangeSpec extends Specification {
         0      | 20_000
         21_000 | 10
     }
+
+    def "AlignedChunkIterator from start"() {
+        when:
+        def iter = new BlocksRange.AlignedChunkIterator(0, 1000, 250)
+        def act = iter.chunks
+        then:
+        act.size() == 4
+        with(act[0]) {
+            it.startBlock == 0
+            it.endBlock == 249
+        }
+        with(act[1]) {
+            it.startBlock == 250
+            it.endBlock == 499
+        }
+        with(act[2]) {
+            it.startBlock == 500
+            it.endBlock == 749
+        }
+        with(act[3]) {
+            it.startBlock == 750
+            it.endBlock == 999
+        }
+    }
+
+    def "AlignedChunkIterator not from start"() {
+        when:
+        def iter = new BlocksRange.AlignedChunkIterator(75, 925, 250)
+        def act = iter.chunks
+        then:
+        act.size() == 4
+        with(act[0]) {
+            it.startBlock == 75
+            it.endBlock == 249
+        }
+        with(act[1]) {
+            it.startBlock == 250
+            it.endBlock == 499
+        }
+        with(act[2]) {
+            it.startBlock == 500
+            it.endBlock == 749
+        }
+        with(act[3]) {
+            it.startBlock == 750
+            it.endBlock == 999
+        }
+    }
+
+    def "AlignedChunkIterator crossing in the middle"() {
+        when:
+        def iter = new BlocksRange.AlignedChunkIterator(75, 900, 250)
+        def act = iter.chunks
+        then:
+        act.size() == 4
+        with(act[0]) {
+            it.startBlock == 75
+            it.endBlock == 249
+        }
+        with(act[1]) {
+            it.startBlock == 250
+            it.endBlock == 499
+        }
+        with(act[2]) {
+            it.startBlock == 500
+            it.endBlock == 749
+        }
+        with(act[3]) {
+            it.startBlock == 750
+            it.endBlock == 974
+        }
+    }
 }

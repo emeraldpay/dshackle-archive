@@ -75,7 +75,7 @@ class RunArchive(
                     .filter {
                         wholeChunk.intersects(it)
                     }
-                    .map { it.endBlock() }
+                    .map { it.getEndBlock() }
                     .reduce { a, b ->
                         a.coerceAtLeast(b)
                     }
