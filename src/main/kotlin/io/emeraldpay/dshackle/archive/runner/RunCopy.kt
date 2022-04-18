@@ -91,7 +91,7 @@ class RunCopy(
                 .filter {
                     blocksRange.includes(it.height)
                 }
-        completeWriter.consumeBlocks(source)
+        completeWriter.consumeBlocks(source, null)
     }
 
     fun copyTransactions(files: Iterable<Path>) {
@@ -102,7 +102,7 @@ class RunCopy(
                 .filter {
                     blocksRange.includes(it.height)
                 }
-        completeWriter.consumeTransactions(source)
+        completeWriter.consumeTransactions(source, null)
     }
 
 }

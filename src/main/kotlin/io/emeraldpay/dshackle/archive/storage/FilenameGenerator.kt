@@ -29,6 +29,10 @@ open class FilenameGenerator(
         }
     }
 
+    fun isSingle(filename: String): Boolean {
+        return singleRegex.matches(filename.substringAfterLast("/"))
+    }
+
     fun parseRange(filename: String): BlocksRange.Chunk? {
         val range = rangeRegex.matchEntire(filename.substringAfterLast("/"))
         if (range != null) {

@@ -13,6 +13,8 @@ import org.springframework.beans.factory.annotation.Autowired
 import org.springframework.stereotype.Repository
 import reactor.core.publisher.Flux
 import reactor.core.publisher.Mono
+import java.nio.file.Files
+import java.nio.file.Path
 
 @Repository
 class CompleteWriter(
@@ -64,7 +66,7 @@ class CompleteWriter(
         postArchive.handle(txFile)
     }
 
-    fun consumeBlocks(dataSource: Flux<Block>) {
+    fun consumeBlocks(dataSource: Flux<Block>, filesToDelete : ArrayList<Path>?) {
         val progress = ProgressIndicator()
         val startTime = System.currentTimeMillis()
         dataSource
@@ -90,6 +92,7 @@ class CompleteWriter(
                 }
                 .doFinally {
                     blocksWriter.closeAll()
+                    filesToDelete?.stream()?.forEach { Files.deleteIfExists(it) }
                     val time = System.currentTimeMillis() - startTime
                     val minutes = time / 60_000
                     val seconds = (time % 60_000) / 1000
@@ -98,7 +101,7 @@ class CompleteWriter(
                 .block()
     }
 
-    fun consumeTransactions(dataSource: Flux<Transaction>) {
+    fun consumeTransactions(dataSource: Flux<Transaction>, filesToDelete: ArrayList<Path>?) {
         val progress = ProgressIndicator()
         val startTime = System.currentTimeMillis()
         dataSource
@@ -124,6 +127,7 @@ class CompleteWriter(
                 }
                 .doFinally {
                     blocksWriter.closeAll()
+                    filesToDelete?.stream()?.forEach { Files.deleteIfExists(it) }
                     val time = System.currentTimeMillis() - startTime
                     val minutes = time / 60_000
                     val seconds = (time % 60_000) / 1000
