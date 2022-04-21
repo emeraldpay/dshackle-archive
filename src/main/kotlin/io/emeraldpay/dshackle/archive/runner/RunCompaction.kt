@@ -87,14 +87,11 @@ class RunCompaction(
             if (filenameGenerator.isSingle(it.fileName.name)) {
                 groupOfSingles.add(it)
             } else if (groupOfSingles.isNotEmpty()) {
-                val source = Flux.fromIterable(groupOfSingles)
-                    .flatMap { file ->
-                        BlocksReader().open(file)
-                    }
-                completeWriter.consumeBlocks(source, groupOfSingles)
+                openAndConsumeBlocks(groupOfSingles)
                 groupOfSingles = ArrayList<Path>()
             }
         }
+        openAndConsumeBlocks(groupOfSingles)
     }
 
     fun compactTransactions(files: Iterable<Path>) {
@@ -103,14 +100,27 @@ class RunCompaction(
             if (filenameGenerator.isSingle(it.fileName.name)) {
                 groupOfSingles.add(it)
             } else if (groupOfSingles.isNotEmpty()) {
-                val source = Flux.fromIterable(groupOfSingles)
-                    .flatMap { file ->
-                        TransactionsReader().open(file)
-                    }
-                completeWriter.consumeTransactions(source, groupOfSingles)
+                openAndConsumeTransactions(groupOfSingles)
                 groupOfSingles = ArrayList<Path>()
             }
         }
+        openAndConsumeTransactions(groupOfSingles)
+    }
+
+    fun openAndConsumeTransactions(groupOfSingles : ArrayList<Path>){
+        val source = Flux.fromIterable(groupOfSingles)
+            .flatMap { file ->
+                TransactionsReader().open(file)
+            }
+        completeWriter.consumeTransactions(source, groupOfSingles)
+    }
+
+    fun openAndConsumeBlocks(groupOfSingles : ArrayList<Path>){
+        val source = Flux.fromIterable(groupOfSingles)
+            .flatMap { file ->
+                BlocksReader().open(file)
+            }
+        completeWriter.consumeBlocks(source, groupOfSingles)
     }
 
 }

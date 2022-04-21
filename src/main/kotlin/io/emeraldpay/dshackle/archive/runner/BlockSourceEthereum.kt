@@ -23,7 +23,7 @@ import java.util.*
 import org.springframework.context.annotation.Profile
 
 @Service
-@Profile("!run-copy & ethereum")
+@Profile("!run-copy & !run-compact & ethereum")
 class BlockSourceEthereum(
         @Autowired private val client: ReactorBlockchainGrpc.ReactorBlockchainStub,
         @Autowired private val objectMapper: ObjectMapper,

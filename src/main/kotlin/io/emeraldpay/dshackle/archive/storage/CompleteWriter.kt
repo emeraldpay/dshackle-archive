@@ -10,6 +10,8 @@ import io.emeraldpay.dshackle.archive.storage.fs.TransactionsWriter
 import org.apache.commons.lang3.StringUtils
 import org.slf4j.LoggerFactory
 import org.springframework.beans.factory.annotation.Autowired
+import org.springframework.core.env.Environment
+import org.springframework.core.env.Profiles
 import org.springframework.stereotype.Repository
 import reactor.core.publisher.Flux
 import reactor.core.publisher.Mono
@@ -21,7 +23,8 @@ class CompleteWriter(
         @Autowired private val blocksWriter: BlocksWriter,
         @Autowired private val transactionsWriter: TransactionsWriter,
         @Autowired private val configuredFilenameGenerator: ConfiguredFilenameGenerator,
-        @Autowired private val postArchive: PostArchive
+        @Autowired private val postArchive: PostArchive,
+        @Autowired private val environment: Environment
 ) {
 
     companion object {
@@ -69,14 +72,22 @@ class CompleteWriter(
     fun consumeBlocks(dataSource: Flux<Block>, filesToDelete : ArrayList<Path>?) {
         val progress = ProgressIndicator()
         val startTime = System.currentTimeMillis()
+        var previousBlockHigh = -1L
         dataSource
                 .doOnSubscribe {
                     progress.start()
                 }
                 .flatMap({ block ->
+                    if (environment.acceptsProfiles(Profiles.of("run-compact"))) {
+                        if(previousBlockHigh != -1L && block.height - previousBlockHigh != 1L ){
+                            return@flatMap Flux.error(Exception("There are gaps in the blocks range!"))
+                        } else {
+                            previousBlockHigh = block.height
+                        }
+                    }
                     Mono.fromCallable {
                         val blockFile = configuredFilenameGenerator.fileForAutoRange(FILE_TYPE_BLOCK, block.height, false)
-                        blocksWriter.open(blockFile).append(block)
+                        blocksWriter.open(blockFile).use { it.append(block) }
                     }
                 }, 4)
                 .doOnNext {
@@ -91,7 +102,7 @@ class CompleteWriter(
                     total
                 }
                 .doFinally {
-                    blocksWriter.closeAll()
+//                    blocksWriter.closeAll()
                     filesToDelete?.stream()?.forEach { Files.deleteIfExists(it) }
                     val time = System.currentTimeMillis() - startTime
                     val minutes = time / 60_000
@@ -126,7 +137,7 @@ class CompleteWriter(
                     total
                 }
                 .doFinally {
-                    blocksWriter.closeAll()
+//                    transactionsWriter.closeAll()
                     filesToDelete?.stream()?.forEach { Files.deleteIfExists(it) }
                     val time = System.currentTimeMillis() - startTime
                     val minutes = time / 60_000
