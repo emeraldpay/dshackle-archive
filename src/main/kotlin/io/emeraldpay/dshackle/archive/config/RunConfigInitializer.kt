@@ -174,7 +174,7 @@ class RunConfigInitializer {
         }
 
         return RunConfig(command, blockchain, connection, archiveOptions, range, files).let { config ->
-            if (command == RunConfig.Command.COPY) {
+            if (command == RunConfig.Command.COPY || command == RunConfig.Command.COMPACT) {
                 val inputs = cmd.getOptionValues("inputs").flatMap {
                     it.split(",")
                 }.map {

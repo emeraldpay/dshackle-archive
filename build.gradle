@@ -109,6 +109,12 @@ dependencies {
 
     testImplementation "org.codehaus.groovy:groovy:$groovyVersion"
     testImplementation 'org.spockframework:spock-core:' + spockVersion
+
+    testImplementation(platform("org.junit:junit-bom:5.8.2"))
+    testImplementation("org.springframework.boot:spring-boot-starter-test:" + springBootVersion){
+        exclude module: 'spring-boot-starter-logging'
+    }
+    testImplementation("org.jetbrains.kotlin:kotlin-test-junit5")
 }
 
 tasks.withType(org.jetbrains.kotlin.gradle.tasks.KotlinCompile).all {
@@ -118,7 +124,7 @@ tasks.withType(org.jetbrains.kotlin.gradle.tasks.KotlinCompile).all {
 }
 
 test {
-    jvmArgs '-ea'
+    jvmArgs( '-ea', "-Dspring.profiles.active=test", "-Dlogging.level.io.emeraldpay=DEBUG")
     testLogging.showStandardStreams = false
     testLogging.exceptionFormat = 'full'
     useJUnitPlatform()

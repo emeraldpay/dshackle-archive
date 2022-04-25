@@ -80,14 +80,14 @@ class CompleteWriter(
                 .flatMap({ block ->
                     if (environment.acceptsProfiles(Profiles.of("run-compact"))) {
                         if(previousBlockHigh != -1L && block.height - previousBlockHigh != 1L ){
-                            return@flatMap Flux.error(Exception("There are gaps in the blocks range!"))
+                            return@flatMap Flux.error(Exception("There are gap in the blocks range! On height=" + block.height))
                         } else {
                             previousBlockHigh = block.height
                         }
                     }
                     Mono.fromCallable {
                         val blockFile = configuredFilenameGenerator.fileForAutoRange(FILE_TYPE_BLOCK, block.height, false)
-                        blocksWriter.open(blockFile).use { it.append(block) }
+                        blocksWriter.open(blockFile).append(block)
                     }
                 }, 4)
                 .doOnNext {
@@ -102,8 +102,8 @@ class CompleteWriter(
                     total
                 }
                 .doFinally {
-//                    blocksWriter.closeAll()
                     filesToDelete?.stream()?.forEach { Files.deleteIfExists(it) }
+                    blocksWriter.closeAll()
                     val time = System.currentTimeMillis() - startTime
                     val minutes = time / 60_000
                     val seconds = (time % 60_000) / 1000
@@ -137,8 +137,8 @@ class CompleteWriter(
                     total
                 }
                 .doFinally {
-//                    transactionsWriter.closeAll()
                     filesToDelete?.stream()?.forEach { Files.deleteIfExists(it) }
+                    transactionsWriter.closeAll()
                     val time = System.currentTimeMillis() - startTime
                     val minutes = time / 60_000
                     val seconds = (time % 60_000) / 1000

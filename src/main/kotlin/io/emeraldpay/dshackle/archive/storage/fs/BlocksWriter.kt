@@ -87,6 +87,7 @@ class BlocksWriter(
         override fun append(datum: Block) {
             try {
                 dataFileWriter.append(datum)
+                dataFileWriter.flush()
             } catch (t: AvroRuntimeException) {
                 log.error("Failed to write block: ${datum.height}. Error ${t.javaClass} ${t.message}")
                 drop()

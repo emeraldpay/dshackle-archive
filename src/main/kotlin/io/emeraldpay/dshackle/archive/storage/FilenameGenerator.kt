@@ -62,6 +62,18 @@ open class FilenameGenerator(
         ).joinToString("")
     }
 
+    fun getRangeFilenameForCompaction(type: String, chunk: BlocksRange.Chunk): String {
+        val level0 = chunk.startBlock / dirBlockSizeL1 * dirBlockSizeL1
+        return listOf(
+                "range-",
+                rangePadded(chunk.startBlock), "_", rangePadded(chunk.startBlock + chunk.length - 1),
+                ".",
+                type,
+                version,
+                ".avro"
+        ).joinToString("")
+    }
+
     fun getLevel0(height: Long): String {
         val level0 = height / dirBlockSizeL1 * dirBlockSizeL1
         return rangePadded(level0)

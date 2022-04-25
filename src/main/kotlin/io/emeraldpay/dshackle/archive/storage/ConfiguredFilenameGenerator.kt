@@ -4,6 +4,8 @@ import io.emeraldpay.dshackle.archive.BlocksRange
 import io.emeraldpay.dshackle.archive.config.RunConfig
 import org.slf4j.LoggerFactory
 import org.springframework.beans.factory.annotation.Autowired
+import org.springframework.core.env.Environment
+import org.springframework.core.env.Profiles
 import org.springframework.stereotype.Service
 import java.nio.file.Files
 import java.nio.file.Path
@@ -14,13 +16,14 @@ import kotlin.concurrent.withLock
 
 @Service
 class ConfiguredFilenameGenerator(
-        @Autowired private val runConfig: RunConfig,
-        @Autowired private val range: BlocksRange,
+    @Autowired private val runConfig: RunConfig,
+    @Autowired private val range: BlocksRange,
+    @Autowired private val environment: Environment
 ) : FilenameGenerator(
-        runConfig.files.prefix,
-        runConfig.blockchain.chainCode.lowercase(Locale.getDefault()) + "/",
-        runConfig.files.dirBlockSizeL1,
-        runConfig.files.dirBlockSizeL2,
+    runConfig.files.prefix,
+    runConfig.blockchain.chainCode.lowercase(Locale.getDefault()) + "/",
+    runConfig.files.dirBlockSizeL1,
+    runConfig.files.dirBlockSizeL2,
 ) {
 
     companion object {
@@ -56,7 +59,9 @@ class ConfiguredFilenameGenerator(
     }
 
     fun fileFor(type: String, chunk: BlocksRange.Chunk, append: Boolean): Path {
-        val filename = getRangeFilename(type, chunk)
+        var filename =
+            if (environment.acceptsProfiles(Profiles.of("run-compact"))) getRangeFilenameForCompaction(type, chunk)
+            else getRangeFilename(type, chunk)
         val path = dir.resolve(filename)
         return ensureFile(path, append)
     }
