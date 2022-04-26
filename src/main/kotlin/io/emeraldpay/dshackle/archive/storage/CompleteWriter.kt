@@ -1,8 +1,8 @@
 package io.emeraldpay.dshackle.archive.storage
 
+import io.emeraldpay.dshackle.archive.BlocksRange
 import io.emeraldpay.dshackle.archive.avro.Block
 import io.emeraldpay.dshackle.archive.avro.Transaction
-import io.emeraldpay.dshackle.archive.BlocksRange
 import io.emeraldpay.dshackle.archive.runner.PostArchive
 import io.emeraldpay.dshackle.archive.runner.ProgressIndicator
 import io.emeraldpay.dshackle.archive.storage.fs.BlocksWriter
@@ -10,13 +10,10 @@ import io.emeraldpay.dshackle.archive.storage.fs.TransactionsWriter
 import org.apache.commons.lang3.StringUtils
 import org.slf4j.LoggerFactory
 import org.springframework.beans.factory.annotation.Autowired
-import org.springframework.core.env.Environment
-import org.springframework.core.env.Profiles
+import org.springframework.beans.factory.annotation.Value
 import org.springframework.stereotype.Repository
 import reactor.core.publisher.Flux
 import reactor.core.publisher.Mono
-import java.nio.file.Files
-import java.nio.file.Path
 
 @Repository
 class CompleteWriter(
@@ -24,7 +21,6 @@ class CompleteWriter(
         @Autowired private val transactionsWriter: TransactionsWriter,
         @Autowired private val configuredFilenameGenerator: ConfiguredFilenameGenerator,
         @Autowired private val postArchive: PostArchive,
-        @Autowired private val environment: Environment
 ) {
 
     companion object {
@@ -34,6 +30,9 @@ class CompleteWriter(
         private const val FILE_TYPE_BLOCKS = "blocks"
         private const val FILE_TYPE_BLOCK = "block"
     }
+
+    @Value("\${deleteCopiedFiles}")
+    lateinit var deleteCopiedFiles : String
 
     fun consume(dataSource: Flux<BlockDetails>, chunk: BlocksRange.Chunk) {
         //NOTE rewrites the files
@@ -69,16 +68,16 @@ class CompleteWriter(
         postArchive.handle(txFile)
     }
 
-    fun consumeBlocks(dataSource: Flux<Block>, filesToDelete : ArrayList<Path>?) {
+    fun consumeBlocks(dataSource: Flux<Block>) : Mono<Int> {
         val progress = ProgressIndicator()
         val startTime = System.currentTimeMillis()
         var previousBlockHigh = -1L
-        dataSource
+        return dataSource
                 .doOnSubscribe {
                     progress.start()
                 }
                 .flatMap({ block ->
-                    if (environment.acceptsProfiles(Profiles.of("run-compact"))) {
+                    if (deleteCopiedFiles == "true") {
                         if(previousBlockHigh != -1L && block.height - previousBlockHigh != 1L ){
                             return@flatMap Flux.error(Exception("There are gap in the blocks range! On height=" + block.height))
                         } else {
@@ -102,20 +101,18 @@ class CompleteWriter(
                     total
                 }
                 .doFinally {
-                    filesToDelete?.stream()?.forEach { Files.deleteIfExists(it) }
                     blocksWriter.closeAll()
                     val time = System.currentTimeMillis() - startTime
                     val minutes = time / 60_000
                     val seconds = (time % 60_000) / 1000
                     log.info("Archived in ${minutes}m:${StringUtils.leftPad(seconds.toString(), 2, "0")}s")
                 }
-                .block()
     }
 
-    fun consumeTransactions(dataSource: Flux<Transaction>, filesToDelete: ArrayList<Path>?) {
+    fun consumeTransactions(dataSource: Flux<Transaction>) : Mono<Int> {
         val progress = ProgressIndicator()
         val startTime = System.currentTimeMillis()
-        dataSource
+        return dataSource
                 .doOnSubscribe {
                     progress.start()
                 }
@@ -137,14 +134,12 @@ class CompleteWriter(
                     total
                 }
                 .doFinally {
-                    filesToDelete?.stream()?.forEach { Files.deleteIfExists(it) }
                     transactionsWriter.closeAll()
                     val time = System.currentTimeMillis() - startTime
                     val minutes = time / 60_000
                     val seconds = (time % 60_000) / 1000
                     log.info("Archived in ${minutes}m:${StringUtils.leftPad(seconds.toString(), 2, "0")}s")
                 }
-                .block()
     }
 
     fun streamConsumer(): java.util.function.Function<Flux<BlockDetails>, Flux<Long>> {

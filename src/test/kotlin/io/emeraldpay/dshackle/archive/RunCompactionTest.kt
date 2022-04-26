@@ -19,7 +19,7 @@ import java.io.File
 import kotlin.test.Test
 
 
-@SpringBootTest(args = ["-b=ETHEREUM", "--range=700_000..799_999", "--dir=src/test/resources/playground", "--inputs=src/test/resources/playground/", "compact"])
+@SpringBootTest(args = ["-b=BITCOIN", "--range=700_000..799_999", "--dir=src/test/resources/playground", "--inputs=src/test/resources/playground/", "compact"])
 @ActiveProfiles("run-compact")
 @ComponentScan("io.emeraldpay.dshackle.archive.runner")
 class RunCompactionTest {
@@ -31,11 +31,11 @@ class RunCompactionTest {
         @JvmStatic
         fun init() {
             val args = arrayOf(
-                "-b=ETHEREUM",
+                "-b=BITCOIN",
                 "--range=700_000..799_999",
                 "--dir=src/test/resources/playground",
                 "--rangeChunk=5",
-                "--inputs=src/test/resources/playground/*",
+                "--inputs=src/test/resources/playground/",
                 "compact"
             )
             val config = RunConfigInitializer().create(args)
@@ -55,12 +55,12 @@ class RunCompactionTest {
     fun successfulCompaction() {
         runCompaction.run()
 
-        assert(File("src/test/resources/playground/range-000723745_000723749.block.avro").exists())
-        assert(File("src/test/resources/playground/range-000723745_000723749.txes.avro").exists())
-        assert(File("src/test/resources/playground/range-000723755_000723759.block.avro").exists())
-        assert(File("src/test/resources/playground/range-000723755_000723759.txes.avro").exists())
+        assert(File("src/test/resources/playground/btc/000700000/range-000723745_000723749.block.avro").exists())
+        assert(File("src/test/resources/playground/btc/000700000/range-000723745_000723749.txes.avro").exists())
+        assert(File("src/test/resources/playground/btc/000700000/range-000723755_000723759.block.avro").exists())
+        assert(File("src/test/resources/playground/btc/000700000/range-000723755_000723759.txes.avro").exists())
 
-        val block50_54 = File("src/test/resources/playground/range-000723750_000723754.block.avro")
+        val block50_54 = File("src/test/resources/playground/btc/000700000/range-000723750_000723754.block.avro")
         assert(block50_54.exists())
 
         val reader: DatumReader<GenericRecord> = GenericDatumReader()
@@ -78,6 +78,8 @@ class RunCompactionTest {
         assert(record["height"].toString() == "723754")
         assert(!fileReader.hasNext())
         fileReader.close()
+
+        assert(!File("src/test/resources/playground/000723753.block.avro").exists())
     }
 
     @Test

@@ -2,19 +2,18 @@ package io.emeraldpay.dshackle.archive.runner
 
 import io.emeraldpay.dshackle.archive.BlocksRange
 import io.emeraldpay.dshackle.archive.config.RunConfig
-import io.emeraldpay.dshackle.archive.storage.fs.BlocksReader
 import io.emeraldpay.dshackle.archive.storage.CompleteWriter
 import io.emeraldpay.dshackle.archive.storage.FilenameGenerator
+import io.emeraldpay.dshackle.archive.storage.fs.BlocksReader
 import io.emeraldpay.dshackle.archive.storage.fs.TransactionsReader
-import java.nio.file.Files
-import java.nio.file.Path
-import java.util.function.Consumer
-import kotlin.io.path.name
 import org.slf4j.LoggerFactory
 import org.springframework.beans.factory.annotation.Autowired
 import org.springframework.context.annotation.Profile
 import org.springframework.stereotype.Service
 import reactor.core.publisher.Flux
+import java.io.File
+import java.nio.file.Path
+import kotlin.io.path.name
 
 @Service
 @Profile("run-copy")
@@ -36,52 +35,45 @@ class RunCopy(
             return
         }
 
-        val transactions = ArrayList<Path>()
-        val blocks = ArrayList<Path>()
-        val collect = Consumer<Path> {
-            if (it.name.contains("transactions") || it.name.contains("txes")) {
-                transactions.add(it)
-            } else if (it.name.contains("blocks") || it.name.contains("block")) {
-                blocks.add(it)
-            } else {
-                log.warn("Unknown type of file: $it")
-            }
-        }
+        val transactions = mutableListOf<Path>()
+        val blocks = mutableListOf<Path>()
         val range = blocksRange.wholeChunk()
         runConfig.inputFiles.files.forEach { pattern ->
-            if (pattern.contains("*")) {
-                val dir = Path.of(pattern.substringBeforeLast("/"))
-                val glob = pattern.substringAfterLast("/")
-                log.info("Read files at $dir with $glob")
-                Files.newDirectoryStream(dir, glob)
-                        .filter { file ->
-                            val chunk = filenameGenerator.parseRange(file.fileName.name)
-                            if (chunk == null) {
-                                log.debug("Skip ${file.fileName}")
-                            }
-                            val accept = chunk != null && range.intersects(chunk)
-                            if (!accept) {
-                                log.trace("Skip ${file.fileName}")
-                            }
-                            accept
-                        }
-                        .sortedBy { file ->
-                            val chunk = filenameGenerator.parseRange(file.fileName.name)
-                            chunk!!.startBlock
-                        }
-                        .forEach(collect)
-            } else {
-                collect.accept(Path.of(pattern))
-            }
+            File(pattern).walk()
+                .filter { file ->
+                    val chunk = filenameGenerator.parseRange(file.name)
+                    if (chunk == null) {
+                        log.debug("Skip ${file.name}")
+                    }
+                    val accept = chunk != null && range.intersects(chunk)
+                    if (!accept) {
+                        log.trace("Skip ${file.name}")
+                    }
+                    accept
+                }
+                .sortedBy { file ->
+                    val chunk = filenameGenerator.parseRange(file.name)
+                    chunk!!.startBlock
+                }
+                .map { it.toPath() }
+                .forEach {
+                    if (it.name.contains("transactions") || it.name.contains("txes")) {
+                        transactions.add(it)
+                    } else if (it.name.contains("blocks") || it.name.contains("block")) {
+                        blocks.add(it)
+                    } else {
+                        log.warn("Unknown type of file: $it")
+                    }
+                }
         }
 
-        log.info("Copy blocks")
-        copyBlocks(blocks)
-        log.info("Copy transactions")
-        copyTransactions(transactions)
+        log.info("Process blocks")
+        processBlocks(blocks)
+        log.info("Process transactions")
+        processTransactions(transactions)
     }
 
-    fun copyBlocks(files: Iterable<Path>) {
+    fun processBlocks(files: Iterable<Path>) {
         blocksRange.getChunks().forEach { chunk ->
         }
         val source = Flux.fromIterable(files)
@@ -91,10 +83,10 @@ class RunCopy(
                 .filter {
                     blocksRange.includes(it.height)
                 }
-        completeWriter.consumeBlocks(source, null)
+        completeWriter.consumeBlocks(source).block()
     }
 
-    fun copyTransactions(files: Iterable<Path>) {
+    fun processTransactions(files: Iterable<Path>) {
         val source = Flux.fromIterable(files)
                 .flatMap { file ->
                     TransactionsReader().open(file)
@@ -102,7 +94,7 @@ class RunCopy(
                 .filter {
                     blocksRange.includes(it.height)
                 }
-        completeWriter.consumeTransactions(source, null)
+        completeWriter.consumeTransactions(source).block()
     }
 
 }
