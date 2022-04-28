@@ -79,6 +79,32 @@ class RunCompactionTest {
         assert(!fileReader.hasNext())
         fileReader.close()
 
+        val block60_64 = File("src/test/resources/playground/btc/000700000/range-000723760_000723764.block.avro")
+        assert(block60_64.exists())
+
+        val reader3: DatumReader<GenericRecord> = GenericDatumReader()
+        val fileReader3 = DataFileReader(block60_64, reader3)
+        val record3: GenericRecord = GenericData.Record(fileReader3.schema)
+        fileReader3.next(record3)
+        assert(record3["height"].toString() == "723760")
+        fileReader3.next(record3)
+        assert(record3["height"].toString() == "723761")
+        assert(!fileReader3.hasNext())
+        fileReader3.close()
+
+        val block40_44 = File("src/test/resources/playground/btc/000700000/range-000723740_000723744.block.avro")
+        assert(block40_44.exists())
+
+        val reader2: DatumReader<GenericRecord> = GenericDatumReader()
+        val fileReader2 = DataFileReader(block40_44, reader2)
+        val record2: GenericRecord = GenericData.Record(fileReader2.schema)
+        fileReader2.next(record2)
+        assert(record2["height"].toString() == "723743")
+        fileReader2.next(record2)
+        assert(record2["height"].toString() == "723744")
+        assert(!fileReader2.hasNext())
+        fileReader2.close()
+
         assert(!File("src/test/resources/playground/000723753.block.avro").exists())
     }
 

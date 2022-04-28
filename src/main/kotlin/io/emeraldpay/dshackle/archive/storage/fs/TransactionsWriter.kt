@@ -91,7 +91,6 @@ class TransactionsWriter(
         override fun append(datum: Transaction) {
             try {
                 dataFileWriter.append(datum)
-                dataFileWriter.flush()
             } catch (t: AvroRuntimeException) {
                 log.error("Failed to write tx: ${datum.height} ${datum.txid}. Error ${t.javaClass} ${t.message}")
                 drop()
