@@ -55,7 +55,7 @@ class RunCompaction(
                 TransactionsReader().open(file)
             }
         completeWriter.consumeTransactions(source)
-            .doOnEach { groupOfSingles.forEach { Files.deleteIfExists(it) } }
+            .doOnNext { groupOfSingles.forEach { Files.deleteIfExists(it) } }
             .block()
     }
 
@@ -65,7 +65,7 @@ class RunCompaction(
                 BlocksReader().open(file)
             }
         completeWriter.consumeBlocks(source)
-            .doOnEach { groupOfSingles.forEach { Files.deleteIfExists(it) } }
+            .doOnNext { groupOfSingles.forEach { Files.deleteIfExists(it) } }
             .block()
     }
 
