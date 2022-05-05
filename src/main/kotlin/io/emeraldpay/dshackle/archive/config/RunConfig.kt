@@ -45,7 +45,8 @@ data class RunConfig(
     enum class Command {
         ARCHIVE,
         COPY,
-        STREAM
+        STREAM,
+        COMPACT
     }
 
     data class Connection(

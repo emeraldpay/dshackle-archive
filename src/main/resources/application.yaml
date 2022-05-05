@@ -1,0 +1,30 @@
+spring:
+  config:
+    activate:
+      on-profile: run-compact
+deleteCopiedFiles: true
+
+---
+
+spring:
+  config:
+    activate:
+      on-profile: run-copy
+deleteCopiedFiles: false
+
+---
+
+spring:
+  config:
+    activate:
+      on-profile: run-stream
+deleteCopiedFiles: false
+
+
+---
+
+spring:
+  config:
+    activate:
+      on-profile: run-archive
+deleteCopiedFiles: false

@@ -1,5 +1,6 @@
 package io.emeraldpay.dshackle.archive.storage
 
+import org.slf4j.LoggerFactory
 import java.io.IOException
 import java.nio.file.Path
 import java.util.*
@@ -7,7 +8,6 @@ import java.util.concurrent.locks.ReentrantReadWriteLock
 import kotlin.concurrent.read
 import kotlin.concurrent.write
 import kotlin.io.path.absolutePathString
-import org.slf4j.LoggerFactory
 
 class CurrentStorage(
         private val limit: Int = 32
@@ -64,8 +64,8 @@ class CurrentStorage(
 
     override fun close() {
         lock.write {
-            current.forEach {
-                it.storage.close()
+            for (i in current.size-1 downTo 0){
+                current[i].storage.close()
             }
             current.clear()
         }

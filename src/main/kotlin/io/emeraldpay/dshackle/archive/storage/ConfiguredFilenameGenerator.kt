@@ -14,13 +14,13 @@ import kotlin.concurrent.withLock
 
 @Service
 class ConfiguredFilenameGenerator(
-        @Autowired private val runConfig: RunConfig,
-        @Autowired private val range: BlocksRange,
+    @Autowired private val runConfig: RunConfig,
+    @Autowired private val range: BlocksRange,
 ) : FilenameGenerator(
-        runConfig.files.prefix,
-        runConfig.blockchain.chainCode.lowercase(Locale.getDefault()) + "/",
-        runConfig.files.dirBlockSizeL1,
-        runConfig.files.dirBlockSizeL2,
+    runConfig.files.prefix,
+    runConfig.blockchain.chainCode.lowercase(Locale.getDefault()) + "/",
+    runConfig.files.dirBlockSizeL1,
+    runConfig.files.dirBlockSizeL2,
 ) {
 
     companion object {
