@@ -16,6 +16,7 @@ import org.slf4j.LoggerFactory
 import org.springframework.beans.factory.annotation.Autowired
 import org.springframework.stereotype.Service
 import reactor.core.publisher.Flux
+import reactor.core.publisher.Mono
 
 @Service
 class FilesStorageAccess(
@@ -44,6 +45,15 @@ class FilesStorageAccess(
                 }.map {
                     parent.relativize(it).toString()
                 }
+    }
+
+    override fun deleteArchives(files: List<String>): Mono<Void> {
+        return Mono.fromCallable {
+            println("delete files $files")
+            files.forEach {
+                Files.deleteIfExists(Path.of(it))
+            }
+        }.then()
     }
 
     class FilesPublisher(

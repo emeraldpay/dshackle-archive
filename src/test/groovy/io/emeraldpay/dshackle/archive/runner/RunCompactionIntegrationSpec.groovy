@@ -1,4 +1,4 @@
-package io.emeraldpay.dshackle.archive
+package io.emeraldpay.dshackle.archive.runner
 
 import io.emeraldpay.dshackle.archive.config.RunConfigHolder
 import io.emeraldpay.dshackle.archive.config.RunConfigInitializer
@@ -16,7 +16,7 @@ import spock.lang.Specification
 @SpringBootTest(args = ["-b=BITCOIN", "--range=700_000..799_999", "--dir=src/test/resources/playground", "--inputs=src/test/resources/playground/", "compact"])
 @ActiveProfiles("run-compact")
 @ComponentScan("io.emeraldpay.dshackle.archive.runner")
-class RunCompactionSpec extends Specification {
+class RunCompactionIntegrationSpec extends Specification {
 
     @Autowired
     RunCompaction runCompaction

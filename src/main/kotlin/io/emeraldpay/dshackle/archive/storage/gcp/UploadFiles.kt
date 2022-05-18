@@ -38,17 +38,10 @@ class UploadFiles(
     private val export: RunConfig.ExportGS = runConfig.export.gs!!
 
     private val bucket = export.bucket
-    private val bucketPath = export.path.let { if (it.endsWith("/")) it.substring(0, it.length - 2) else it }
     private val baseDir = Path.of(runConfig.files.dir)
 
     fun getRelativePath(f: Path): String {
         return baseDir.relativize(f).toString()
-    }
-
-    fun getBucketPath(path: String): String {
-        return listOf(
-                bucketPath, path
-        ).filter { it.isNotEmpty() }.joinToString("/")
     }
 
     override fun close() {
@@ -58,7 +51,7 @@ class UploadFiles(
 
 
     override fun handle(f: Path) {
-        val targetPath = getBucketPath(getRelativePath(f))
+        val targetPath = googleStorage.getBucketPath(getRelativePath(f))
         val job = UploadJob(
                 googleStorage.storage, bucket, targetPath, f,
                 tries = 3,

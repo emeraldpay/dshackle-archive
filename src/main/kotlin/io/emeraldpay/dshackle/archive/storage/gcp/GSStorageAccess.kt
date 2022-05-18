@@ -2,7 +2,9 @@ package io.emeraldpay.dshackle.archive.storage.gcp
 
 import com.google.api.gax.paging.Page
 import com.google.cloud.storage.Blob
+import com.google.cloud.storage.BlobId
 import com.google.cloud.storage.Storage
+import io.emeraldpay.dshackle.archive.config.RunConfig
 import io.emeraldpay.dshackle.archive.storage.FilenameGenerator
 import io.emeraldpay.dshackle.archive.storage.StorageAccess
 import java.util.concurrent.atomic.AtomicBoolean
@@ -15,6 +17,8 @@ import org.springframework.beans.factory.annotation.Autowired
 import org.springframework.context.annotation.Profile
 import org.springframework.stereotype.Service
 import reactor.core.publisher.Flux
+import reactor.core.publisher.Mono
+import reactor.core.scheduler.Schedulers
 
 @Service
 @Profile("with-gcp")
@@ -45,6 +49,20 @@ class GSStorageAccess(
                 .map {
                     it.blobId.name.substring(this.path.length)
                 }
+    }
+
+    override fun deleteArchives(files: List<String>): Mono<Void> {
+        return Flux.fromIterable(files)
+                .map {
+                    BlobId.of(googleStorage.bucket, googleStorage.getBucketPath(it))
+                }
+                .collectList()
+                .flatMap {
+                    Mono.fromCallable {
+                        googleStorage.storage.delete(it)
+                    }.subscribeOn(Schedulers.boundedElastic())
+                }
+                .then()
     }
 
     class BlobsPublisher(

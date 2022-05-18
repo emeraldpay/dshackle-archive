@@ -48,4 +48,10 @@ class GoogleStorage(
 
         log.info("Upload archives to Google Storage bucket $bucket into $bucketPath")
     }
+
+    fun getBucketPath(path: String): String {
+        return listOf(
+                bucketPath, path
+        ).filter { it.isNotEmpty() }.joinToString("/")
+    }
 }

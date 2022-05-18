@@ -78,6 +78,7 @@ data class RunConfig(
             private const val DEFAULT_CHUNK: Long = 1_000
             private const val DEFAULT_INDIVIDUAL: Boolean = false
 
+            @JvmStatic
             fun default(): Range {
                 return Range(0, 0, DEFAULT_CHUNK, DEFAULT_INDIVIDUAL)
             }
@@ -94,6 +95,11 @@ data class RunConfig(
                 } else {
                     Range(parseNumber(range), 1, DEFAULT_CHUNK, true)
                 }
+            }
+
+            @JvmStatic
+            fun forRange(start: Long, count: Long, chunk: Long): Range {
+                return Range(start, count, chunk, chunk == 1L)
             }
         }
     }

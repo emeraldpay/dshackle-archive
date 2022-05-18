@@ -9,13 +9,14 @@ import org.springframework.beans.factory.annotation.Autowired
 import org.springframework.beans.factory.annotation.Qualifier
 import org.springframework.stereotype.Service
 import reactor.core.publisher.Flux
+import reactor.core.publisher.Mono
 
 @Service
 @Qualifier("targetStorage")
 class TargetStorage(
         @Autowired private val runConfig: RunConfig,
         @Autowired private val allStorageAccess: List<StorageAccess>
-) : StorageAccess {
+) {
 
     companion object {
         private val log = LoggerFactory.getLogger(TargetStorage::class.java)
@@ -35,14 +36,18 @@ class TargetStorage(
             }
         }
         if (instance == null) {
-            log.error("Profile doesn't have a Storage Access")
+            log.error("Profile doesn't have Target Storage Access")
             throw IllegalStateException()
         }
         current = instance
     }
 
-    override fun listArchive(height: List<Long>?): Flux<String> {
+    fun listArchive(height: List<Long>?): Flux<String> {
         return current.listArchive(height)
+    }
+
+    fun deleteArchives(files: List<String>): Mono<Void> {
+        return current.deleteArchives(files)
     }
 
 }

@@ -115,7 +115,7 @@ dependencies {
     testImplementation("org.springframework.boot:spring-boot-starter-test:" + springBootVersion){
         exclude module: 'spring-boot-starter-logging'
     }
-    testImplementation("org.jetbrains.kotlin:kotlin-test-junit5")
+    testImplementation "org.testcontainers:testcontainers:1.16.3"
 }
 
 tasks.withType(org.jetbrains.kotlin.gradle.tasks.KotlinCompile).all {
