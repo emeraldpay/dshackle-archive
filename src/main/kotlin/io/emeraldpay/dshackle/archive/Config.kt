@@ -3,6 +3,8 @@ package io.emeraldpay.dshackle.archive
 import com.fasterxml.jackson.core.Version
 import com.fasterxml.jackson.databind.ObjectMapper
 import com.fasterxml.jackson.databind.module.SimpleModule
+import com.fasterxml.jackson.datatype.jdk8.Jdk8Module
+import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule
 import io.emeraldpay.api.proto.ReactorBlockchainGrpc
 import io.emeraldpay.dshackle.archive.config.RunConfig
 import io.emeraldpay.dshackle.archive.config.RunConfigHolder
@@ -53,6 +55,8 @@ open class Config {
 
         val objectMapper = ObjectMapper()
         objectMapper.registerModule(module)
+        objectMapper.registerModule(Jdk8Module())
+        objectMapper.registerModule(JavaTimeModule())
         objectMapper
                 .setDateFormat(SimpleDateFormat("yyyy-MM-dd\'T\'HH:mm:ss.SSS\'Z\'"))
                 .setTimeZone(TimeZone.getTimeZone("UTC"))

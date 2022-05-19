@@ -11,7 +11,8 @@ data class RunConfig(
         val range: Range,
         val files: Files,
         val inputFiles: InputFiles? = null,
-        val export: Export = Export.default()
+        val export: Export = Export.default(),
+        val notify: Notify? = null,
 ) {
     companion object {
         @JvmStatic
@@ -129,5 +130,10 @@ data class RunConfig(
 
     data class InputFiles(
             val files: List<String>
+    )
+
+    data class Notify(
+            val file: String? = null,
+            val directory: String? = null,
     )
 }

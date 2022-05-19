@@ -65,6 +65,10 @@ class GSStorageAccess(
                 .then()
     }
 
+    override fun locationFor(file: String): String {
+        return "gs://${googleStorage.bucket}/${googleStorage.getBucketPath(file)}"
+    }
+
     class BlobsPublisher(
             private val storage: Storage,
             private val bucket: String,

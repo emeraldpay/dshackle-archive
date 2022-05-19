@@ -6,6 +6,7 @@ import io.emeraldpay.dshackle.archive.config.RunConfig
 import io.emeraldpay.dshackle.archive.storage.CompleteWriter
 import io.emeraldpay.dshackle.archive.storage.FilenameGenerator
 import io.emeraldpay.dshackle.archive.storage.StorageAccess
+import io.emeraldpay.dshackle.archive.storage.TargetStorage
 import java.time.Duration
 import java.time.Instant
 import java.util.*
@@ -28,7 +29,7 @@ class RunStream(
         @Autowired private val client: ReactorBlockchainGrpc.ReactorBlockchainStub,
         @Autowired private val completeWriter: CompleteWriter,
         @Autowired private val runConfig: RunConfig,
-        @Autowired @Qualifier("targetStorage") private val targetStorage: StorageAccess,
+        @Autowired private val targetStorage: TargetStorage,
         @Autowired private val filenameGenerator: FilenameGenerator
 ) : Runnable {
 
@@ -84,6 +85,7 @@ class RunStream(
                 .flatMap(blockSource::getDataAtHeight, 4)
                 .transform(completeWriter.streamConsumer())
                 .doOnNext(window::onProcessed)
+                .doOnError { log.error("Stopped processing with unhandled error", it) }
                 .subscribe()
     }
 

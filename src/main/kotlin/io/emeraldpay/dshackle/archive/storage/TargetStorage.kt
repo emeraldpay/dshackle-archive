@@ -3,6 +3,7 @@ package io.emeraldpay.dshackle.archive.storage
 import io.emeraldpay.dshackle.archive.config.RunConfig
 import io.emeraldpay.dshackle.archive.storage.fs.FilesStorageAccess
 import io.emeraldpay.dshackle.archive.storage.gcp.GSStorageAccess
+import java.nio.file.Path
 import javax.annotation.PostConstruct
 import org.slf4j.LoggerFactory
 import org.springframework.beans.factory.annotation.Autowired
@@ -15,7 +16,8 @@ import reactor.core.publisher.Mono
 @Qualifier("targetStorage")
 class TargetStorage(
         @Autowired private val runConfig: RunConfig,
-        @Autowired private val allStorageAccess: List<StorageAccess>
+        @Autowired private val allStorageAccess: List<StorageAccess>,
+        @Autowired private val filenameGenerator: FilenameGenerator,
 ) {
 
     companion object {
@@ -40,6 +42,17 @@ class TargetStorage(
             throw IllegalStateException()
         }
         current = instance
+    }
+
+    fun locationFor(file: Path): String {
+        val path = file.toFile().path
+        val cleanPath = if (runConfig.useGCP()) {
+            //TODO workaround for the local temp files which are used before uploading to the GCP
+            path.substring(runConfig.files.dir.length + 1)
+        } else {
+            path
+        }
+        return current.locationFor(cleanPath)
     }
 
     fun listArchive(height: List<Long>?): Flux<String> {

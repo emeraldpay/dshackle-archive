@@ -79,6 +79,11 @@ class RunConfigInitializer {
             options.addOption(it)
         }
 
+        Option(null, "notify.dir", true, "Write notifications as JSON line to the specified dir in a file <dshackle-arcive-%STARTTIME.jsonl>").also {
+            it.isRequired = false
+            options.addOption(it)
+        }
+
         val parser: CommandLineParser = DefaultParser()
         val formatter = HelpFormatter()
         val cmd: CommandLine = try {
@@ -173,7 +178,13 @@ class RunConfigInitializer {
             }
         }
 
-        return RunConfig(command, blockchain, connection, archiveOptions, range, files).let { config ->
+        val notify: RunConfig.Notify? = if (cmd.hasOption("notify.dir")) {
+            RunConfig.Notify(directory = cmd.getOptionValue("notify.dir"))
+        } else {
+            null
+        }
+
+        return RunConfig(command, blockchain, connection, archiveOptions, range, files, notify=notify).let { config ->
             if (command == RunConfig.Command.COPY || command == RunConfig.Command.COMPACT) {
                 val inputs = cmd.getOptionValues("inputs").flatMap {
                     it.split(",")

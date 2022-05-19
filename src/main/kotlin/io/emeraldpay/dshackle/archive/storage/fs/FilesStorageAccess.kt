@@ -2,6 +2,7 @@ package io.emeraldpay.dshackle.archive.storage.fs
 
 import io.emeraldpay.dshackle.archive.storage.FilenameGenerator
 import io.emeraldpay.dshackle.archive.storage.StorageAccess
+import java.io.File
 import java.io.IOException
 import java.nio.file.FileVisitResult
 import java.nio.file.FileVisitor
@@ -54,6 +55,10 @@ class FilesStorageAccess(
                 Files.deleteIfExists(Path.of(it))
             }
         }.then()
+    }
+
+    override fun locationFor(file: String): String {
+        return File(file).absolutePath
     }
 
     class FilesPublisher(

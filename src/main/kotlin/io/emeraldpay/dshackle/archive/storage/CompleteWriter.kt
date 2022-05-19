@@ -1,12 +1,15 @@
 package io.emeraldpay.dshackle.archive.storage
 
 import io.emeraldpay.dshackle.archive.BlocksRange
+import io.emeraldpay.dshackle.archive.FileType
 import io.emeraldpay.dshackle.archive.avro.Block
 import io.emeraldpay.dshackle.archive.avro.Transaction
+import io.emeraldpay.dshackle.archive.notify.CurrentNotifier
 import io.emeraldpay.dshackle.archive.runner.PostArchive
 import io.emeraldpay.dshackle.archive.runner.ProgressIndicator
 import io.emeraldpay.dshackle.archive.storage.fs.BlocksWriter
 import io.emeraldpay.dshackle.archive.storage.fs.TransactionsWriter
+import java.nio.file.Path
 import org.apache.commons.lang3.StringUtils
 import org.slf4j.LoggerFactory
 import org.springframework.beans.factory.annotation.Autowired
@@ -14,6 +17,8 @@ import org.springframework.beans.factory.annotation.Value
 import org.springframework.stereotype.Repository
 import reactor.core.publisher.Flux
 import reactor.core.publisher.Mono
+import reactor.util.function.Tuple2
+import reactor.util.function.Tuples
 
 @Repository
 class CompleteWriter(
@@ -21,6 +26,8 @@ class CompleteWriter(
         @Autowired private val transactionsWriter: TransactionsWriter,
         @Autowired private val configuredFilenameGenerator: ConfiguredFilenameGenerator,
         @Autowired private val postArchive: PostArchive,
+        @Autowired private val currentNotifier: CurrentNotifier,
+        @Autowired private val targetStorage: TargetStorage,
 ) {
 
     companion object {
@@ -66,6 +73,16 @@ class CompleteWriter(
         log.info("$count blocks saved")
         postArchive.handle(blockFile)
         postArchive.handle(txFile)
+        currentNotifier.onCreated(
+                currentNotifier.createEvent(
+                        FileType.BLOCKS, chunk, blockFile.toFile().absolutePath
+                )
+        ).block()
+        currentNotifier.onCreated(
+                currentNotifier.createEvent(
+                        FileType.TRANSACTIONS, chunk, txFile.toFile().absolutePath
+                )
+        ).block()
     }
 
     fun consumeBlocks(dataSource: Flux<Block>) : Mono<Int> {
@@ -152,23 +169,27 @@ class CompleteWriter(
                     }
                     .flatMap({ block ->
                         Mono.fromCallable {
-                            val txesFile = configuredFilenameGenerator.fileForAutoRange(FILE_TYPE_TXES, block.height, false)
-                            transactionsWriter.open(txesFile).use { wrt ->
-                                block.transactions.forEach { tx ->
-                                    wrt.append(block, tx)
-                                }
-                            }
-                            val blockFile = configuredFilenameGenerator.fileForAutoRange(FILE_TYPE_BLOCK, block.height, false)
-                            blocksWriter.open(blockFile).use { wrt ->
-                                wrt.append(block)
-                            }
+                                    val txesFile = configuredFilenameGenerator.fileForAutoRange(FILE_TYPE_TXES, block.height, false)
+                                    transactionsWriter.open(txesFile).use { wrt ->
+                                        block.transactions.forEach { tx ->
+                                            wrt.append(block, tx)
+                                        }
+                                    }
+                                    val blockFile = configuredFilenameGenerator.fileForAutoRange(FILE_TYPE_BLOCK, block.height, false)
+                                    blocksWriter.open(blockFile).use { wrt ->
+                                        wrt.append(block)
+                                    }
 
-                            postArchive.handle(txesFile)
-                            postArchive.handle(blockFile)
-                        }.then(Mono.just(block.height)).onErrorResume { t ->
-                            log.warn("Failed to process ${block.height}", t)
-                            Mono.empty<Long>()
-                        }
+                                    postArchive.handle(txesFile)
+                                    postArchive.handle(blockFile)
+                                    Tuples.of(txesFile, blockFile)
+                                }
+                                .transform(withNotifications(block))
+                                .then(Mono.just(block.height))
+                                .onErrorResume { t ->
+                                    log.warn("Failed to process ${block.height}", t)
+                                    Mono.empty<Long>()
+                                }
                     }, 4)
                     .doOnNext {
                         progress.onNext()
@@ -182,5 +203,26 @@ class CompleteWriter(
         }
     }
 
+    /**
+     * Runs the created file through current Notifier.
+     * Expects a pair of <Path to Transactions> and <Path to Blocks> as input
+     */
+    fun withNotifications(block: BlockDetails): java.util.function.Function<Mono<Tuple2<Path, Path>>, Mono<Void>> {
+        return java.util.function.Function { files ->
+            files.flatMap {
+                val txnotify = currentNotifier.onCreated(
+                        currentNotifier.createEvent(
+                                FileType.TRANSACTIONS, block.height, block.height, targetStorage.locationFor(it.t1)
+                        )
+                )
+                val blocknotify = currentNotifier.onCreated(
+                        currentNotifier.createEvent(
+                                FileType.BLOCKS, block.height, block.height, targetStorage.locationFor(it.t2)
+                        )
+                )
+                txnotify.then(blocknotify).then()
+            }
+        }
+    }
 
 }
