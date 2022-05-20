@@ -1,7 +1,9 @@
 package io.emeraldpay.dshackle.archive.config
 
+import com.fasterxml.jackson.annotation.JsonValue
 import io.emeraldpay.dshackle.archive.avro.BlockchainType
 import io.emeraldpay.grpc.Chain
+import java.util.*
 
 data class RunConfig(
         val command: Command,
@@ -47,7 +49,12 @@ data class RunConfig(
         ARCHIVE,
         COPY,
         STREAM,
-        COMPACT
+        COMPACT;
+
+        @JsonValue
+        open fun toLowerCase(): String {
+            return toString().lowercase(Locale.getDefault())
+        }
     }
 
     data class Connection(
