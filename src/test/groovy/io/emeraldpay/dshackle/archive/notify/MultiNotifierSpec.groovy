@@ -1,6 +1,7 @@
 package io.emeraldpay.dshackle.archive.notify
 
 import io.emeraldpay.dshackle.archive.FileType
+import io.emeraldpay.dshackle.archive.config.RunConfig
 import reactor.core.publisher.Mono
 import spock.lang.Specification
 
@@ -14,7 +15,7 @@ class MultiNotifierSpec extends Specification {
         def send2 = Mock(Notifier)
         def multi = new MultiNotifier([send1, send2])
         def event = new Notifier.ArchiveCreated(
-                "", Instant.now(), "test", FileType.TRANSACTIONS, 100, 100, "test"
+                "", Instant.now(), "test", FileType.TRANSACTIONS, RunConfig.Command.STREAM, 100, 100, "test"
         )
         when:
         multi.onCreated(event).block()
@@ -29,7 +30,7 @@ class MultiNotifierSpec extends Specification {
         def send2 = Mock(Notifier)
         def multi = new MultiNotifier([send1, send2])
         def event = new Notifier.ArchiveCreated(
-                "", Instant.now(), "test", FileType.TRANSACTIONS, 100, 100, "test"
+                "", Instant.now(), "test", FileType.TRANSACTIONS, RunConfig.Command.STREAM, 100, 100, "test"
         )
         when:
         multi.onCreated(event).block()

@@ -78,6 +78,7 @@ class CurrentNotifier(
         return Notifier.ArchiveCreated(
                 ts = Instant.now(),
                 blockchain = runConfig.getChainId(),
+                run = runConfig.command,
                 type = type,
                 heightStart = heightStart,
                 heightEnd = heightEnd,

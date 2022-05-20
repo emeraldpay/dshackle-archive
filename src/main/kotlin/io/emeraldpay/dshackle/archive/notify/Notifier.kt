@@ -2,6 +2,7 @@ package io.emeraldpay.dshackle.archive.notify
 
 import com.fasterxml.jackson.databind.ObjectMapper
 import io.emeraldpay.dshackle.archive.FileType
+import io.emeraldpay.dshackle.archive.config.RunConfig
 import java.time.Instant
 import org.slf4j.LoggerFactory
 import reactor.core.publisher.Mono
@@ -39,6 +40,7 @@ interface Notifier {
             val ts: Instant,
             val blockchain: String,
             val type: FileType,
+            val run: RunConfig.Command,
 
             // start and end height for the file.
             val heightStart: Long,
