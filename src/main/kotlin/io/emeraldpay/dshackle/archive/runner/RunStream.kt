@@ -40,6 +40,7 @@ class RunStream(
     private val tail = runConfig.range.tail
 
     override fun run() {
+        log.info("Initializing stream archival...")
         val height = blockSource.getCurrentHeight().block() ?: 0
         val continueAfter = (height - tail).coerceAtLeast(0)
         val archivedHeights = targetStorage.listArchive(listOf(height, continueAfter))

@@ -36,9 +36,19 @@ class GSStorageAccess(
 
     override fun listArchive(height: List<Long>?): Flux<String> {
         val prefixes = if (height == null) {
+            // that may be a very slow operation because it would list all data in the storage, which may be millions of files
             listOf(path)
         } else {
-            height.map(filenameGenerator::getLevel0)
+            height
+                    .flatMap {
+                        // use separate filters for Stream files and Ranges,
+                        // because for Stream we want to narrow the scope to 1000 files at the level 1
+                        // otherwise a filled storage gives up to two million files to process on level 0
+                        listOf(
+                                filenameGenerator.getLevel0(it) + "/" + filenameGenerator.getLevel1(it) + "/",
+                                filenameGenerator.getLevel0(it) + "/range-"
+                        )
+                    }
                     .toSet()
                     .map { "$path$it" }
         }

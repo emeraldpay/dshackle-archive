@@ -66,15 +66,16 @@ open class FilenameGenerator(
         val level0 = height / dirBlockSizeL1 * dirBlockSizeL1
         return rangePadded(level0)
     }
+    fun getLevel1(height: Long): String {
+        val level1 = height / dirBlockSizeL2 * dirBlockSizeL2
+        return rangePadded(level1)
+    }
 
     fun getIndividualFilename(type: String, height: Long): String {
-        val level0 = height / dirBlockSizeL1 * dirBlockSizeL1
-        val level1 = height / dirBlockSizeL2 * dirBlockSizeL2
-
         return listOf(
                 parentDir,
-                rangePadded(level0), "/",
-                rangePadded(level1), "/",
+                getLevel0(height), "/",
+                getLevel1(height), "/",
                 rangePadded(height),
                 ".",
                 type,
