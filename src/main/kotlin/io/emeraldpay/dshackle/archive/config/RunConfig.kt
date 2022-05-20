@@ -12,7 +12,7 @@ data class RunConfig(
         val files: Files,
         val inputFiles: InputFiles? = null,
         val export: Export = Export.default(),
-        val notify: Notify? = null,
+        val notify: Notify = Notify.default(),
 ) {
     companion object {
         @JvmStatic
@@ -135,5 +135,12 @@ data class RunConfig(
     data class Notify(
             val file: String? = null,
             val directory: String? = null,
-    )
+            val pubsub: String? = null,
+    ) {
+        companion object {
+            fun default(): Notify {
+                return Notify()
+            }
+        }
+    }
 }

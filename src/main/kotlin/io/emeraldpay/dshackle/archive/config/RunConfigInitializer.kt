@@ -84,6 +84,11 @@ class RunConfigInitializer {
             options.addOption(it)
         }
 
+        Option(null, "notify.pubsub", true, "Send notification as JSON to the specified Google Pubsub topic").also {
+            it.isRequired = false
+            options.addOption(it)
+        }
+
         val parser: CommandLineParser = DefaultParser()
         val formatter = HelpFormatter()
         val cmd: CommandLine = try {
@@ -178,10 +183,12 @@ class RunConfigInitializer {
             }
         }
 
-        val notify: RunConfig.Notify? = if (cmd.hasOption("notify.dir")) {
-            RunConfig.Notify(directory = cmd.getOptionValue("notify.dir"))
-        } else {
-            null
+        var notify = RunConfig.Notify.default()
+        if (cmd.hasOption("notify.dir")) {
+            notify = notify.copy(directory = cmd.getOptionValue("notify.dir"))
+        }
+        if (cmd.hasOption("notify.pubsub")) {
+            notify = notify.copy(pubsub = cmd.getOptionValue("notify.pubsub"))
         }
 
         return RunConfig(command, blockchain, connection, archiveOptions, range, files, notify=notify).let { config ->

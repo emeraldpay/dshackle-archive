@@ -100,6 +100,7 @@ dependencies {
     }
 
     implementation 'com.google.cloud:google-cloud-storage:2.4.2'
+    implementation 'com.google.cloud:google-cloud-pubsub:1.117.0'
 
     implementation "org.jetbrains.kotlin:kotlin-stdlib-jdk8"
     implementation "org.jetbrains.kotlin:kotlin-reflect"
@@ -118,6 +119,7 @@ dependencies {
         exclude module: 'spring-boot-starter-logging'
     }
     testImplementation "org.testcontainers:testcontainers:1.16.3"
+    testImplementation "org.testcontainers:gcloud:1.16.3"
 }
 
 tasks.withType(org.jetbrains.kotlin.gradle.tasks.KotlinCompile).all {
