@@ -1,0 +1,126 @@
+= Dshackle Archive
+
+Dshackle Archive is a tool to copy JSON data from a blockchain to a plain files storage (or a Data Lake) for a further processing.
+I.e., it's a _E_ step from ETL. Extraction of data.
+
+The archive is Avro files which contain blocks and transaction details fetched from blockchain nodes via their API.
+The Avro contain the JSON responses _as is_.
+See more about Avro structure and Java stubs at https://github.com/emeraldpay/dshackle-archive-avro
+
+Features:
+
+- Extracts data from Bitcoin and Ethereum compatible blockchains
+- Produces data in Avro format, where one file could be a _range_ of blocks or a _separate_ file per each block
+- Runs in batch archive mode, when _historical data_ is archived; or in a _streaming mode_ when only fresh data is added to the archive
+- Archive to a Filesystem or Google Storage
+- Produces Notification via Google PubSub or as a JSON
+
+== Usage
+
+=== Command Line Options
+
+----
+usage: dshackle-archive [options] <command>
+Copy blockchain data into files for further analysis
+    --authGCP <arg>         Path to GCP Authentication JSON
+ -b,--blockchain <arg>      Blockchain
+ -c,--connection <arg>      Connection (host:port)
+    --continue              Continue from the last file if set
+ -d,--dir <arg>             Target directory
+    --dirBlocks <arg>       How many blocks keep per subdirectory
+ -h,--help                  Show Help
+ -i,--inputs <arg>          Input File(s). Accepts a glob pattern for filename
+    --include <arg>         Include optional details in JSON (trace, stateDiff)
+    --notify.dir <arg>      Write notifications as JSON line to the specified dir in a file
+                            <dshackle-archive-%STARTTIME.jsonl>
+    --notify.pubsub <arg>   Send notifications as JSON to the specified Google Pubsub topic
+    --prefix <arg>          File prefix
+ -r,--range <arg>           Blocks Range (N...M)
+    --rangeChunk <arg>      Range chunk size (default 1000)
+    --tail <arg>            Last T block to ensure are archived in streaming mode
+
+Available commands:
+ archive - the main operation, copies data from a blockchain to archive
+ stream  - append fresh blocks one by one to the archive
+ compact - merge individual block files into larger range files
+ copy    - copy/recover from existing archive by copying into a new one
+----
+
+=== Archive Format
+
+For a complete descriptions, schema and libs to access Avro files please refer to https://github.com/emeraldpay/dshackle-archive-avro
+
+==== Block
+
+.Fields common between different blockchains
+- `blockchainType` - _type of blockchain_, as a definitions of what fields to expect.
+One of `ETHEREUM` or `BITCOIN`
+- `blockchainId` - actual blockchain id (`ETH`, `BTC`, etc)
+- `archiveTimestamp` - when the archive record was created.
+Milliseconds since epoch
+- `height` - block height
+- `blockId` - block hash
+- `timestamp` - block timestamp.
+Milliseconds since epoch
+- `parentId` - parent block hash
+- `json` - JSON response for that block
+
+.Ethereum specific fields
+- `unclesCount` - number of uncles for the current block
+- `uncle0Json` - JSON for first uncle (`eth_getUncleByBlockHashAndIndex(0)`)
+- `uncle1Json` - JSON for second uncle (`eth_getUncleByBlockHashAndIndex(1)`)
+
+.Bitcoin specific fields
+- none
+
+==== Transaction
+
+.Fields common between different blockchains
+- `blockchainType` - _type of blockchain_, as a definitions of what fields to expect.
+One of `ETHEREUM` or `BITCOIN`
+- `blockchainId` - actual blockchain id (`ETH`, `BTC`, etc)
+- `archiveTimestamp` - when the archive record was created.
+Milliseconds since epoch
+- `height` - block height
+- `blockId` - block hash
+- `timestamp` - block timestamp.
+Milliseconds since epoch
+- `index` - index of the transaction in block
+- `txid` - hash or transaction id of the transaction
+- `json` - JSON response for that transaction
+- `raw` - raw bytes of the transaction
+
+.Ethereum specific fields
+- `from` - from address
+- `to` - to address
+- `receiptJson` - JSON response for `eth_getTransactionReceipt`
+- `traceJson` - JSON response for `trace_replayTransaction(trace)`
+- `stateDiffJson` - JSON response for `trace_replayTransaction(stateDiff)`
+
+.Bitcoin specific fields
+- none
+
+=== Notifications format
+
+[source, json]
+----
+{
+  "version":"https://schema.emrld.io/dshackle-archive/notify",
+  "ts":"2022-05-20T23:14:24.481327Z",
+  "blockchain":"ETH",
+  "type":"transactions",
+  "run":"stream",
+  "heightStart":14813875,
+  "heightEnd":14813875,
+  "location":"gs://my-bucket/blockchain-archive/eth/014000000/014813000/014813875.txes.avro"
+}
+----
+
+.Where
+- `version` id of the current JSON format
+- `ts` timestamp of the archive event
+- `blockchain` blockchain
+- `type` type of file (`transactions` or `blocks`)
+- `run` mode in which the Dshackle Archive is run (`archive`, `stream`, `copy` or `compact`)
+- `heightStart` and `heightEnd` range of blocks in the archived files
+- `location` a URL to the archived file

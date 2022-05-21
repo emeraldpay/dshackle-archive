@@ -19,11 +19,16 @@ class RunConfigInitializer {
         private val log = LoggerFactory.getLogger(RunConfigInitializer::class.java)
     }
 
-    fun create(args: Array<String>): RunConfig {
+    fun create(args: Array<String>): RunConfig? {
         val options = Options()
 
+        Option("h", "help", false, "Show Help").let {
+            it.isRequired = false
+            options.addOption(it)
+        }
+
         Option("b", "blockchain", true, "Blockchain").let {
-            it.isRequired = true
+            it.isRequired = false
             options.addOption(it)
         }
 
@@ -79,12 +84,12 @@ class RunConfigInitializer {
             options.addOption(it)
         }
 
-        Option(null, "notify.dir", true, "Write notifications as JSON line to the specified dir in a file <dshackle-arcive-%STARTTIME.jsonl>").also {
+        Option(null, "notify.dir", true, "Write notifications as JSON line to the specified dir in a file <dshackle-archive-%STARTTIME.jsonl>").also {
             it.isRequired = false
             options.addOption(it)
         }
 
-        Option(null, "notify.pubsub", true, "Send notification as JSON to the specified Google Pubsub topic").also {
+        Option(null, "notify.pubsub", true, "Send notifications as JSON to the specified Google Pubsub topic").also {
             it.isRequired = false
             options.addOption(it)
         }
@@ -98,6 +103,16 @@ class RunConfigInitializer {
             throw IllegalStateException(e)
         }
 
+        if (cmd.hasOption("help")) {
+            printHelp(formatter, options)
+            return null
+        }
+
+        if (!cmd.hasOption("blockchain")) {
+            System.err.println("Please specify target blockchain with --blockchain option")
+            return null
+        }
+
         val blockchain = cmd.getOptionValue("blockchain").let {
             Chain.valueOf(it.uppercase(Locale.getDefault()).replace("-", "_"))
         }
@@ -105,7 +120,7 @@ class RunConfigInitializer {
         val command: RunConfig.Command = cmd.argList.let {
             if (it.size > 1) {
                 printHelp(formatter, options)
-                throw IllegalStateException("Invalid command: $it")
+                return null
             }
             if (it.isEmpty()) "archive" else it.first()
         }.uppercase(Locale.getDefault()).let {
@@ -232,6 +247,8 @@ class RunConfigInitializer {
         val header = "Copy blockchain data into files for further analysis"
         val footer = "Available commands:\n" +
                 " archive - the main operation, copies data from a blockchain to archive\n" +
+                " stream  - append fresh blocks one by one to the archive\n" +
+                " compact - merge individual block files into larger range files\n" +
                 " copy    - copy/recover from existing archive by copying into a new one"
 
         formatter.printHelp("dshackle-archive [options] <command>", header, options, footer)

@@ -22,7 +22,7 @@ open class App
 
 fun main(args: Array<String>) {
     val log = LoggerFactory.getLogger(App::class.java)
-    val config = RunConfigInitializer().create(args)
+    val config = RunConfigInitializer().create(args) ?: return
     RunConfigHolder.value = config
 
     log.info("Run: ${config.command}")
