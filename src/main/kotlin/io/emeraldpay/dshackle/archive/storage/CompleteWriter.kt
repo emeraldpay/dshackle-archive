@@ -5,11 +5,7 @@ import io.emeraldpay.dshackle.archive.FileType
 import io.emeraldpay.dshackle.archive.avro.Block
 import io.emeraldpay.dshackle.archive.avro.Transaction
 import io.emeraldpay.dshackle.archive.notify.CurrentNotifier
-import io.emeraldpay.dshackle.archive.runner.PostArchive
 import io.emeraldpay.dshackle.archive.runner.ProgressIndicator
-import io.emeraldpay.dshackle.archive.storage.fs.BlocksWriter
-import io.emeraldpay.dshackle.archive.storage.fs.TransactionsWriter
-import java.nio.file.Path
 import org.apache.commons.lang3.StringUtils
 import org.slf4j.LoggerFactory
 import org.springframework.beans.factory.annotation.Autowired
@@ -25,17 +21,12 @@ class CompleteWriter(
         @Autowired private val blocksWriter: BlocksWriter,
         @Autowired private val transactionsWriter: TransactionsWriter,
         @Autowired private val configuredFilenameGenerator: ConfiguredFilenameGenerator,
-        @Autowired private val postArchive: PostArchive,
         @Autowired private val currentNotifier: CurrentNotifier,
         @Autowired private val targetStorage: TargetStorage,
 ) {
 
     companion object {
         private val log = LoggerFactory.getLogger(CompleteWriter::class.java)
-
-        private const val FILE_TYPE_TXES = "txes"
-        private const val FILE_TYPE_BLOCKS = "blocks"
-        private const val FILE_TYPE_BLOCK = "block"
     }
 
     @Value("\${deleteCopiedFiles}")
@@ -43,9 +34,9 @@ class CompleteWriter(
 
     fun consume(dataSource: Flux<BlockDetails>, chunk: BlocksRange.Chunk) {
         //NOTE rewrites the files
-        val blockFile = configuredFilenameGenerator.fileFor(FILE_TYPE_BLOCKS, chunk, false)
+        val blockFile = configuredFilenameGenerator.fileFor(FileType.BLOCKS, chunk)
         val blockWrt = blocksWriter.open(blockFile)
-        val txFile = configuredFilenameGenerator.fileFor(FILE_TYPE_TXES, chunk, false)
+        val txFile = configuredFilenameGenerator.fileFor(FileType.TRANSACTIONS, chunk)
         val txWrt = transactionsWriter.open(txFile)
         val count = dataSource
                 .map { block ->
@@ -71,16 +62,14 @@ class CompleteWriter(
                 }
                 .block()
         log.info("$count blocks saved")
-        postArchive.handle(blockFile)
-        postArchive.handle(txFile)
         currentNotifier.onCreated(
                 currentNotifier.createEvent(
-                        FileType.BLOCKS, chunk, blockFile.toFile().absolutePath
+                        FileType.BLOCKS, chunk, blockFile
                 )
         ).block()
         currentNotifier.onCreated(
                 currentNotifier.createEvent(
-                        FileType.TRANSACTIONS, chunk, txFile.toFile().absolutePath
+                        FileType.TRANSACTIONS, chunk, txFile
                 )
         ).block()
     }
@@ -88,21 +77,13 @@ class CompleteWriter(
     fun consumeBlocks(dataSource: Flux<Block>) : Mono<Int> {
         val progress = ProgressIndicator()
         val startTime = System.currentTimeMillis()
-        var previousBlockHigh = -1L
         return dataSource
                 .doOnSubscribe {
                     progress.start()
                 }
                 .flatMap({ block ->
-                    if (deleteCopiedFiles == "true") {
-                        if(previousBlockHigh != -1L && block.height - previousBlockHigh != 1L ){
-                            return@flatMap Flux.error(Exception("There are gap in the blocks range! On height=" + block.height))
-                        } else {
-                            previousBlockHigh = block.height
-                        }
-                    }
                     Mono.fromCallable {
-                        val blockFile = configuredFilenameGenerator.fileForAutoRange(FILE_TYPE_BLOCK, block.height, false)
+                        val blockFile = configuredFilenameGenerator.fileForAutoRange(FileType.BLOCKS, block.height)
                         blocksWriter.open(blockFile).append(block)
                     }
                 }, 4)
@@ -135,7 +116,8 @@ class CompleteWriter(
                 }
                 .flatMap({ tx ->
                     Mono.fromCallable {
-                        val txesFile = configuredFilenameGenerator.fileForAutoRange(FILE_TYPE_TXES, tx.height, true)
+                        // note that it most likely appends to an existing file
+                        val txesFile = configuredFilenameGenerator.fileForAutoRange(FileType.TRANSACTIONS, tx.height)
                         transactionsWriter.open(txesFile).append(tx)
                     }
                 }, 4)
@@ -169,19 +151,16 @@ class CompleteWriter(
                     }
                     .flatMap({ block ->
                         Mono.fromCallable {
-                                    val txesFile = configuredFilenameGenerator.fileForAutoRange(FILE_TYPE_TXES, block.height, false)
+                                    val txesFile = configuredFilenameGenerator.fileForAutoRange(FileType.TRANSACTIONS, block.height)
                                     transactionsWriter.open(txesFile).use { wrt ->
                                         block.transactions.forEach { tx ->
                                             wrt.append(block, tx)
                                         }
                                     }
-                                    val blockFile = configuredFilenameGenerator.fileForAutoRange(FILE_TYPE_BLOCK, block.height, false)
+                                    val blockFile = configuredFilenameGenerator.fileForAutoRange(FileType.BLOCKS, block.height)
                                     blocksWriter.open(blockFile).use { wrt ->
                                         wrt.append(block)
                                     }
-
-                                    postArchive.handle(txesFile)
-                                    postArchive.handle(blockFile)
                                     Tuples.of(txesFile, blockFile)
                                 }
                                 .transform(withNotifications(block))
@@ -207,17 +186,17 @@ class CompleteWriter(
      * Runs the created file through current Notifier.
      * Expects a pair of <Path to Transactions> and <Path to Blocks> as input
      */
-    fun withNotifications(block: BlockDetails): java.util.function.Function<Mono<Tuple2<Path, Path>>, Mono<Void>> {
+    fun withNotifications(block: BlockDetails): java.util.function.Function<Mono<Tuple2<String, String>>, Mono<Void>> {
         return java.util.function.Function { files ->
             files.flatMap {
                 val txnotify = currentNotifier.onCreated(
                         currentNotifier.createEvent(
-                                FileType.TRANSACTIONS, block.height, block.height, targetStorage.locationFor(it.t1)
+                                FileType.TRANSACTIONS, block.height, block.height, targetStorage.current.getURI(it.t1)
                         )
                 )
                 val blocknotify = currentNotifier.onCreated(
                         currentNotifier.createEvent(
-                                FileType.BLOCKS, block.height, block.height, targetStorage.locationFor(it.t2)
+                                FileType.BLOCKS, block.height, block.height, targetStorage.current.getURI(it.t2)
                         )
                 )
                 txnotify.then(blocknotify).then()

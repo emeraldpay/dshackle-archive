@@ -1,13 +1,14 @@
-package io.emeraldpay.dshackle.archive.storage.fs
+package io.emeraldpay.dshackle.archive.storage
 
 import io.emeraldpay.dshackle.archive.config.RunConfig
 import io.emeraldpay.dshackle.archive.avro.Block
 import io.emeraldpay.dshackle.archive.BlocksRange
-import io.emeraldpay.dshackle.archive.storage.BlockDetails
-import io.emeraldpay.dshackle.archive.storage.ConfiguredFilenameGenerator
-import io.emeraldpay.dshackle.archive.storage.CurrentStorage
+import io.emeraldpay.dshackle.archive.FileType
 import java.nio.file.Path
 import java.time.Instant
+import java.util.concurrent.locks.Lock
+import java.util.concurrent.locks.ReentrantLock
+import kotlin.concurrent.withLock
 import org.apache.avro.AvroRuntimeException
 import org.apache.avro.file.CodecFactory
 import org.apache.avro.file.DataFileWriter
@@ -20,6 +21,7 @@ import org.springframework.stereotype.Repository
 class BlocksWriter(
         @Autowired private val configuredFilenameGenerator: ConfiguredFilenameGenerator,
         @Autowired private val runConfig: RunConfig,
+        @Autowired private val targetStorage: TargetStorage,
 ) {
 
     companion object {
@@ -29,18 +31,19 @@ class BlocksWriter(
     private val currentWriters = CurrentStorage(100)
 
     fun open(chunk: BlocksRange.Chunk): BlocksFileAccess {
-        val file = configuredFilenameGenerator.fileFor("blocks", chunk, false)
-        log.info("Save blocks to ${file.fileName}")
+        val file = configuredFilenameGenerator.fileFor(FileType.BLOCKS, chunk)
         return open(file)
     }
 
-    fun open(file: Path): BlocksFileAccess {
+    fun open(file: String): BlocksFileAccess {
         return currentWriters.get(file) {
+            log.info("Save blocks to $file")
             val dataFileWriter: DataFileWriter<Block>
             val datumWriter = SpecificDatumWriter<Block>(Block::class.java)
             dataFileWriter = DataFileWriter<Block>(datumWriter)
             dataFileWriter.setCodec(CodecFactory.snappyCodec())
-            LocalFileAccess(dataFileWriter.create(Block.getClassSchema(), file.toFile()), runConfig, file, currentWriters)
+            val outputStream = targetStorage.current.createWriter(file)
+            LocalFileAccess(dataFileWriter.create(Block.getClassSchema(), outputStream), runConfig, file, currentWriters, targetStorage.current)
         }
     }
 
@@ -56,9 +59,12 @@ class BlocksWriter(
     class LocalFileAccess(
             dataFileWriter: DataFileWriter<Block>,
             private val runConfig: RunConfig,
-            path: Path,
+            path: String,
             currentStorage: CurrentStorage,
-    ) : BlocksFileAccess, AutoCloseable, BaseAvroWriter<Block>(dataFileWriter, path, currentStorage) {
+            access: StorageAccess,
+    ) : BlocksFileAccess, AutoCloseable, BaseAvroWriter<Block>(dataFileWriter, path, currentStorage, access) {
+
+        private val writeLock = ReentrantLock()
 
         override fun append(block: BlockDetails) {
             val datum = Block().apply {
@@ -86,7 +92,9 @@ class BlocksWriter(
 
         override fun append(datum: Block) {
             try {
-                dataFileWriter.append(datum)
+                writeLock.withLock {
+                    dataFileWriter.append(datum)
+                }
             } catch (t: AvroRuntimeException) {
                 log.error("Failed to write block: ${datum.height}. Error ${t.javaClass} ${t.message}")
                 drop()

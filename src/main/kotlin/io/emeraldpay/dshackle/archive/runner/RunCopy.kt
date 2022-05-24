@@ -3,18 +3,15 @@ package io.emeraldpay.dshackle.archive.runner
 import io.emeraldpay.dshackle.archive.BlocksRange
 import io.emeraldpay.dshackle.archive.config.RunConfig
 import io.emeraldpay.dshackle.archive.storage.CompleteWriter
-import io.emeraldpay.dshackle.archive.storage.FilenameGenerator
 import io.emeraldpay.dshackle.archive.storage.SourceStorage
-import io.emeraldpay.dshackle.archive.storage.fs.BlocksReader
-import io.emeraldpay.dshackle.archive.storage.fs.TransactionsReader
+import io.emeraldpay.dshackle.archive.storage.BlocksReader
+import io.emeraldpay.dshackle.archive.storage.TransactionsReader
 import org.slf4j.LoggerFactory
 import org.springframework.beans.factory.annotation.Autowired
 import org.springframework.context.annotation.Profile
 import org.springframework.stereotype.Service
 import reactor.core.publisher.Flux
-import java.io.File
 import java.nio.file.Path
-import kotlin.io.path.name
 import reactor.core.publisher.Mono
 
 @Service

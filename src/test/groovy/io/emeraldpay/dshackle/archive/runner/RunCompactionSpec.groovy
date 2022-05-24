@@ -2,13 +2,11 @@ package io.emeraldpay.dshackle.archive.runner
 
 import io.emeraldpay.dshackle.archive.BlocksRange
 import io.emeraldpay.dshackle.archive.config.RunConfig
-import io.emeraldpay.dshackle.archive.runner.RunCompaction
 import io.emeraldpay.dshackle.archive.storage.CompleteWriter
 import io.emeraldpay.dshackle.archive.storage.FilenameGenerator
 import io.emeraldpay.dshackle.archive.storage.SourceStorage
-import io.emeraldpay.dshackle.archive.storage.TargetStorage
-import io.emeraldpay.dshackle.archive.storage.fs.BlocksReader
-import io.emeraldpay.dshackle.archive.storage.fs.TransactionsReader
+import io.emeraldpay.dshackle.archive.storage.BlocksReader
+import io.emeraldpay.dshackle.archive.storage.TransactionsReader
 import reactor.core.publisher.Flux
 import spock.lang.Specification
 

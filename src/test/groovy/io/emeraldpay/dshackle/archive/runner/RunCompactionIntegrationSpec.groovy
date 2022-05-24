@@ -11,7 +11,11 @@ import org.springframework.boot.test.context.SpringBootTest
 import org.springframework.context.annotation.ComponentScan
 import org.springframework.test.context.ActiveProfiles
 import org.testcontainers.shaded.org.apache.commons.io.FileUtils
+import spock.lang.Shared
 import spock.lang.Specification
+
+import java.nio.file.Files
+import java.nio.file.Path
 
 @SpringBootTest(args = ["-b=BITCOIN", "--range=700_000..799_999", "--dir=src/test/resources/playground", "--inputs=src/test/resources/playground/", "compact"])
 @ActiveProfiles("run-compact")
@@ -21,14 +25,27 @@ class RunCompactionIntegrationSpec extends Specification {
     @Autowired
     RunCompaction runCompaction
 
+    @Shared
+    private Path testDir = Path.of("./playground")
+
+    //TODO use a temp dir
+    @Shared
+    private File playground = testDir.toFile()
 
     def setupSpec() {
+        //TODO use a temp dir instead
+        FileUtils.deleteDirectory(playground)
+        Files.createDirectories(testDir)
+
+        def fullAvroFiles = new File("src/test/resources/fullAvroFiles/")
+        FileUtils.copyDirectory(fullAvroFiles, playground)
+
         String[] args = [
                 "-b=BITCOIN",
                 "--range=700_000..799_999",
-                "--dir=src/test/resources/playground",
+                "--dir=./playground",
                 "--rangeChunk=5",
-                "--inputs=src/test/resources/playground/",
+                "--inputs=./playground/",
                 "compact"
         ]
         def config = new RunConfigInitializer().create(args)
@@ -36,26 +53,27 @@ class RunCompactionIntegrationSpec extends Specification {
     }
 
     def "Successful compaction"() {
-        setup:
-        def playGround = new File("src/test/resources/playground")
-        playGround.listFiles().each { it.delete() }
-        def fullAvroFiles = new File("src/test/resources/fullAvroFiles/")
-        playGround.deleteDir()
-        playGround.mkdir()
-        FileUtils.copyDirectory(fullAvroFiles, playGround)
+        when:
         runCompaction.run()
-        expect:
-        new File("src/test/resources/playground/btc/000700000/range-000723745_000723749.block.avro").exists()
-        new File("src/test/resources/playground/btc/000700000/range-000723745_000723749.txes.avro").exists()
-        new File("src/test/resources/playground/btc/000700000/range-000723755_000723759.block.avro").exists()
-        new File("src/test/resources/playground/btc/000700000/range-000723755_000723759.txes.avro").exists()
 
-        def block50_54 = new File("src/test/resources/playground/btc/000700000/range-000723750_000723754.block.avro")
-        assert (block50_54.exists())
+        then:
+        new File(playground, "btc/000700000/range-000723745_000723749.blocks.avro").exists()
+        new File(playground, "btc/000700000/range-000723745_000723749.txes.avro").exists()
+        new File(playground, "btc/000700000/range-000723755_000723759.blocks.avro").exists()
+        new File(playground, "btc/000700000/range-000723755_000723759.txes.avro").exists()
 
+        when:
+        def block50_54 = new File(playground, "btc/000700000/range-000723750_000723754.blocks.avro")
+
+        then:
+        block50_54.exists()
+
+        when:
         def reader = new GenericDatumReader()
         def fileReader = new DataFileReader(block50_54, reader)
         def record = new GenericData.Record(fileReader.schema)
+
+        then:
         fileReader.next(record)
         record["height"].toString() == "723750"
         fileReader.next(record)
@@ -69,23 +87,7 @@ class RunCompactionIntegrationSpec extends Specification {
         !fileReader.hasNext()
         fileReader.close()
 
-        !new File("src/test/resources/playground/000723753.block.avro").exists()
-    }
-
-    def "Unsuccessful compaction"() {
-        setup:
-        def playGround = new File("src/test/resources/playground")
-        playGround.listFiles().each { it.delete() }
-        def fullAvroFiles = new File("src/test/resources/fullAvroFiles/")
-        playGround.deleteDir()
-        playGround.mkdir()
-        FileUtils.copyDirectory(fullAvroFiles, playGround)
-        new File("src/test/resources/playground/000723751.block.avro").delete()
-        expect:
-        when:
-        runCompaction.run()
-        then:
-        thrown Exception
+        !new File(playground, "000723753.block.avro").exists()
     }
 
 }

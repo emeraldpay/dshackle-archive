@@ -1,6 +1,7 @@
 package io.emeraldpay.dshackle.archive.storage
 
 import io.emeraldpay.dshackle.archive.BlocksRange
+import io.emeraldpay.dshackle.archive.FileType
 import io.emeraldpay.dshackle.archive.config.RunConfig
 import org.slf4j.LoggerFactory
 import org.springframework.beans.factory.annotation.Autowired
@@ -27,61 +28,34 @@ class ConfiguredFilenameGenerator(
         private val log = LoggerFactory.getLogger(ConfiguredFilenameGenerator::class.java)
     }
 
-    private val dir = Path.of(runConfig.files.dir)
-    private val fileManipulationLock = ReentrantLock()
-    private val okFiles = ConcurrentHashMap<Path, Boolean>()
-
-
-    init {
-        Files.createDirectories(dir)
+    private val fileTypes = EnumMap<FileType, String>(FileType::class.java).also {
+        it[FileType.TRANSACTIONS] = "transactions"
+        it[FileType.BLOCKS] = if (runConfig.range.individual) {
+            "block"
+        } else {
+            "blocks"
+        }
     }
 
-    fun fileForAutoRange(type: String, height: Long, append: Boolean): Path {
+    fun fileForAutoRange(type: FileType, height: Long): String {
         if (range.isUsingRanges) {
             val chunk = range.getChunkAt(height)
-            return fileFor(type, chunk, append)
+            return fileFor(type, chunk)
         }
-        return fileForIndividual(type, height, append)
+        return fileForIndividual(type, height)
     }
 
-    fun fileForIndividual(type: String, height: Long, append: Boolean): Path {
-        val filename = getIndividualFilename(type, height)
-        val path = dir.resolve(filename)
-        return ensureFile(path, append)
+    fun fileForIndividual(type: FileType, height: Long): String {
+        return getIndividualFilename(fileTypes[type]!!, height)
     }
 
-    fun fileFor(type: String, height: Long, append: Boolean): Path {
+    fun fileFor(type: FileType, height: Long): String {
         val chunk = range.getChunkAt(height)
-        return fileFor(type, chunk, append)
+        return fileFor(type, chunk)
     }
 
-    fun fileFor(type: String, chunk: BlocksRange.Chunk, append: Boolean): Path {
-        val filename = getRangeFilename(type, chunk)
-        val path = dir.resolve(filename)
-        return ensureFile(path, append)
+    fun fileFor(type: FileType, chunk: BlocksRange.Chunk): String {
+        return getRangeFilename(fileTypes[type]!!, chunk)
     }
-
-    fun ensureFile(path: Path, append: Boolean): Path {
-        if (okFiles.containsKey(path)) {
-            return path
-        }
-        fileManipulationLock.withLock {
-            val create: Boolean = if (!Files.exists(path)) {
-                Files.createDirectories(path.parent)
-                true
-            } else if (!append) {
-                Files.deleteIfExists(path)
-                true
-            } else {
-                false
-            }
-            if (create) {
-                Files.createFile(path)
-            }
-            okFiles.put(path, true)
-        }
-        return path
-    }
-
 
 }

@@ -1,15 +1,20 @@
 package io.emeraldpay.dshackle.archive.storage.fs
 
+import io.emeraldpay.dshackle.archive.config.RunConfig
 import io.emeraldpay.dshackle.archive.storage.FilenameGenerator
 import io.emeraldpay.dshackle.archive.storage.StorageAccess
 import java.io.File
 import java.io.IOException
+import java.io.OutputStream
 import java.nio.file.FileVisitResult
 import java.nio.file.FileVisitor
 import java.nio.file.Files
 import java.nio.file.Path
 import java.nio.file.attribute.BasicFileAttributes
+import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.locks.ReentrantLock
+import kotlin.concurrent.withLock
 import org.reactivestreams.Publisher
 import org.reactivestreams.Subscriber
 import org.reactivestreams.Subscription
@@ -21,11 +26,44 @@ import reactor.core.publisher.Mono
 
 @Service
 class FilesStorageAccess(
+        @Autowired private val runConfig: RunConfig,
         @Autowired private val filenameGenerator: FilenameGenerator,
 ) : StorageAccess {
 
     companion object {
         private val log = LoggerFactory.getLogger(FilesStorageAccess::class.java)
+    }
+
+    private val dir = Path.of(runConfig.files.dir)
+
+    init {
+        Files.createDirectories(dir)
+    }
+
+    private val fileManipulationLock = ReentrantLock()
+    private val okFiles = ConcurrentHashMap<Path, Boolean>()
+
+    fun ensureFile(path: String, append: Boolean): Path {
+        val fullPath = dir.resolve(path)
+        if (okFiles.containsKey(fullPath)) {
+            return fullPath
+        }
+        fileManipulationLock.withLock {
+            val create: Boolean = if (!Files.exists(fullPath)) {
+                Files.createDirectories(fullPath.parent)
+                true
+            } else if (!append) {
+                Files.deleteIfExists(fullPath)
+                true
+            } else {
+                false
+            }
+            if (create) {
+                Files.createFile(fullPath)
+            }
+            okFiles.put(fullPath, true)
+        }
+        return fullPath
     }
 
     override fun listArchive(height: List<Long>?): Flux<String> {
@@ -50,15 +88,19 @@ class FilesStorageAccess(
 
     override fun deleteArchives(files: List<String>): Mono<Void> {
         return Mono.fromCallable {
-            println("delete files $files")
             files.forEach {
                 Files.deleteIfExists(Path.of(it))
             }
         }.then()
     }
 
-    override fun locationFor(file: String): String {
+    override fun getURI(file: String): String {
         return File(file).absolutePath
+    }
+
+    override fun createWriter(path: String): OutputStream {
+        val target = ensureFile(path, false)
+        return Files.newOutputStream(target)
     }
 
     class FilesPublisher(

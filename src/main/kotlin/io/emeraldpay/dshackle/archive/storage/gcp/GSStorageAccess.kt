@@ -3,10 +3,13 @@ package io.emeraldpay.dshackle.archive.storage.gcp
 import com.google.api.gax.paging.Page
 import com.google.cloud.storage.Blob
 import com.google.cloud.storage.BlobId
+import com.google.cloud.storage.BlobInfo
 import com.google.cloud.storage.Storage
-import io.emeraldpay.dshackle.archive.config.RunConfig
 import io.emeraldpay.dshackle.archive.storage.FilenameGenerator
 import io.emeraldpay.dshackle.archive.storage.StorageAccess
+import java.io.OutputStream
+import java.nio.channels.Channels
+import java.nio.channels.WritableByteChannel
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicLong
 import org.reactivestreams.Publisher
@@ -19,6 +22,7 @@ import org.springframework.stereotype.Service
 import reactor.core.publisher.Flux
 import reactor.core.publisher.Mono
 import reactor.core.scheduler.Schedulers
+
 
 @Service
 @Profile("with-gcp")
@@ -75,9 +79,20 @@ class GSStorageAccess(
                 .then()
     }
 
-    override fun locationFor(file: String): String {
+    override fun getURI(file: String): String {
         return "gs://${googleStorage.bucket}/${googleStorage.getBucketPath(file)}"
     }
+
+    override fun createWriter(path: String): OutputStream {
+        val blobId = BlobId.of(googleStorage.bucket, googleStorage.getBucketPath(path))
+        val blobInfo = BlobInfo.newBuilder(blobId).build()
+        val channel = googleStorage.storage.writer(blobInfo, Storage.BlobWriteOption.disableGzipContent())
+                ?: throw IllegalStateException("Blob ${blobId.toGsUtilUri()} cannot be created")
+
+//        val channel: WritableByteChannel = blob.writer()
+        return Channels.newOutputStream(channel)
+    }
+
 
     class BlobsPublisher(
             private val storage: Storage,

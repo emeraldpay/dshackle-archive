@@ -1,6 +1,5 @@
-package io.emeraldpay.dshackle.archive.storage.fs
+package io.emeraldpay.dshackle.archive.storage
 
-import io.emeraldpay.dshackle.archive.storage.CurrentStorage
 import java.nio.file.Files
 import java.nio.file.Path
 import org.apache.avro.file.DataFileWriter
@@ -8,8 +7,9 @@ import org.slf4j.LoggerFactory
 
 abstract class BaseAvroWriter<T>(
         val dataFileWriter: DataFileWriter<T>,
-        private val path: Path,
+        private val path: String,
         private val currentStorage: CurrentStorage,
+        private val access: StorageAccess,
 ) : AutoCloseable {
 
     companion object {
@@ -24,7 +24,7 @@ abstract class BaseAvroWriter<T>(
             log.warn("Failed to close $path. ${t.javaClass}: ${t.message}")
         }
         try {
-            Files.deleteIfExists(path)
+            access.deleteArchives(listOf(path)).block()
         } catch (t: Throwable) {
             log.warn("Failed to delete $path. ${t.javaClass}: ${t.message}")
         }

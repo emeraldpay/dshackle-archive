@@ -1,6 +1,7 @@
-package io.emeraldpay.dshackle.archive.storage.fs
+package io.emeraldpay.dshackle.archive.storage
 
-import io.emeraldpay.dshackle.archive.avro.Block
+import com.linkedin.avro.fastserde.FastSpecificDatumReader
+import io.emeraldpay.dshackle.archive.avro.Transaction
 import java.nio.file.Path
 import java.util.concurrent.atomic.AtomicBoolean
 import org.apache.avro.file.DataFileReader
@@ -13,23 +14,31 @@ import org.slf4j.LoggerFactory
 import org.springframework.stereotype.Repository
 
 @Repository
-class BlocksReader {
+class TransactionsReader {
 
     companion object {
-        private val log = LoggerFactory.getLogger(BlocksReader::class.java)
+        private val log = LoggerFactory.getLogger(TransactionsReader::class.java)
     }
 
-    fun open(file: Path): Publisher<Block> {
-        log.info("Read blocks from ${file.fileName}")
+    fun open(file: Path): Publisher<Transaction> {
+        log.info("Read transactions from ${file.fileName}")
 
-        val datumReader = SpecificDatumReader<Block>(Block::class.java)
-        val dataFileReader: DataFileReader<Block> = DataFileReader<Block>(file.toFile(), datumReader)
+        val datumReader = SpecificDatumReader<Transaction>(Transaction::class.java)
+        val dataFileReader: DataFileReader<Transaction> = DataFileReader<Transaction>(file.toFile(), datumReader)
+        return LocalFileAccess(dataFileReader)
+    }
+
+    fun openFast(file: Path): Publisher<Transaction> {
+        log.info("Read transactions from ${file.fileName}")
+
+        val datumReader = FastSpecificDatumReader<Transaction>(Transaction.getClassSchema())
+        val dataFileReader: DataFileReader<Transaction> = DataFileReader<Transaction>(file.toFile(), datumReader)
         return LocalFileAccess(dataFileReader)
     }
 
     class LocalFileAccess(
-            private val dataFileReader: FileReader<Block>
-    ) : AutoCloseable, Publisher<Block> {
+            private val dataFileReader: FileReader<Transaction>
+    ) : AutoCloseable, Publisher<Transaction> {
 
         override fun close() {
             try {
@@ -39,7 +48,7 @@ class BlocksReader {
             }
         }
 
-        override fun subscribe(s: Subscriber<in Block>) {
+        override fun subscribe(s: Subscriber<in Transaction>) {
             val cancelled = AtomicBoolean(false)
             val subscriber = object : Subscription {
                 override fun request(n: Long) {
@@ -58,7 +67,7 @@ class BlocksReader {
             s.onSubscribe(subscriber)
         }
 
-        fun next(s: Subscriber<in Block>) {
+        fun next(s: Subscriber<in Transaction>) {
             if (!dataFileReader.hasNext()) {
                 s.onComplete()
                 close()
@@ -81,4 +90,5 @@ class BlocksReader {
         }
 
     }
+
 }

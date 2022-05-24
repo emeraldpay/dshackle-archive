@@ -31,7 +31,7 @@ class SourceStorage(
         private val log = LoggerFactory.getLogger(SourceStorage::class.java)
     }
 
-    private lateinit var current: StorageAccess
+    lateinit var current: StorageAccess
 
     @PostConstruct
     fun init() {
@@ -67,11 +67,11 @@ class SourceStorage(
                     .filter { file ->
                         val chunk = filenameGenerator.parseRange(file.name)
                         if (chunk == null) {
-                            log.debug("Skip ${file.name}")
+                            log.debug("Skip no chunk ${file.name}")
                         }
                         val accept = chunk != null && range.intersects(chunk)
                         if (!accept) {
-                            log.trace("Skip ${file.name}")
+                            log.trace("Skip diff chunk ${file.name}")
                         }
                         accept
                     }
@@ -94,14 +94,6 @@ class SourceStorage(
                 transactions = Flux.fromIterable(transactions),
                 blocks = Flux.fromIterable(blocks)
         )
-    }
-
-    fun listArchive(height: List<Long>?): Flux<String> {
-        return current.listArchive(height)
-    }
-
-    fun deleteArchives(files: List<String>): Mono<Void> {
-        return current.deleteArchives(files)
     }
 
     data class InputSources(

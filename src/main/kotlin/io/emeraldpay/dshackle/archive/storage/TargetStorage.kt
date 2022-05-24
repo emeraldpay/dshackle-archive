@@ -3,6 +3,7 @@ package io.emeraldpay.dshackle.archive.storage
 import io.emeraldpay.dshackle.archive.config.RunConfig
 import io.emeraldpay.dshackle.archive.storage.fs.FilesStorageAccess
 import io.emeraldpay.dshackle.archive.storage.gcp.GSStorageAccess
+import java.io.OutputStream
 import java.nio.file.Path
 import javax.annotation.PostConstruct
 import org.slf4j.LoggerFactory
@@ -24,7 +25,7 @@ class TargetStorage(
         private val log = LoggerFactory.getLogger(TargetStorage::class.java)
     }
 
-    private lateinit var current: StorageAccess
+    lateinit var current: StorageAccess
 
     @PostConstruct
     fun init() {
@@ -42,25 +43,6 @@ class TargetStorage(
             throw IllegalStateException()
         }
         current = instance
-    }
-
-    fun locationFor(file: Path): String {
-        val path = file.toFile().path
-        val cleanPath = if (runConfig.useGCP()) {
-            //TODO workaround for the local temp files which are used before uploading to the GCP
-            path.substring(runConfig.files.dir.length + 1)
-        } else {
-            path
-        }
-        return current.locationFor(cleanPath)
-    }
-
-    fun listArchive(height: List<Long>?): Flux<String> {
-        return current.listArchive(height)
-    }
-
-    fun deleteArchives(files: List<String>): Mono<Void> {
-        return current.deleteArchives(files)
     }
 
 }

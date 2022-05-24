@@ -43,7 +43,7 @@ class RunStream(
         log.info("Initializing stream archival...")
         val height = blockSource.getCurrentHeight().block() ?: 0
         val continueAfter = (height - tail).coerceAtLeast(0)
-        val archivedHeights = targetStorage.listArchive(listOf(height, continueAfter))
+        val archivedHeights = targetStorage.current.listArchive(listOf(height, continueAfter))
                 .flatMap {
                     val range = filenameGenerator.parseRange(it.substringAfterLast("/"))
                             ?: return@flatMap Mono.empty<Long>()

@@ -5,6 +5,7 @@ import io.emeraldpay.dshackle.archive.config.RunConfig
 import io.emeraldpay.dshackle.archive.storage.CompleteWriter
 import io.emeraldpay.dshackle.archive.storage.FilenameGenerator
 import io.emeraldpay.dshackle.archive.storage.StorageAccess
+import io.emeraldpay.dshackle.archive.storage.TargetStorage
 import org.slf4j.LoggerFactory
 import org.springframework.beans.factory.annotation.Autowired
 import org.springframework.stereotype.Service
@@ -20,8 +21,7 @@ class RunArchive(
         @Autowired private val completeWriter: CompleteWriter,
         @Autowired private val blocksRange: BlocksRange,
         @Autowired private val runConfig: RunConfig,
-        @Autowired private val postArchive: PostArchive,
-        @Autowired @Qualifier("targetStorage") private val targetStorage: StorageAccess,
+        @Autowired private val targetStorage: TargetStorage,
         @Autowired private val filenameGenerator: FilenameGenerator
 ) : Runnable {
 
@@ -52,7 +52,6 @@ class RunArchive(
                 archiveIndividual()
             }
         }
-        postArchive.close()
         // make sure it exits after the completion even if there are still running threads
         exitProcess(0)
     }
@@ -68,7 +67,7 @@ class RunArchive(
                 heights.add(height)
             }
             val wholeChunk = blocksRange.wholeChunk()
-            val currentBlock = targetStorage.listArchive(heights.toList())
+            val currentBlock = targetStorage.current.listArchive(heights.toList())
                     .flatMap {
                         Mono.justOrEmpty(filenameGenerator.parseRange(it)).cast(BlocksRange.Chunk::class.java)
                     }

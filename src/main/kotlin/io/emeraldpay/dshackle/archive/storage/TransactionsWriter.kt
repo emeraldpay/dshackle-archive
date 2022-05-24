@@ -1,15 +1,14 @@
-package io.emeraldpay.dshackle.archive.storage.fs
+package io.emeraldpay.dshackle.archive.storage
 
 import com.linkedin.avro.fastserde.FastSpecificDatumWriter
 import io.emeraldpay.dshackle.archive.avro.Transaction
 import io.emeraldpay.dshackle.archive.BlocksRange
+import io.emeraldpay.dshackle.archive.FileType
 import io.emeraldpay.dshackle.archive.config.RunConfig
-import io.emeraldpay.dshackle.archive.storage.BlockDetails
-import io.emeraldpay.dshackle.archive.storage.ConfiguredFilenameGenerator
-import io.emeraldpay.dshackle.archive.storage.CurrentStorage
-import io.emeraldpay.dshackle.archive.storage.TransactionDetails
 import java.nio.file.Path
 import java.time.Instant
+import java.util.concurrent.locks.ReentrantLock
+import kotlin.concurrent.withLock
 import org.apache.avro.AvroRuntimeException
 import org.apache.avro.file.CodecFactory
 import org.apache.avro.file.DataFileWriter
@@ -20,7 +19,8 @@ import org.springframework.stereotype.Repository
 @Repository
 class TransactionsWriter(
         @Autowired private val configuredFilenameGenerator: ConfiguredFilenameGenerator,
-        @Autowired private val runConfig: RunConfig
+        @Autowired private val runConfig: RunConfig,
+        @Autowired private val targetStorage: TargetStorage,
 ) {
 
     companion object {
@@ -30,20 +30,22 @@ class TransactionsWriter(
     private val currentWriters = CurrentStorage(100)
 
     fun open(chunk: BlocksRange.Chunk): TxFileAccess {
-        val file = configuredFilenameGenerator.fileFor("transactions", chunk, false)
+        val file = configuredFilenameGenerator.fileFor(FileType.TRANSACTIONS, chunk)
         return open(file)
     }
 
-    fun open(file: Path): TxFileAccess {
+    fun open(file: String): TxFileAccess {
         return currentWriters.get(file) {
-            log.info("Save transactions to ${file.fileName}")
+            log.info("Save transactions to $file")
 
             val datumWriter = FastSpecificDatumWriter<Transaction>(Transaction.getClassSchema())
             val dataFileWriter: DataFileWriter<Transaction> = DataFileWriter<Transaction>(datumWriter)
             dataFileWriter.setCodec(CodecFactory.snappyCodec())
             dataFileWriter.setSyncInterval(1 * 1024 * 1024) //flush every megabyte
 
-            LocalFileAccess(dataFileWriter.create(Transaction.getClassSchema(), file.toFile()), runConfig, file, currentWriters)
+            val outputStream = targetStorage.current.createWriter(file)
+
+            LocalFileAccess(dataFileWriter.create(Transaction.getClassSchema(), outputStream), runConfig, file, currentWriters, targetStorage.current)
         }
     }
 
@@ -59,9 +61,12 @@ class TransactionsWriter(
     class LocalFileAccess(
             dataFileWriter: DataFileWriter<Transaction>,
             private val runConfig: RunConfig,
-            path: Path,
+            path: String,
             currentStorage: CurrentStorage,
-    ) : TxFileAccess, AutoCloseable, BaseAvroWriter<Transaction>(dataFileWriter, path, currentStorage) {
+            access: StorageAccess,
+    ) : TxFileAccess, AutoCloseable, BaseAvroWriter<Transaction>(dataFileWriter, path, currentStorage, access) {
+
+        private val writeLock = ReentrantLock()
 
         override fun append(block: BlockDetails, tx: TransactionDetails) {
             val datum = Transaction().apply {
@@ -90,7 +95,9 @@ class TransactionsWriter(
 
         override fun append(datum: Transaction) {
             try {
-                dataFileWriter.append(datum)
+                writeLock.withLock {
+                    dataFileWriter.append(datum)
+                }
             } catch (t: AvroRuntimeException) {
                 log.error("Failed to write tx: ${datum.height} ${datum.txid}. Error ${t.javaClass} ${t.message}")
                 drop()
