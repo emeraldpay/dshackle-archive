@@ -68,7 +68,7 @@ dependencies {
     implementation "io.emeraldpay.etherjar:etherjar-hex:$etherjarVersion"
     implementation "io.emeraldpay.etherjar:etherjar-rpc-api:$etherjarVersion"
     implementation "io.emeraldpay.etherjar:etherjar-rpc-emerald:$etherjarVersion"
-    implementation "io.emeraldpay:emerald-api:0.12.0-SNAPSHOT"
+    implementation "io.emeraldpay:emerald-api:0.12-alpha.1"
 
     implementation "io.grpc:grpc-protobuf:$grpcVersion"
     implementation "io.grpc:grpc-core:$grpcVersion"
