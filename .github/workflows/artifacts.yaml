@@ -53,6 +53,10 @@ jobs:
           timeZone: 0
           format: 'YYYYMMDD-HHmm'
 
+      - name: Set Version
+        run: ./gradlew properties -q | grep "^version:" | awk '{printf "PROJECT_VERSION=" $2}' >> $GITHUB_ENV
+
+
       - name: Build zip
         uses: eskatos/gradle-command-action@v1
         with:
@@ -61,3 +65,8 @@ jobs:
       - name: Upload to GCP
         run: |
           gsutil cp -n ./build/distributions/*.zip gs://artifacts.emerald.cash/builds/dshackle-archive/${{ steps.gitversion.outputs.commitDate }}/${{ steps.time.outputs.time }}-${{ steps.gitversion.outputs.shortSha }}/
+
+      - name: Links to published artifacts
+        run: |
+          echo "Publishing artifacts to:"
+          echo "  https://artifacts.emerald.cash/builds/dshackle-archive/${{ steps.gitversion.outputs.commitDate }}/${{ steps.time.outputs.time }}-${{ steps.gitversion.outputs.shortSha }}/dshackle-archive-${{ env.PROJECT_VERSION }}.zip"
