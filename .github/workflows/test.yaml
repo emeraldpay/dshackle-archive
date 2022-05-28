@@ -1,0 +1,39 @@
+name: Tests
+
+on:
+  push:
+    branches:
+      - master
+      - release/*
+      - ci/*
+  pull_request:
+    branches:
+      - master
+      - release/*
+      - ci/*
+
+jobs:
+  unit-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v2
+
+      - name: Set up JDK
+        uses: actions/setup-java@v1
+        with:
+          java-version: 13
+
+      - name: Install System Libs
+        run: sudo apt-get install -y openssl libapr1
+
+      - name: Check
+        uses: eskatos/gradle-command-action@v1
+        with:
+          arguments: check
+        env:
+          CI: true
+
+      - name: Upload Coverage Report
+        uses: codecov/codecov-action@v1
+        with:
+          file: ./build/reports/jacoco/test/jacocoTestReport.xml
