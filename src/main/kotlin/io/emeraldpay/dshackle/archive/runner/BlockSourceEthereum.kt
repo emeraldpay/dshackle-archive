@@ -14,13 +14,13 @@ import io.emeraldpay.etherjar.rpc.json.TransactionReceiptJson
 import io.emeraldpay.etherjar.rpc.json.TransactionRefJson
 import org.slf4j.LoggerFactory
 import org.springframework.beans.factory.annotation.Autowired
+import org.springframework.context.annotation.Profile
 import org.springframework.stereotype.Service
 import reactor.core.publisher.Flux
 import reactor.core.publisher.Mono
 import reactor.util.function.Tuples
 import java.nio.ByteBuffer
 import java.util.*
-import org.springframework.context.annotation.Profile
 
 @Service
 @Profile("!run-copy & !run-compact & ethereum")
@@ -146,15 +146,15 @@ class BlockSourceEthereum(
         }
 
         return Mono.zip(json, receiptJson, raw, traceJson, stateDiffJson).map {
-            val tx = it.t1
-            val receipt = it.t2
+            val jsonResult = it.t1
+            val receiptResult = it.t2
             TransactionDetails(
-                    hash = tx.result!!.hash.toHex(),
-                    raw = it.t1.raw,
-                    json = tx.raw,
-                    from = tx.result.from.toHex(),
-                    to = tx.result.to?.toHex(),
-                    receiptJson = receipt.raw,
+                    hash = jsonResult.result!!.hash.toHex(),
+                    raw = it.t3,
+                    json = jsonResult.raw,
+                    from = jsonResult.result.from.toHex(),
+                    to = jsonResult.result.to?.toHex(),
+                    receiptJson = receiptResult.raw,
                     traceJson = it.t4.orElse(null),
                     stateDiff = it.t5.orElse(null)
             )
