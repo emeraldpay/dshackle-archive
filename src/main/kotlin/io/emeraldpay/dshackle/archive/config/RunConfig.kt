@@ -45,6 +45,10 @@ data class RunConfig(
         return export.gs != null
     }
 
+    fun withRange(range: Range): RunConfig {
+        return copy(range = range)
+    }
+
     enum class Command {
         ARCHIVE,
         COPY,
@@ -59,7 +63,8 @@ data class RunConfig(
 
     data class Connection(
             val host: String,
-            val port: Int
+            val port: Int,
+            val useTls: Boolean = true,
     ) {
         companion object {
             fun default(): Connection {
@@ -109,6 +114,10 @@ data class RunConfig(
             fun forRange(start: Long, count: Long, chunk: Long): Range {
                 return Range(start, count, chunk, chunk == 1L)
             }
+        }
+
+        fun withContinueFromLast(value: Boolean): Range {
+            return copy(continueFromLast = value)
         }
     }
 

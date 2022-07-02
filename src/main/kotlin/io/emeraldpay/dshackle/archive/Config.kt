@@ -33,12 +33,20 @@ open class Config {
     @Bean
     @Profile("run-archive", "run-stream")
     fun dshackleClient(runConfig: RunConfig): ReactorBlockchainGrpc.ReactorBlockchainStub {
-        log.info("Connect to ${runConfig.connection!!.host}:${runConfig.connection.port}")
+        val connectionConfig = runConfig.connection!!
+        log.info("Connect to ${connectionConfig.host}:${runConfig.connection.port}")
         return EmeraldApi.newBuilder()
                 .connectTo(
                         runConfig.connection.host,
                         runConfig.connection.port
                 )
+                .let {
+                    if (!connectionConfig.useTls) {
+                        it.usePlaintext()
+                    } else {
+                        it
+                    }
+                }
                 // Some Trace JSONs are really huge. 100mb and more are common, sometimes even 1gb+.
                 // We make it here to accept up to 2gb. But in practice it's still may fail.
                 // For example, with default memory config some of large messages are going to fail with

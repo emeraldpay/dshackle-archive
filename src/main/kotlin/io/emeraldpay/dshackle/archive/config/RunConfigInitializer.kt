@@ -37,6 +37,11 @@ class RunConfigInitializer {
             options.addOption(it)
         }
 
+        Option(null, "connection.notls", false, "Disable TLS").let {
+            it.isRequired = false
+            options.addOption(it)
+        }
+
         Option("r", "range", true, "Blocks Range (N...M)").let {
             it.isRequired = false
             options.addOption(it)
@@ -141,6 +146,10 @@ class RunConfigInitializer {
                 }
             }.let {
                 RunConfig.Connection(it.first, it.second)
+            }.let {
+                if (cmd.hasOption("connection.notls")) {
+                    it.copy(useTls = false)
+                } else it
             }
         } else null
 
