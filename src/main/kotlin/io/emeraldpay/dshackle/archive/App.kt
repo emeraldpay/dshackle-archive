@@ -10,11 +10,13 @@ import io.emeraldpay.dshackle.archive.runner.RunStream
 import io.emeraldpay.grpc.BlockchainType
 import java.util.*
 import kotlin.collections.ArrayList
+import kotlin.system.exitProcess
 import org.slf4j.LoggerFactory
 import org.springframework.boot.Banner
 import org.springframework.boot.SpringApplication
 import org.springframework.boot.autoconfigure.SpringBootApplication
 import org.springframework.context.annotation.Import
+import reactor.core.publisher.Mono
 
 @SpringBootApplication(scanBasePackages = ["io.emeraldpay.dshackle.archive"])
 @Import(Config::class)
@@ -45,10 +47,13 @@ fun main(args: Array<String>) {
 
     app.setAdditionalProfiles(*profiles.toTypedArray())
     val ctx = app.run(*args)
-    when (config.command) {
+    val runner: Mono<Void> = when (config.command) {
         RunConfig.Command.ARCHIVE -> ctx.getBean(RunArchive::class.java).run()
         RunConfig.Command.COPY -> ctx.getBean(RunCopy::class.java).run()
         RunConfig.Command.STREAM -> ctx.getBean(RunStream::class.java).run()
         RunConfig.Command.COMPACT -> ctx.getBean(RunCompaction::class.java).run()
     }
+    runner.block()
+    // make sure it exits after the completion even if there are still running threads
+    exitProcess(0)
 }

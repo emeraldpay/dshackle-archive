@@ -4,13 +4,10 @@ import io.emeraldpay.dshackle.archive.BlocksRange
 import io.emeraldpay.dshackle.archive.config.RunConfig
 import io.emeraldpay.dshackle.archive.storage.CompleteWriter
 import io.emeraldpay.dshackle.archive.storage.FilenameGenerator
-import io.emeraldpay.dshackle.archive.storage.StorageAccess
 import io.emeraldpay.dshackle.archive.storage.TargetStorage
 import org.slf4j.LoggerFactory
 import org.springframework.beans.factory.annotation.Autowired
 import org.springframework.stereotype.Service
-import kotlin.system.exitProcess
-import org.springframework.beans.factory.annotation.Qualifier
 import org.springframework.context.annotation.Profile
 import reactor.core.publisher.Mono
 
@@ -23,7 +20,7 @@ class RunArchive(
         @Autowired private val runConfig: RunConfig,
         @Autowired private val targetStorage: TargetStorage,
         @Autowired private val filenameGenerator: FilenameGenerator
-) : Runnable {
+) : RunCommand {
 
     companion object {
         private val log = LoggerFactory.getLogger(RunArchive::class.java)
@@ -31,8 +28,12 @@ class RunArchive(
 
     private val chunkedArchive = ChunkedArchive(blocksRange, completeWriter)
 
-    override fun run() {
-        checkStartBlock()
+    override fun run(): Mono<Void> {
+        return checkStartBlock()
+                .then(runPrepared())
+    }
+
+    fun runPrepared(): Mono<Void> {
         log.info("Running archive ${blocksRange.startBlock}..${blocksRange.startBlock + blocksRange.length - 1} using ${runConfig.range.chunk} blocks per file")
         log.info("Include data: ")
         log.info("  Standard  : true")
@@ -41,10 +42,12 @@ class RunArchive(
             log.warn("              Tracing is very expensive operation. Results may contain larger than 1Gb JSON per transaction")
         }
         log.info("  StateDiff : ${runConfig.options.stateDiff}")
-        if (blocksRange.length <= 0) {
+        return if (blocksRange.length <= 0) {
             log.warn("Requested ${blocksRange.length} blocks to archive")
+            Mono.empty()
         } else if (blocksRange.startBlock < 0) {
             log.warn("Requested to start from ${blocksRange.startBlock}")
+            Mono.empty()
         } else {
             if (blocksRange.isUsingRanges) {
                 archiveRanges()
@@ -52,51 +55,49 @@ class RunArchive(
                 archiveIndividual()
             }
         }
-        // make sure it exits after the completion even if there are still running threads
-        exitProcess(0)
     }
 
-    fun checkStartBlock() {
-        if (runConfig.range.continueFromLast) {
+    fun checkStartBlock(): Mono<Void> {
+        return if (runConfig.range.continueFromLast) {
             log.debug("Check for last archive in range")
-            val heights = HashSet<Long>()
-            heights.add(blocksRange.startBlock)
-            var height = blocksRange.startBlock
-            while (height < blocksRange.endBlock) {
-                height += runConfig.range.chunk / 2
-                heights.add(height)
-            }
+            val heights = findHeightsToCheck()
             val wholeChunk = blocksRange.wholeChunk()
-            val currentBlock = targetStorage.current.listArchive(heights.toList())
-                    .flatMap {
-                        Mono.justOrEmpty(filenameGenerator.parseRange(it)).cast(BlocksRange.Chunk::class.java)
+            targetStorage.current.listArchive(heights)
+                    .flatMap { Mono.justOrEmpty(filenameGenerator.parseRange(it)).cast(BlocksRange.Chunk::class.java) }
+                    .filter(wholeChunk::intersects)
+                    .switchIfEmpty(Mono.fromCallable { log.debug("First run in the selected range") }.then(Mono.empty()))
+                    .map(BlocksRange.Chunk::getEndBlock)
+                    .reduce(Long::coerceAtLeast)
+                    .doOnNext { currentBlock ->
+                        log.debug("Continue from $currentBlock")
+                        blocksRange.startBlock = currentBlock
                     }
-                    .filter {
-                        wholeChunk.intersects(it)
-                    }
-                    .map { it.getEndBlock() }
-                    .reduce { a, b ->
-                        a.coerceAtLeast(b)
-                    }
-                    .block()
-            if (currentBlock != null) {
-                log.debug("Continue from $currentBlock")
-                blocksRange.startBlock = currentBlock
-            } else {
-                log.debug("First run in the selected range")
-            }
+                    .then()
+        } else {
+            Mono.empty()
         }
     }
 
-    fun archiveRanges() {
-        chunkedArchive.archiveRanges { chunk ->
+    fun findHeightsToCheck(): List<Long> {
+        val heights = mutableSetOf<Long>()
+        heights.add(blocksRange.startBlock)
+        var height = blocksRange.startBlock
+        while (height < blocksRange.endBlock) {
+            height += runConfig.range.chunk / 2
+            heights.add(height)
+        }
+        return heights.toList()
+    }
+
+    fun archiveRanges(): Mono<Void> {
+        return chunkedArchive.archiveRanges { chunk ->
             blockSource.getData(chunk.startBlock, chunk.length)
         }
     }
 
-    fun archiveIndividual() {
-        blockSource.getData(blocksRange.startBlock, blocksRange.length)
+    fun archiveIndividual(): Mono<Void> {
+        return blockSource.getData(blocksRange.startBlock, blocksRange.length)
                 .transform(completeWriter.streamConsumer())
-                .blockLast()
+                .then()
     }
 }

@@ -23,25 +23,25 @@ class RunCopy(
         @Autowired private val sourceStorage: SourceStorage,
         @Autowired private val transactionsReader: TransactionsReader,
         @Autowired private val blocksReader: BlocksReader,
-) : Runnable {
+) : RunCommand {
 
     companion object {
         private val log = LoggerFactory.getLogger(RunCopy::class.java)
     }
 
-    override fun run() {
+    override fun run(): Mono<Void> {
         log.info("Recover files")
         if (runConfig.inputFiles == null) {
             log.warn("List of input files is not set")
-            return
+            return Mono.empty()
         }
 
         val sources = sourceStorage.getInputFiles()
 
-        Mono.zip(
+        return Mono.zip(
                 processBlocks(sources.blocks),
                 processTransactions(sources.transactions)
-        ).block()
+        ).then()
     }
 
     fun processBlocks(files: Flux<Path>): Mono<Void> {

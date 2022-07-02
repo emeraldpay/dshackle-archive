@@ -5,7 +5,6 @@ import io.emeraldpay.api.proto.ReactorBlockchainGrpc
 import io.emeraldpay.dshackle.archive.config.RunConfig
 import io.emeraldpay.dshackle.archive.storage.CompleteWriter
 import io.emeraldpay.dshackle.archive.storage.FilenameGenerator
-import io.emeraldpay.dshackle.archive.storage.StorageAccess
 import io.emeraldpay.dshackle.archive.storage.TargetStorage
 import java.time.Duration
 import java.time.Instant
@@ -15,12 +14,12 @@ import java.util.concurrent.ConcurrentSkipListSet
 import kotlin.collections.HashMap
 import org.slf4j.LoggerFactory
 import org.springframework.beans.factory.annotation.Autowired
-import org.springframework.beans.factory.annotation.Qualifier
 import org.springframework.context.annotation.Profile
 import org.springframework.stereotype.Service
 import reactor.core.publisher.Flux
 import reactor.core.publisher.Mono
 import reactor.core.scheduler.Schedulers
+import reactor.util.function.Tuples
 
 @Service
 @Profile("run-stream")
@@ -31,7 +30,7 @@ class RunStream(
         @Autowired private val runConfig: RunConfig,
         @Autowired private val targetStorage: TargetStorage,
         @Autowired private val filenameGenerator: FilenameGenerator
-) : Runnable {
+) : RunCommand {
 
     companion object {
         private val log = LoggerFactory.getLogger(RunStream::class.java)
@@ -39,11 +38,19 @@ class RunStream(
 
     private val tail = runConfig.range.tail
 
-    override fun run() {
+    override fun run(): Mono<Void> {
         log.info("Initializing stream archival...")
-        val height = blockSource.getCurrentHeight().block() ?: 0
-        val continueAfter = (height - tail).coerceAtLeast(0)
-        val archivedHeights = targetStorage.current.listArchive(listOf(height, continueAfter))
+        return blockSource.getCurrentHeight()
+                .defaultIfEmpty(0)
+                .map { height ->
+                    val continueAfter = (height - tail).coerceAtLeast(0)
+                    Tuples.of(height, continueAfter)
+                }
+                .flatMap { processHeight(it.t1, it.t2) }
+    }
+
+    fun processHeight(height: Long, continueAfter: Long): Mono<Void> {
+        return targetStorage.current.listArchive(listOf(height, continueAfter))
                 .flatMap {
                     val range = filenameGenerator.parseRange(it.substringAfterLast("/"))
                             ?: return@flatMap Mono.empty<Long>()
@@ -65,19 +72,23 @@ class RunStream(
                             .map { it.first }
                 }
                 .collectList()
-                .block() ?: emptyList()
+                .defaultIfEmpty(emptyList())
+                .map { archivedHeights ->
+                    log.info("Start streaming from $height. Ensure blocks from $continueAfter are fully archived")
+                    log.debug("Last loaded blocks: ${archivedHeights.size} of $tail")
+                    ProcessingWindow(tail, archivedHeights).also {
+                        it.onHeight(height)
+                    }
+                }
+                .flatMap(::processWindow)
+    }
 
-        val window = ProcessingWindow(tail, archivedHeights)
-        window.onHeight(height)
-
-        log.info("Start streaming from $height. Ensure blocks from $continueAfter are fully archived")
-        log.debug("Last loaded blocks: ${archivedHeights.size} of $tail")
-
+    fun processWindow(window: ProcessingWindow): Mono<Void> {
         val follow = client.subscribeHead(Common.Chain.newBuilder().setType(Common.ChainRef.forNumber(runConfig.blockchain.id)).build())
                 .map { it.height }
                 .doOnNext(window::onHeight)
 
-        Flux.merge(
+        return Flux.merge(
                 follow.subscribeOn(Schedulers.boundedElastic()),
                 fillStart(window).subscribeOn(Schedulers.boundedElastic()),
                 fillGaps(window).subscribeOn(Schedulers.boundedElastic())
@@ -87,7 +98,7 @@ class RunStream(
                 .transform(completeWriter.streamConsumer())
                 .doOnNext(window::onProcessed)
                 .doOnError { log.error("Stopped processing with unhandled error", it) }
-                .subscribe()
+                .then()
     }
 
     fun fillStart(window: ProcessingWindow): Flux<Long> {

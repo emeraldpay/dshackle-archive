@@ -54,7 +54,7 @@ class RunCompactionIntegrationSpec extends Specification {
 
     def "Successful compaction"() {
         when:
-        runCompaction.run()
+        runCompaction.run().block()
 
         then:
         new File(playground, "btc/000700000/range-000723745_000723749.blocks.avro").exists()

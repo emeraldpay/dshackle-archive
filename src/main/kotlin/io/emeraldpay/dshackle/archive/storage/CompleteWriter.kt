@@ -32,13 +32,13 @@ class CompleteWriter(
     @Value("\${deleteCopiedFiles}")
     lateinit var deleteCopiedFiles : String
 
-    fun consume(dataSource: Flux<BlockDetails>, chunk: BlocksRange.Chunk) {
+    fun consume(dataSource: Flux<BlockDetails>, chunk: BlocksRange.Chunk): Mono<Void> {
         //NOTE rewrites the files
         val blockFile = configuredFilenameGenerator.fileFor(FileType.BLOCKS, chunk)
         val blockWrt = blocksWriter.open(blockFile)
         val txFile = configuredFilenameGenerator.fileFor(FileType.TRANSACTIONS, chunk)
         val txWrt = transactionsWriter.open(txFile)
-        val count = dataSource
+        val saving = dataSource
                 .map { block ->
                     block.transactions.forEach { tx ->
                         txWrt.append(block, tx)
@@ -60,18 +60,23 @@ class CompleteWriter(
                     }
                     total
                 }
-                .block()
-        log.info("$count blocks saved")
-        currentNotifier.onCreated(
+                .doOnNext { count ->
+                    log.info("$count blocks saved")
+                }
+
+        val notifyBlock = currentNotifier.onCreated(
                 currentNotifier.createEvent(
                         FileType.BLOCKS, chunk, blockFile
                 )
-        ).block()
-        currentNotifier.onCreated(
+        )
+        val notifyTxes = currentNotifier.onCreated(
                 currentNotifier.createEvent(
                         FileType.TRANSACTIONS, chunk, txFile
                 )
-        ).block()
+        )
+        val notifyAll = Flux.merge(notifyBlock, notifyTxes).then()
+
+        return saving.then(notifyAll)
     }
 
     fun consumeBlocks(dataSource: Flux<Block>) : Mono<Int> {
