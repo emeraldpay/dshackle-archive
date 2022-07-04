@@ -29,7 +29,7 @@ class ConfiguredFilenameGenerator(
     }
 
     private val fileTypes = EnumMap<FileType, String>(FileType::class.java).also {
-        it[FileType.TRANSACTIONS] = "transactions"
+        it[FileType.TRANSACTIONS] = "txes"
         it[FileType.BLOCKS] = if (runConfig.range.individual) {
             "block"
         } else {
