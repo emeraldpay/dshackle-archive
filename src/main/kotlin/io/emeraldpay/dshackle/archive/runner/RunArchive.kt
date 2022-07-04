@@ -26,14 +26,7 @@ class RunArchive(
         private val log = LoggerFactory.getLogger(RunArchive::class.java)
     }
 
-    private val chunkedArchive = ChunkedArchive(blocksRange, completeWriter)
-
     override fun run(): Mono<Void> {
-        return checkStartBlock()
-                .then(runPrepared())
-    }
-
-    fun runPrepared(): Mono<Void> {
         log.info("Running archive ${blocksRange.startBlock}..${blocksRange.startBlock + blocksRange.length - 1} using ${runConfig.range.chunk} blocks per file")
         log.info("Include data: ")
         log.info("  Standard  : true")
@@ -42,6 +35,11 @@ class RunArchive(
             log.warn("              Tracing is very expensive operation. Results may contain larger than 1Gb JSON per transaction")
         }
         log.info("  StateDiff : ${runConfig.options.stateDiff}")
+        return checkStartBlock()
+                .flatMap(::runPrepared)
+    }
+
+    fun runPrepared(blocksRange: BlocksRange): Mono<Void> {
         return if (blocksRange.length <= 0) {
             log.warn("Requested ${blocksRange.length} blocks to archive")
             Mono.empty()
@@ -50,14 +48,14 @@ class RunArchive(
             Mono.empty()
         } else {
             if (blocksRange.isUsingRanges) {
-                archiveRanges()
+                archiveRanges(ChunkedArchive(blocksRange, completeWriter))
             } else {
-                archiveIndividual()
+                archiveIndividual(blocksRange)
             }
         }
     }
 
-    fun checkStartBlock(): Mono<Void> {
+    fun checkStartBlock(): Mono<BlocksRange> {
         return if (runConfig.range.continueFromLast) {
             log.debug("Check for last archive in range")
             val heights = findHeightsToCheck()
@@ -68,13 +66,13 @@ class RunArchive(
                     .switchIfEmpty(Mono.fromCallable { log.debug("First run in the selected range") }.then(Mono.empty()))
                     .map(BlocksRange.Chunk::getEndBlock)
                     .reduce(Long::coerceAtLeast)
-                    .doOnNext { currentBlock ->
+                    .map { currentBlock ->
                         log.debug("Continue from $currentBlock")
                         blocksRange.startBlock = currentBlock
+                        blocksRange
                     }
-                    .then()
         } else {
-            Mono.empty()
+            Mono.just(blocksRange)
         }
     }
 
@@ -89,13 +87,13 @@ class RunArchive(
         return heights.toList()
     }
 
-    fun archiveRanges(): Mono<Void> {
+    fun archiveRanges(chunkedArchive: ChunkedArchive): Mono<Void> {
         return chunkedArchive.archiveRanges { chunk ->
             blockSource.getData(chunk.startBlock, chunk.length)
         }
     }
 
-    fun archiveIndividual(): Mono<Void> {
+    fun archiveIndividual(blocksRange: BlocksRange): Mono<Void> {
         return blockSource.getData(blocksRange.startBlock, blocksRange.length)
                 .transform(completeWriter.streamConsumer())
                 .then()
