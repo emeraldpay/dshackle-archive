@@ -4,6 +4,7 @@ import io.emeraldpay.dshackle.archive.BlocksRange
 import io.emeraldpay.dshackle.archive.config.RunConfig
 import io.emeraldpay.dshackle.archive.storage.CompleteWriter
 import io.emeraldpay.dshackle.archive.storage.FilenameGenerator
+import io.emeraldpay.dshackle.archive.storage.RangeAccess
 import io.emeraldpay.dshackle.archive.storage.TargetStorage
 import org.slf4j.LoggerFactory
 import org.springframework.beans.factory.annotation.Autowired
@@ -25,6 +26,8 @@ class RunArchive(
     companion object {
         private val log = LoggerFactory.getLogger(RunArchive::class.java)
     }
+
+    private val rangeAccess = RangeAccess(runConfig)
 
     override fun run(): Mono<Void> {
         log.info("Running archive ${blocksRange.startBlock}..${blocksRange.startBlock + blocksRange.length - 1} using ${runConfig.range.chunk} blocks per file")
@@ -58,13 +61,13 @@ class RunArchive(
     fun checkStartBlock(): Mono<BlocksRange> {
         return if (runConfig.range.continueFromLast) {
             log.debug("Check for last archive in range")
-            val heights = findHeightsToCheck()
+            val heights = rangeAccess.findHeightsToCheck(blocksRange)
             val wholeChunk = blocksRange.wholeChunk()
             targetStorage.current.listArchive(heights)
                     .flatMap { Mono.justOrEmpty(filenameGenerator.parseRange(it)).cast(BlocksRange.Chunk::class.java) }
                     .filter(wholeChunk::intersects)
                     .switchIfEmpty(Mono.fromCallable { log.debug("First run in the selected range") }.then(Mono.empty()))
-                    .map(BlocksRange.Chunk::getEndBlock)
+                    .map(BlocksRange.Chunk::endBlock)
                     .reduce(Long::coerceAtLeast)
                     .map { currentBlock ->
                         log.debug("Continue from $currentBlock")
@@ -74,17 +77,6 @@ class RunArchive(
         } else {
             Mono.just(blocksRange)
         }
-    }
-
-    fun findHeightsToCheck(): List<Long> {
-        val heights = mutableSetOf<Long>()
-        heights.add(blocksRange.startBlock)
-        var height = blocksRange.startBlock
-        while (height < blocksRange.endBlock) {
-            height += runConfig.range.chunk / 2
-            heights.add(height)
-        }
-        return heights.toList()
     }
 
     fun archiveRanges(chunkedArchive: ChunkedArchive): Mono<Void> {

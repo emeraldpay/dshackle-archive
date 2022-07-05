@@ -48,6 +48,18 @@ open class FilenameGenerator(
         return null
     }
 
+    fun extractType(filename: String): String? {
+        val range = rangeRegex.matchEntire(filename.substringAfterLast("/"))
+        if (range != null) {
+            return range.groupValues[3]
+        }
+        val single = singleRegex.matchEntire(filename.substringAfterLast("/"))
+        if (single != null) {
+            return single.groupValues[2]
+        }
+        return null
+    }
+
     fun getRangeFilename(type: String, chunk: BlocksRange.Chunk): String {
         val level0 = chunk.startBlock / dirBlockSizeL1 * dirBlockSizeL1
         return listOf(

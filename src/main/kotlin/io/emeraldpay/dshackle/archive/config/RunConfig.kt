@@ -53,7 +53,9 @@ data class RunConfig(
         ARCHIVE,
         COPY,
         STREAM,
-        COMPACT;
+        COMPACT,
+        REPORT,
+        ;
 
         @JsonValue
         open fun toLowerCase(): String {

@@ -29,26 +29,6 @@ class RunArchiveSpec extends Specification {
         0 * targetStorage.current
     }
 
-    def "Check all potential heights in different chunks"() {
-        def config = RunConfig.default()
-        config = config.withRange(
-                RunConfig.Range.forRange(1000, 300, 100).withContinueFromLast(true)
-        )
-        def runArchive = new RunArchive(
-                Stub(BlockSource), Stub(CompleteWriter),
-                new BlocksRange(config.range),
-                config,
-                Stub(TargetStorage), Stub(FilenameGenerator)
-        )
-
-        when:
-        def heights = runArchive.findHeightsToCheck()
-
-        then:
-        // it's the current implementation, but it's not necessary to generate heights in the middle of chunks
-        heights.toSorted() == [1000L, 1050, 1100, 1150, 1200, 1250, 1300]
-    }
-
     def "List target storage for items if it should continue"() {
         setup:
         def config = RunConfig.default()

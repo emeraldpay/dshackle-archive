@@ -50,15 +50,16 @@ open class BlocksRange(
         return height in startBlock..endBlock
     }
 
-    data class Chunk(val startBlock: Long, public val length: Long) {
+    data class Chunk(val startBlock: Long, val length: Long) {
 
-        fun getEndBlock(): Long {
-            return startBlock + length - 1
-        }
+        val endBlock: Long
+            get() {
+                return startBlock + length - 1
+            }
 
         fun intersects(o: Chunk): Boolean {
-            val oEnd = o.getEndBlock()
-            val end = getEndBlock()
+            val oEnd = o.endBlock
+            val end = endBlock
 
             val crossLeft = startBlock in o.startBlock..oEnd
             val crossRight = end in o.startBlock..oEnd
@@ -68,6 +69,24 @@ open class BlocksRange(
             return crossLeft || crossRight || includes || inside
         }
 
+        fun findContinuity(all: List<Chunk>): Chunk? {
+            return all.find {
+                it.intersects(this) || it.endBlock + 1 == this.startBlock || this.endBlock + 1 == it.startBlock
+            }
+        }
+
+        fun join(another: Chunk): Chunk {
+            val startBlock = this.startBlock.coerceAtMost(another.startBlock)
+            val endBlock = this.endBlock.coerceAtLeast(another.endBlock)
+            val length = endBlock - startBlock
+            return Chunk(startBlock, length)
+        }
+
+        fun mergeContinuing(existing: List<Chunk>): List<Chunk> {
+            return findContinuity(existing)?.let { neighbor ->
+                existing.filterNot { it == neighbor } + listOf(neighbor.join(this))
+            } ?: (listOf(this) + existing)
+        }
     }
 
     interface ChunkIterator {

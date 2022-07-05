@@ -16,7 +16,7 @@ import reactor.core.publisher.Flux
 import reactor.core.publisher.Mono
 
 @Service
-@Profile("!run-copy & !run-compact & bitcoin")
+@Profile("!run-copy & !run-compact & !run-report & bitcoin")
 class BlockSourceBitcoin(
         @Autowired private val client: ReactorBlockchainGrpc.ReactorBlockchainStub,
         @Autowired private val objectMapper: ObjectMapper,

@@ -258,7 +258,8 @@ class RunConfigInitializer {
                 " archive - the main operation, copies data from a blockchain to archive\n" +
                 " stream  - append fresh blocks one by one to the archive\n" +
                 " compact - merge individual block files into larger range files\n" +
-                " copy    - copy/recover from existing archive by copying into a new one"
+                " copy    - copy/recover from existing archive by copying into a new one\n" +
+                " report  - show summary on what is in archive for the specified range"
 
         formatter.printHelp("dshackle-archive [options] <command>", header, options, footer)
     }

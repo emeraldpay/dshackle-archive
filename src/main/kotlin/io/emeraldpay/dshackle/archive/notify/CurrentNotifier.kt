@@ -71,7 +71,7 @@ class CurrentNotifier(
     }
 
     fun createEvent(type: FileType, chunk: BlocksRange.Chunk, location: String): Notifier.ArchiveCreated {
-        return createEvent(type, chunk.startBlock, chunk.getEndBlock(), location)
+        return createEvent(type, chunk.startBlock, chunk.endBlock, location)
     }
 
     fun createEvent(type: FileType, heightStart: Long, heightEnd: Long, location: String): Notifier.ArchiveCreated {
