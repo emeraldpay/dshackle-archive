@@ -34,8 +34,12 @@ class ChunkedArchive(
                     }
                     .doFinally {
                         val totalTime = Duration.ofMillis(timer.time)
-                        val throughput = (chunk.length.toDouble() / totalTime.toSeconds().toDouble() * 60.0 * 10.0).roundToInt().toDouble() / 10.0
-                        log.info("Archived in ${totalTime.toMinutes()}m:${StringUtils.leftPad(totalTime.toSecondsPart().toString(), 2, "0")}s at $throughput blocks/min")
+                        if (totalTime.toSeconds() > 0) {
+                            val throughput = (chunk.length.toDouble() / totalTime.toSeconds().toDouble() * 60.0 * 10.0).roundToInt().toDouble() / 10.0
+                            log.info("Archived in ${totalTime.toMinutes()}m:${StringUtils.leftPad(totalTime.toSecondsPart().toString(), 2, "0")}s at $throughput blocks/min")
+                        } else {
+                            log.info("Archived in ${totalTime.toMinutes()}m:${StringUtils.leftPad(totalTime.toSecondsPart().toString(), 2, "0")}s:${StringUtils.leftPad(totalTime.toMillisPart().toString(), 2, "0")}ms for ${chunk.length} blocks")
+                        }
                     }
         }, 1).then()
     }
