@@ -18,7 +18,7 @@ open class BlocksRange(
         private val log = LoggerFactory.getLogger(BlocksRange::class.java)
     }
 
-    val length: Long = range.count
+    var length: Long = range.count
     var startBlock: Long = range.start
     val endBlock: Long = range.start + length - 1
     val isUsingRanges: Boolean = !range.individual

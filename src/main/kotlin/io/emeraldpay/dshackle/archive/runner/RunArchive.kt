@@ -30,7 +30,6 @@ class RunArchive(
     private val rangeAccess = RangeAccess(runConfig)
 
     override fun run(): Mono<Void> {
-        log.info("Running archive ${blocksRange.startBlock}..${blocksRange.startBlock + blocksRange.length - 1} using ${runConfig.range.chunk} blocks per file")
         log.info("Include data: ")
         log.info("  Standard  : true")
         log.info("  Tracing   : ${runConfig.options.trace}")
@@ -39,6 +38,9 @@ class RunArchive(
         }
         log.info("  StateDiff : ${runConfig.options.stateDiff}")
         return checkStartBlock()
+                .doOnNext { blocksRange ->
+                    log.info("Running archive ${blocksRange.startBlock}..${blocksRange.endBlock} using ${runConfig.range.chunk} blocks per file")
+                }
                 .flatMap(::runPrepared)
     }
 
@@ -71,6 +73,7 @@ class RunArchive(
                     .reduce(Long::coerceAtLeast)
                     .map { currentBlock ->
                         log.debug("Continue from $currentBlock")
+                        blocksRange.length = blocksRange.startBlock + blocksRange.length - currentBlock
                         blocksRange.startBlock = currentBlock
                         blocksRange
                     }
