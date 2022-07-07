@@ -87,7 +87,7 @@ data class RunConfig(
             val individual: Boolean,
             val tail: Long = 100,
             val continueFromLast: Boolean = false,
-            val positioned: Boolean = true,
+            val aligned: Boolean = true,
     ) {
         companion object {
             private const val DEFAULT_CHUNK: Long = 1_000

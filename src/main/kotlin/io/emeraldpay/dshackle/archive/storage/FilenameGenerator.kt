@@ -1,6 +1,6 @@
 package io.emeraldpay.dshackle.archive.storage
 
-import io.emeraldpay.dshackle.archive.BlocksRange
+import io.emeraldpay.dshackle.archive.model.Chunk
 import org.apache.commons.lang3.StringUtils
 import org.slf4j.LoggerFactory
 
@@ -33,17 +33,17 @@ open class FilenameGenerator(
         return singleRegex.matches(filename.substringAfterLast("/"))
     }
 
-    open fun parseRange(filename: String): BlocksRange.Chunk? {
+    open fun parseRange(filename: String): Chunk? {
         val range = rangeRegex.matchEntire(filename.substringAfterLast("/"))
         if (range != null) {
             val start = range.groupValues[1].toLong()
             val end = range.groupValues[2].toLong()
-            return BlocksRange.Chunk(start, end - start + 1)
+            return Chunk(start, end - start + 1)
         }
         val single = singleRegex.matchEntire(filename.substringAfterLast("/"))
         if (single != null) {
             val height = single.groupValues[1].toLong()
-            return BlocksRange.Chunk(height, 1)
+            return Chunk(height, 1)
         }
         return null
     }
@@ -60,7 +60,7 @@ open class FilenameGenerator(
         return null
     }
 
-    fun getRangeFilename(type: String, chunk: BlocksRange.Chunk): String {
+    fun getRangeFilename(type: String, chunk: Chunk): String {
         val level0 = chunk.startBlock / dirBlockSizeL1 * dirBlockSizeL1
         return listOf(
                 parentDir,

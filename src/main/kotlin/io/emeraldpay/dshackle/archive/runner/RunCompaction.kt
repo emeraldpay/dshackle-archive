@@ -2,6 +2,7 @@ package io.emeraldpay.dshackle.archive.runner
 
 import io.emeraldpay.dshackle.archive.BlocksRange
 import io.emeraldpay.dshackle.archive.config.RunConfig
+import io.emeraldpay.dshackle.archive.model.Chunk
 import io.emeraldpay.dshackle.archive.storage.CompleteWriter
 import io.emeraldpay.dshackle.archive.storage.FilenameGenerator
 import io.emeraldpay.dshackle.archive.storage.SourceStorage
@@ -47,7 +48,7 @@ class RunCompaction(
     /**
      * Group source files into flux of files per chunk
      */
-    fun groupByChunk(files: Flux<Path>): Flux<GroupedFlux<BlocksRange.Chunk, Path>> {
+    fun groupByChunk(files: Flux<Path>): Flux<GroupedFlux<Chunk, Path>> {
         val chunks = blocksRange.getChunks()
         val wholeChunk = blocksRange.wholeChunk()
         return files.filter {

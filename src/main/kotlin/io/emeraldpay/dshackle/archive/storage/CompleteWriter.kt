@@ -1,9 +1,9 @@
 package io.emeraldpay.dshackle.archive.storage
 
-import io.emeraldpay.dshackle.archive.BlocksRange
 import io.emeraldpay.dshackle.archive.FileType
 import io.emeraldpay.dshackle.archive.avro.Block
 import io.emeraldpay.dshackle.archive.avro.Transaction
+import io.emeraldpay.dshackle.archive.model.Chunk
 import io.emeraldpay.dshackle.archive.notify.CurrentNotifier
 import io.emeraldpay.dshackle.archive.runner.ProgressIndicator
 import org.apache.commons.lang3.StringUtils
@@ -34,7 +34,7 @@ class CompleteWriter(
     @Value("\${deleteCopiedFiles}")
     lateinit var deleteCopiedFiles : String
 
-    fun consume(dataSource: Flux<BlockDetails>, chunk: BlocksRange.Chunk): Mono<Void> {
+    fun consume(dataSource: Flux<BlockDetails>, chunk: Chunk): Mono<Void> {
         //NOTE rewrites the files
         val blockFile = configuredFilenameGenerator.fileFor(FileType.BLOCKS, chunk)
         val blockWrt = blocksWriter.open(blockFile)

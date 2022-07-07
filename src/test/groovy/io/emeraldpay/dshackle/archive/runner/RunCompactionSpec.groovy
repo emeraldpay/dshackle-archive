@@ -2,6 +2,7 @@ package io.emeraldpay.dshackle.archive.runner
 
 import io.emeraldpay.dshackle.archive.BlocksRange
 import io.emeraldpay.dshackle.archive.config.RunConfig
+import io.emeraldpay.dshackle.archive.model.Chunk
 import io.emeraldpay.dshackle.archive.storage.CompleteWriter
 import io.emeraldpay.dshackle.archive.storage.FilenameGenerator
 import io.emeraldpay.dshackle.archive.storage.SourceStorage
@@ -21,11 +22,11 @@ class RunCompactionSpec extends Specification {
         )
         def filenameGenerator = Mock(FilenameGenerator) {
             _ * isSingle(_ as String) >> true
-            _ * parseRange("file_1") >> new BlocksRange.Chunk(1, 1)
-            _ * parseRange("file_2") >> new BlocksRange.Chunk(2, 1)
-            _ * parseRange("file_3") >> new BlocksRange.Chunk(3, 1)
-            _ * parseRange("file_4") >> new BlocksRange.Chunk(4, 1)
-            _ * parseRange("file_5") >> new BlocksRange.Chunk(5, 1)
+            _ * parseRange("file_1") >> new Chunk(1, 1)
+            _ * parseRange("file_2") >> new Chunk(2, 1)
+            _ * parseRange("file_3") >> new Chunk(3, 1)
+            _ * parseRange("file_4") >> new Chunk(4, 1)
+            _ * parseRange("file_5") >> new Chunk(5, 1)
         }
         def runCompaction = new RunCompaction(
                 Stub(CompleteWriter), RunConfig.default(),

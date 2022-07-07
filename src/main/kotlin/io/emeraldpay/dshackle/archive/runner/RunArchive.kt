@@ -2,6 +2,7 @@ package io.emeraldpay.dshackle.archive.runner
 
 import io.emeraldpay.dshackle.archive.BlocksRange
 import io.emeraldpay.dshackle.archive.config.RunConfig
+import io.emeraldpay.dshackle.archive.model.Chunk
 import io.emeraldpay.dshackle.archive.storage.CompleteWriter
 import io.emeraldpay.dshackle.archive.storage.FilenameGenerator
 import io.emeraldpay.dshackle.archive.storage.RangeAccess
@@ -66,10 +67,10 @@ class RunArchive(
             val heights = rangeAccess.findHeightsToCheck(blocksRange)
             val wholeChunk = blocksRange.wholeChunk()
             targetStorage.current.listArchive(heights)
-                    .flatMap { Mono.justOrEmpty(filenameGenerator.parseRange(it)).cast(BlocksRange.Chunk::class.java) }
+                    .flatMap { Mono.justOrEmpty(filenameGenerator.parseRange(it)).cast(Chunk::class.java) }
                     .filter(wholeChunk::intersects)
                     .switchIfEmpty(Mono.fromCallable { log.debug("First run in the selected range") }.then(Mono.empty()))
-                    .map(BlocksRange.Chunk::endBlock)
+                    .map(Chunk::endBlock)
                     .reduce(Long::coerceAtLeast)
                     .map { currentBlock ->
                         log.debug("Continue from $currentBlock")

@@ -1,9 +1,9 @@
 package io.emeraldpay.dshackle.archive.notify
 
 import com.fasterxml.jackson.databind.ObjectMapper
-import io.emeraldpay.dshackle.archive.BlocksRange
 import io.emeraldpay.dshackle.archive.FileType
 import io.emeraldpay.dshackle.archive.config.RunConfig
+import io.emeraldpay.dshackle.archive.model.Chunk
 import java.nio.file.Path
 import java.time.Instant
 import java.time.ZoneId
@@ -70,7 +70,7 @@ class CurrentNotifier(
         return delegate.onCreated(archive)
     }
 
-    fun createEvent(type: FileType, chunk: BlocksRange.Chunk, location: String): Notifier.ArchiveCreated {
+    fun createEvent(type: FileType, chunk: Chunk, location: String): Notifier.ArchiveCreated {
         return createEvent(type, chunk.startBlock, chunk.endBlock, location)
     }
 

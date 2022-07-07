@@ -2,10 +2,9 @@ package io.emeraldpay.dshackle.archive.storage
 
 import com.linkedin.avro.fastserde.FastSpecificDatumWriter
 import io.emeraldpay.dshackle.archive.avro.Transaction
-import io.emeraldpay.dshackle.archive.BlocksRange
 import io.emeraldpay.dshackle.archive.FileType
 import io.emeraldpay.dshackle.archive.config.RunConfig
-import java.nio.file.Path
+import io.emeraldpay.dshackle.archive.model.Chunk
 import java.time.Instant
 import java.util.concurrent.locks.ReentrantLock
 import kotlin.concurrent.withLock
@@ -29,7 +28,7 @@ class TransactionsWriter(
 
     private val currentWriters = CurrentStorage(100)
 
-    fun open(chunk: BlocksRange.Chunk): TxFileAccess {
+    fun open(chunk: Chunk): TxFileAccess {
         val file = configuredFilenameGenerator.fileFor(FileType.TRANSACTIONS, chunk)
         return open(file)
     }

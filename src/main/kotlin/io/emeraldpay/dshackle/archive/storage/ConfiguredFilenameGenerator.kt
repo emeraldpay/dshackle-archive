@@ -3,15 +3,11 @@ package io.emeraldpay.dshackle.archive.storage
 import io.emeraldpay.dshackle.archive.BlocksRange
 import io.emeraldpay.dshackle.archive.FileType
 import io.emeraldpay.dshackle.archive.config.RunConfig
+import io.emeraldpay.dshackle.archive.model.Chunk
 import org.slf4j.LoggerFactory
 import org.springframework.beans.factory.annotation.Autowired
 import org.springframework.stereotype.Service
-import java.nio.file.Files
-import java.nio.file.Path
 import java.util.*
-import java.util.concurrent.ConcurrentHashMap
-import java.util.concurrent.locks.ReentrantLock
-import kotlin.concurrent.withLock
 
 @Service
 class ConfiguredFilenameGenerator(
@@ -54,7 +50,7 @@ class ConfiguredFilenameGenerator(
         return fileFor(type, chunk)
     }
 
-    fun fileFor(type: FileType, chunk: BlocksRange.Chunk): String {
+    fun fileFor(type: FileType, chunk: Chunk): String {
         return getRangeFilename(fileTypes[type]!!, chunk)
     }
 

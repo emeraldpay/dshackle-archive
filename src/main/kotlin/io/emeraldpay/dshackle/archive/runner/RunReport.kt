@@ -3,10 +3,10 @@ package io.emeraldpay.dshackle.archive.runner
 import io.emeraldpay.dshackle.archive.BlocksRange
 import io.emeraldpay.dshackle.archive.FileType
 import io.emeraldpay.dshackle.archive.config.RunConfig
+import io.emeraldpay.dshackle.archive.model.Chunk
 import io.emeraldpay.dshackle.archive.storage.FilenameGenerator
 import io.emeraldpay.dshackle.archive.storage.RangeAccess
 import io.emeraldpay.dshackle.archive.storage.SourceStorage
-import java.util.Locale
 import java.util.function.Function
 import org.slf4j.LoggerFactory
 import org.springframework.beans.factory.annotation.Autowired
@@ -43,7 +43,7 @@ class RunReport(
                 .then()
     }
 
-    fun reportForHeights(wholeChunk: BlocksRange.Chunk): Function<Mono<List<Long>>,Mono<SummaryReport>> {
+    fun reportForHeights(wholeChunk: Chunk): Function<Mono<List<Long>>,Mono<SummaryReport>> {
         return Function { src ->
             src.flatMap { heights ->
                 val allFiles = sourceStorage.current.listArchive(heights)
@@ -78,7 +78,7 @@ class RunReport(
         return Mono.just(Tuples.of(blocksRange.startBlock, blocksRange.endBlock))
     }
 
-    fun printReport(wholeChunk: BlocksRange.Chunk): Function<Mono<SummaryReport>, Mono<Void>> {
+    fun printReport(wholeChunk: Chunk): Function<Mono<SummaryReport>, Mono<Void>> {
         val printBlocks = { report: Report ->
             val uniqBlocks = report.chunks.sumOf { it.length }
             log.info("Files count: ${report.files}")
@@ -99,13 +99,13 @@ class RunReport(
 
     data class FileChunk(
             val type: FileType,
-            val chunk: BlocksRange.Chunk,
+            val chunk: Chunk,
     )
 
     data class Report(
             val files: Int,
             val blocks: Long,
-            val chunks: List<BlocksRange.Chunk>,
+            val chunks: List<Chunk>,
     ) {
 
         companion object {
@@ -114,7 +114,7 @@ class RunReport(
             }
         }
 
-        fun withChunk(chunk: BlocksRange.Chunk): Report {
+        fun withChunk(chunk: Chunk): Report {
             return Report(
                     this.files + 1,
                     this.blocks + chunk.length,

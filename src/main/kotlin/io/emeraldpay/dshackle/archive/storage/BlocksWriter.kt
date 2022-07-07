@@ -2,11 +2,9 @@ package io.emeraldpay.dshackle.archive.storage
 
 import io.emeraldpay.dshackle.archive.config.RunConfig
 import io.emeraldpay.dshackle.archive.avro.Block
-import io.emeraldpay.dshackle.archive.BlocksRange
 import io.emeraldpay.dshackle.archive.FileType
-import java.nio.file.Path
+import io.emeraldpay.dshackle.archive.model.Chunk
 import java.time.Instant
-import java.util.concurrent.locks.Lock
 import java.util.concurrent.locks.ReentrantLock
 import kotlin.concurrent.withLock
 import org.apache.avro.AvroRuntimeException
@@ -30,7 +28,7 @@ class BlocksWriter(
 
     private val currentWriters = CurrentStorage(100)
 
-    fun open(chunk: BlocksRange.Chunk): BlocksFileAccess {
+    fun open(chunk: Chunk): BlocksFileAccess {
         val file = configuredFilenameGenerator.fileFor(FileType.BLOCKS, chunk)
         return open(file)
     }
