@@ -113,6 +113,7 @@ class RunArchive(
                         blocksRange.startBlock = currentBlock
                         blocksRange
                     }
+                    .defaultIfEmpty(blocksRange)
         } else {
             Mono.just(blocksRange)
         }
