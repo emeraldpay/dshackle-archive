@@ -17,7 +17,6 @@ class RangeAccessSpec extends Specification {
         def heights = rangeAccess.findHeightsToCheck(new BlocksRange(config.range))
 
         then:
-        // it's the current implementation, but it's not necessary to generate heights in the middle of chunks
-        heights.toSorted() == [1000L, 1050, 1100, 1150, 1200, 1250, 1300]
+        heights.toSorted() == [1000L, 1100, 1200, 1300]
     }
 }

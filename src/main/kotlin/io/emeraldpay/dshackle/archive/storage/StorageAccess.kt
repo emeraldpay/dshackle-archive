@@ -6,7 +6,7 @@ import reactor.core.publisher.Mono
 
 interface StorageAccess {
 
-    fun listArchive(height: List<Long>? = null): Flux<String>
+    fun listArchive(height: Long): Flux<String>
     fun deleteArchives(files: List<String>): Mono<Void>
 
     /**

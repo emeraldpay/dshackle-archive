@@ -49,6 +49,8 @@ class RunArchiveSpec extends Specification {
         runArchive.checkStartBlock().block(Duration.ofSeconds(1))
         then:
         1 * targetStorage.current >> storageAccess
-        1 * storageAccess.listArchive(_) >> Flux.fromIterable(["range"])
+        3 * storageAccess.listArchive(_) >>> [
+                Flux.fromIterable(["range"]), Flux.empty(), Flux.empty()
+        ]
     }
 }

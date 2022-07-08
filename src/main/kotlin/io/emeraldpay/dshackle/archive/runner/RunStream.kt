@@ -50,7 +50,10 @@ class RunStream(
     }
 
     fun processHeight(height: Long, continueAfter: Long): Mono<Void> {
-        return targetStorage.current.listArchive(listOf(height, continueAfter))
+        return Flux.concat(
+                targetStorage.current.listArchive(height),
+                targetStorage.current.listArchive(continueAfter)
+        )
                 .flatMap {
                     val range = filenameGenerator.parseRange(it.substringAfterLast("/"))
                             ?: return@flatMap Mono.empty<Long>()

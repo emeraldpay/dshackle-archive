@@ -17,6 +17,20 @@ enum class FileType {
         }
     }
 
+    fun asTypeMultiple(): String {
+        return when (this) {
+            TRANSACTIONS -> "txes"
+            BLOCKS -> "blocks"
+        }
+    }
+
+    fun asTypeSingle(): String {
+        return when (this) {
+            TRANSACTIONS -> "tx"
+            BLOCKS -> "block"
+        }
+    }
+
     @JsonValue
     open fun toLowerCase(): String {
         return toString().lowercase(Locale.getDefault())

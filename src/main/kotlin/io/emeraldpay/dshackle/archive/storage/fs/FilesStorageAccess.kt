@@ -66,16 +66,10 @@ class FilesStorageAccess(
         return fullPath
     }
 
-    override fun listArchive(height: List<Long>?): Flux<String> {
-        val dirs = if (height == null || height.isEmpty()) {
-            listOf(filenameGenerator.parentDir)
-        } else {
-            height.map(filenameGenerator::getLevel0)
-                    .toSet()
-                    .map {
-                        listOf(filenameGenerator.parentDir, it).joinToString("/")
-                    }
-        }
+    override fun listArchive(height: Long): Flux<String> {
+        val dirs = listOf(
+                "${filenameGenerator.parentDir}/${filenameGenerator.getLevel0(height)}"
+        )
         val parent = Path.of(filenameGenerator.parentDir)
 
         return Flux.fromIterable(dirs)

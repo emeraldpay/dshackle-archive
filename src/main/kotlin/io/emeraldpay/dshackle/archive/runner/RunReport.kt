@@ -12,6 +12,7 @@ import org.slf4j.LoggerFactory
 import org.springframework.beans.factory.annotation.Autowired
 import org.springframework.context.annotation.Profile
 import org.springframework.stereotype.Service
+import reactor.core.publisher.Flux
 import reactor.core.publisher.Mono
 import reactor.util.function.Tuple2
 import reactor.util.function.Tuples
@@ -46,7 +47,8 @@ class RunReport(
     fun reportForHeights(wholeChunk: Chunk): Function<Mono<List<Long>>,Mono<SummaryReport>> {
         return Function { src ->
             src.flatMap { heights ->
-                val allFiles = sourceStorage.current.listArchive(heights)
+                val allFiles = Flux.fromIterable(heights)
+                        .flatMap(sourceStorage.current::listArchive)
                         .flatMap {
                             val type = filenameGenerator.extractType(it)
                                     ?.let(FileType.Companion::fromFilenameType)

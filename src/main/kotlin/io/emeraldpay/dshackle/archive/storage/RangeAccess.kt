@@ -21,7 +21,7 @@ class RangeAccess(
         heights.add(startBlock)
         var height = startBlock
         while (height < endBlock) {
-            height += runConfig.range.chunk / 2
+            height += runConfig.range.chunk
             heights.add(height)
         }
         return heights.toList()

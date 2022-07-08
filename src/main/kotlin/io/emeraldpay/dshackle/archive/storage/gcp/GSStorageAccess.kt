@@ -5,11 +5,12 @@ import com.google.cloud.storage.Blob
 import com.google.cloud.storage.BlobId
 import com.google.cloud.storage.BlobInfo
 import com.google.cloud.storage.Storage
+import io.emeraldpay.dshackle.archive.FileType
+import io.emeraldpay.dshackle.archive.model.Chunk
 import io.emeraldpay.dshackle.archive.storage.FilenameGenerator
 import io.emeraldpay.dshackle.archive.storage.StorageAccess
 import java.io.OutputStream
 import java.nio.channels.Channels
-import java.nio.channels.WritableByteChannel
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicLong
 import org.reactivestreams.Publisher
@@ -38,27 +39,21 @@ class GSStorageAccess(
     private val blockchainDir = filenameGenerator.parentDir
     private val path = googleStorage.bucketPath + "/" + blockchainDir
 
-    override fun listArchive(height: List<Long>?): Flux<String> {
-        val prefixes = if (height == null) {
-            // that may be a very slow operation because it would list all data in the storage, which may be millions of files
-            listOf(path)
-        } else {
-            height
-                    .flatMap {
-                        // use separate filters for Stream files and Ranges,
-                        // because for Stream we want to narrow the scope to 1000 files at the level 1
-                        // otherwise a filled storage gives up to two million files to process on level 0
-                        listOf(
-                                filenameGenerator.getLevel0(it) + "/" + filenameGenerator.getLevel1(it) + "/",
-                                filenameGenerator.getLevel0(it) + "/range-"
-                        )
-                    }
-                    .toSet()
-                    .map { "$path$it" }
-        }
-        return Flux.fromIterable(prefixes)
+    override fun listArchive(height: Long): Flux<String> {
+        // use separate filters for Stream files and Ranges,
+        // because for Stream we want to narrow the scope to 1000 files at the level 1
+        // otherwise a filled storage gives up to two million files to process on level 0
+        val query =listOf(
+                ListQuery(path + filenameGenerator.getLevel0(height) + "/" + filenameGenerator.getLevel1(height) + "/",
+                        googleStorage.bucketPath + "/" + filenameGenerator.getIndividualFilename(FileType.BLOCKS.asTypeSingle(), height),
+                ),
+                ListQuery(path + filenameGenerator.getLevel0(height) + "/",
+                        googleStorage.bucketPath + "/" + filenameGenerator.getRangeFilename(FileType.BLOCKS.asTypeSingle(), Chunk(height, 0)),
+                ),
+        )
+        return Flux.fromIterable(query)
                 .flatMap { prefix ->
-                    Flux.from(BlobsPublisher(googleStorage.storage, googleStorage.bucket, prefix))
+                    Flux.from(BlobsPublisher(googleStorage.storage, googleStorage.bucket, prefix.prefix, prefix.rangeStart))
                 }
                 .map {
                     it.blobId.name.substring(this.path.length)
@@ -93,11 +88,17 @@ class GSStorageAccess(
         return Channels.newOutputStream(channel)
     }
 
+    data class ListQuery(
+            val prefix: String,
+            val rangeStart: String,
+    )
+
 
     class BlobsPublisher(
             private val storage: Storage,
             private val bucket: String,
             private val path: String,
+            private val rangeStart: String?,
     ) : Publisher<Blob> {
 
         private var currentPage: Page<Blob>? = null
@@ -120,7 +121,17 @@ class GSStorageAccess(
 
         fun scan(cancelled: AtomicBoolean, limit: AtomicLong, s: Subscriber<in Blob>) {
             if (currentPage == null) {
-                currentPage = storage.list(bucket, Storage.BlobListOption.prefix(path))
+                val opts: List<Storage.BlobListOption> = listOf(
+                        Storage.BlobListOption.prefix(path),
+                        Storage.BlobListOption.pageSize(100)
+                ).let {
+                    if (rangeStart != null) {
+                        it + listOf(Storage.BlobListOption.startOffset(rangeStart))
+                    } else {
+                        it
+                    }
+                }
+                currentPage = storage.list(bucket, *opts.toTypedArray())
             }
 
             while (!cancelled.get() && limit.get() > 0) {
