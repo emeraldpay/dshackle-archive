@@ -20,7 +20,6 @@ import reactor.util.function.Tuples
 @Service
 @Profile("run-report")
 class RunReport(
-        @Autowired private val runConfig: RunConfig,
         @Autowired private val blocksRange: BlocksRange,
         @Autowired private val filenameGenerator: FilenameGenerator,
         @Autowired private val sourceStorage: SourceStorage,
@@ -30,25 +29,25 @@ class RunReport(
         private val log = LoggerFactory.getLogger(RunReport::class.java)
     }
 
-    private val rangeAccess = RangeAccess(runConfig)
-
     override fun run(): Mono<Void> {
         val wholeChunk = blocksRange.wholeChunk()
         return getRange()
                 .doOnSubscribe {
                     log.info("Checking archive files. It may take several minutes.")
                 }
-                .map { rangeAccess.findHeightsToCheck(it.t1, it.t2) }
                 .transform(reportForHeights(wholeChunk))
                 .transform(printReport(wholeChunk))
                 .then()
     }
 
-    fun reportForHeights(wholeChunk: Chunk): Function<Mono<List<Long>>,Mono<SummaryReport>> {
+    fun reportForHeights(wholeChunk: Chunk): Function<Mono<Tuple2<Long, Long>>,Mono<SummaryReport>> {
         return Function { src ->
             src.flatMap { heights ->
-                val allFiles = Flux.fromIterable(heights)
-                        .flatMap(sourceStorage.current::listArchive)
+                val allFiles = sourceStorage.current.listArchive(heights.t1)
+                        .takeWhile {
+                            val range = filenameGenerator.parseRange(it)
+                            range == null || wholeChunk.intersects(range)
+                        }
                         .flatMap {
                             val type = filenameGenerator.extractType(it)
                                     ?.let(FileType.Companion::fromFilenameType)
@@ -60,6 +59,7 @@ class RunReport(
                             }
                         }
                         .share()
+                        .cache()
                 val blocks = allFiles
                           .filter { it.type == FileType.BLOCKS }
                           .map { it.chunk }

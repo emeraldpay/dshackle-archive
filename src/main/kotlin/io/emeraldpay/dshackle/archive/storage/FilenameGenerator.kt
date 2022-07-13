@@ -7,8 +7,8 @@ import org.slf4j.LoggerFactory
 open class FilenameGenerator(
         val versionId: String,
         val parentDir: String,
-        private val dirBlockSizeL1: Long = 1_000_000,
-        private val dirBlockSizeL2: Long = 1_000,
+        val dirBlockSizeL1: Long = 1_000_000,
+        val dirBlockSizeL2: Long = 1_000,
 ) {
 
     companion object {
