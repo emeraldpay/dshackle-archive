@@ -149,7 +149,7 @@ class GSStorageAccess(
                         cancelled.set(true)
                     } else {
                         // makes a request for a next page
-                        currentPage!!.nextPage
+                        currentPage = currentPage!!.nextPage
                         index = 0
                     }
                 }
