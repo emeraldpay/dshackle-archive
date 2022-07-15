@@ -50,6 +50,10 @@ class RunArchive(
                 .flatMap(::runPrepared)
     }
 
+    private val data = { chunk: Chunk ->
+        blockSource.getData(chunk.startBlock, chunk.length)
+    }
+
     fun runPrepared(blocksRange: BlocksRange): Mono<Void> {
         return if (blocksRange.length <= 0) {
             log.warn("Requested ${blocksRange.length} blocks to archive")
@@ -59,7 +63,7 @@ class RunArchive(
             Mono.empty()
         } else {
             if (blocksRange.isUsingRanges) {
-                archiveRanges(ChunkedArchive(blocksRange, completeWriter))
+                archiveRanges(blocksRange)
             } else {
                 archiveIndividual(blocksRange)
             }
@@ -119,10 +123,9 @@ class RunArchive(
         }
     }
 
-    fun archiveRanges(chunkedArchive: ChunkedArchive): Mono<Void> {
-        return chunkedArchive.archiveRanges { chunk ->
-            blockSource.getData(chunk.startBlock, chunk.length)
-        }
+    fun archiveRanges(blocksRange: BlocksRange): Mono<Void> {
+        return ChunkedArchive(data, Flux.fromIterable(blocksRange.getChunks()), completeWriter)
+                .archiveRanges()
     }
 
     fun archiveIndividual(blocksRange: BlocksRange): Mono<Void> {

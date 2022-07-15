@@ -6,6 +6,7 @@ import io.emeraldpay.dshackle.archive.config.RunConfigInitializer
 import io.emeraldpay.dshackle.archive.runner.RunArchive
 import io.emeraldpay.dshackle.archive.runner.RunCompaction
 import io.emeraldpay.dshackle.archive.runner.RunCopy
+import io.emeraldpay.dshackle.archive.runner.RunFix
 import io.emeraldpay.dshackle.archive.runner.RunReport
 import io.emeraldpay.dshackle.archive.runner.RunStream
 import io.emeraldpay.grpc.BlockchainType
@@ -54,6 +55,7 @@ fun main(args: Array<String>) {
         RunConfig.Command.STREAM -> ctx.getBean(RunStream::class.java).run()
         RunConfig.Command.COMPACT -> ctx.getBean(RunCompaction::class.java).run()
         RunConfig.Command.REPORT -> ctx.getBean(RunReport::class.java).run()
+        RunConfig.Command.FIX -> ctx.getBean(RunFix::class.java).run()
     }
     runner.block()
     // make sure it exits after the completion even if there are still running threads

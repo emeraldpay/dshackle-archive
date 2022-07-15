@@ -31,7 +31,7 @@ open class Config {
     }
 
     @Bean
-    @Profile("run-archive", "run-stream")
+    @Profile("run-archive", "run-stream", "run-fix")
     fun dshackleClient(runConfig: RunConfig): ReactorBlockchainGrpc.ReactorBlockchainStub {
         val connectionConfig = runConfig.connection!!
         log.info("Connect to ${connectionConfig.host}:${runConfig.connection.port}")

@@ -8,12 +8,14 @@ import java.time.Duration
 import kotlin.math.roundToInt
 import org.apache.commons.lang3.StringUtils
 import org.apache.commons.lang3.time.StopWatch
+import org.reactivestreams.Publisher
 import org.slf4j.LoggerFactory
 import reactor.core.publisher.Flux
 import reactor.core.publisher.Mono
 
 class ChunkedArchive(
-        val blocksRange: BlocksRange,
+        val blockSource: (chunk: Chunk) -> Flux<BlockDetails>,
+        val chunks: Publisher<Chunk>,
         val completeWriter: CompleteWriter
 ) {
 
@@ -21,8 +23,8 @@ class ChunkedArchive(
         private val log = LoggerFactory.getLogger(ChunkedArchive::class.java)
     }
 
-    fun archiveRanges(blockSource: (chunk: Chunk) -> Flux<BlockDetails>): Mono<Void> {
-        return Flux.fromIterable(blocksRange.getChunks()).flatMap({ chunk ->
+    fun archiveRanges(): Mono<Void> {
+        return Flux.from(chunks).flatMap({ chunk ->
             val timer = StopWatch.create()
             val data = blockSource(chunk)
             completeWriter.consume(data, chunk)

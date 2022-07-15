@@ -132,7 +132,13 @@ class RunConfigInitializer {
             RunConfig.Command.valueOf(it)
         }
 
-        val connection: RunConfig.Connection? = if (command == RunConfig.Command.ARCHIVE || command == RunConfig.Command.STREAM) {
+        val accessBlockchain = listOf(
+                RunConfig.Command.ARCHIVE,
+                RunConfig.Command.STREAM,
+                RunConfig.Command.FIX
+        ).contains(command)
+
+        val connection: RunConfig.Connection? = if (accessBlockchain) {
             cmd.getOptionValue("connection").let {
                 if (it.contains(":")) {
                     it.split(":").let { parts ->
@@ -259,7 +265,8 @@ class RunConfigInitializer {
                 " stream  - append fresh blocks one by one to the archive\n" +
                 " compact - merge individual block files into larger range files\n" +
                 " copy    - copy/recover from existing archive by copying into a new one\n" +
-                " report  - show summary on what is in archive for the specified range"
+                " report  - show summary on what is in archive for the specified range\n" +
+                " fix     - fix archive by making new archives for missing chunks"
 
         formatter.printHelp("dshackle-archive [options] <command>", header, options, footer)
     }

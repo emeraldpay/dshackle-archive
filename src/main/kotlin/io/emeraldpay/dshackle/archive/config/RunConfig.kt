@@ -55,6 +55,7 @@ data class RunConfig(
         STREAM,
         COMPACT,
         REPORT,
+        FIX,
         ;
 
         @JsonValue

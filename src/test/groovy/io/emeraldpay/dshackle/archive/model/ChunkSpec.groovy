@@ -55,6 +55,119 @@ class ChunkSpec extends Specification {
         21_000 | 10
     }
 
+    def "Includes"() {
+        setup:
+        def chunk = new Chunk(20_000, 1_000)
+        expect:
+        def o = new Chunk(start, len)
+        chunk.includes(o)
+        where:
+        start  | len
+        20_000 | 1_000
+        20_000 | 999
+        20_000 | 100
+        20_500 | 10
+        20_999 | 1
+    }
+
+    def "Not includes"() {
+        setup:
+        def chunk = new Chunk(20_000, 1_000)
+        expect:
+        def o = new Chunk(start, len)
+        !chunk.includes(o)
+        where:
+        start  | len
+        20_000 | 1_001
+        19_990 | 1_000
+        10_000 | 1_000
+        10_000 | 10_000
+        10_000 | 15_000
+    }
+
+    def "Cut from the left"() {
+        setup:
+        def chunk = new Chunk(20_000, 1_000)
+        expect:
+        def o = new Chunk(start, len)
+        def exp = new Chunk(expStart, expLen)
+        chunk.cut(o) == exp
+        where:
+        start  | len        | expStart  | expLen
+        19_000 | 1_000      | 20_000    | 1_000
+        19_000 | 1_001      | 20_001    | 999
+        19_000 | 1_100      | 20_100    | 900
+        19_000 | 1_999      | 20_999    | 1
+        19_000 | 900        | 20_000    | 1_000
+    }
+
+    def "Cut from the right"() {
+        setup:
+        def chunk = new Chunk(20_000, 1_000)
+        expect:
+        def o = new Chunk(start, len)
+        def exp = new Chunk(expStart, expLen)
+        chunk.cut(o) == exp
+        where:
+        start  | len        | expStart  | expLen
+        21_000 | 1_000      | 20_000    | 1_000
+        20_999 | 1          | 20_000    | 999
+        20_900 | 100        | 20_000    | 900
+        20_001 | 1_000      | 20_000    | 1
+        21_001 | 1          | 20_000    | 1_000
+    }
+
+    def "Split in the beginning"() {
+        setup:
+        def chunk = new Chunk(20_000, 1_000)
+        def middle = new Chunk(20_001, 99)
+        when:
+        def sides = chunk.splitBy(middle)
+        then:
+        with(sides.first) {
+            it.startBlock == 20_000
+            it.endBlock == 20_000
+        }
+        with(sides.second) {
+            it.startBlock == 20_100
+            it.endBlock == 20_999
+        }
+    }
+
+    def "Split in the middle"() {
+        setup:
+        def chunk = new Chunk(20_000, 1_000)
+        def middle = new Chunk(20_450, 100)
+        when:
+        def sides = chunk.splitBy(middle)
+        then:
+        with(sides.first) {
+            it.startBlock == 20_000
+            it.endBlock == 20_449
+        }
+        with(sides.second) {
+            it.startBlock == 20_550
+            it.endBlock == 20_999
+        }
+    }
+
+    def "Split in the end"() {
+        setup:
+        def chunk = new Chunk(20_000, 1_000)
+        def middle = new Chunk(20_900, 99)
+        when:
+        def sides = chunk.splitBy(middle)
+        then:
+        with(sides.first) {
+            it.startBlock == 20_000
+            it.endBlock == 20_899
+        }
+        with(sides.second) {
+            it.startBlock == 20_999
+            it.endBlock == 20_999
+        }
+    }
+
     def "Continuity when intersects"() {
         setup:
         def other = [

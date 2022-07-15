@@ -31,9 +31,6 @@ class CompleteWriter(
         private val log = LoggerFactory.getLogger(CompleteWriter::class.java)
     }
 
-    @Value("\${deleteCopiedFiles}")
-    lateinit var deleteCopiedFiles : String
-
     fun consume(dataSource: Flux<BlockDetails>, chunk: Chunk): Mono<Void> {
         //NOTE rewrites the files
         val blockFile = configuredFilenameGenerator.fileFor(FileType.BLOCKS, chunk)
