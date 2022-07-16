@@ -21,6 +21,7 @@ class RunFix(
         @Autowired private val completeWriter: CompleteWriter,
         @Autowired private val blocksRange: BlocksRange,
         @Autowired private val scanningTools: ScanningTools,
+        @Autowired private val rangeTools: RangeTools,
 ): RunCommand {
 
     companion object {
@@ -33,17 +34,20 @@ class RunFix(
     }
 
     override fun run(): Mono<Void> {
-        val range = blocksRange.wholeChunk()
-        val missing: Flux<Chunk> = getMissing(range)
-                .switchIfEmpty {
-                    Mono.fromCallable { log.info("No broken ranges") }
-                            .then(Mono.empty<Chunk>())
-                }
-                .doOnError { t -> log.error("Failed to find missing blocks", t) }
+        return rangeTools.checkStartBlock()
+                .flatMap {
+                    val range = it.wholeChunk()
+                    val missing: Flux<Chunk> = getMissing(range)
+                            .switchIfEmpty {
+                                Mono.fromCallable { log.info("No broken ranges") }
+                                        .then(Mono.empty<Chunk>())
+                            }
+                            .doOnError { t -> log.error("Failed to find missing blocks", t) }
 
-        return archive(missing)
-                .doOnError { t -> log.error("Failed to fix missing blocks", t) }
-                .then()
+                    archive(missing)
+                            .doOnError { t -> log.error("Failed to fix missing blocks", t) }
+                            .then()
+                }
     }
 
     fun archive(chunks: Flux<Chunk>): Mono<Void> {

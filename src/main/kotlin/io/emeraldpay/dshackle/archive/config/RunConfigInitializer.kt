@@ -46,6 +46,10 @@ class RunConfigInitializer {
             it.isRequired = false
             options.addOption(it)
         }
+        Option(null, "back", false, "Apply the blocks range (--range option) back from to the current blockchain height, i.e. process N..M not starting not from zero by from the current height").let {
+            it.isRequired = false
+            options.addOption(it)
+        }
         Option(null, "rangeChunk", true, "Range chunk size (default 1000)").let {
             it.isRequired = false
             options.addOption(it)
@@ -204,6 +208,9 @@ class RunConfigInitializer {
         if (cmd.hasOption("continue")) {
             range = range.copy(continueFromLast = true)
         }
+        if (cmd.hasOption("back")) {
+            range = range.copy(backward = true)
+        }
         if (command == RunConfig.Command.STREAM) {
             range = range.copy(
                     individual = true
@@ -212,6 +219,8 @@ class RunConfigInitializer {
                 range = range.copy(tail = it.toLong())
             }
         }
+
+        range.validate()
 
         var notify = RunConfig.Notify.default()
         if (cmd.hasOption("notify.dir")) {

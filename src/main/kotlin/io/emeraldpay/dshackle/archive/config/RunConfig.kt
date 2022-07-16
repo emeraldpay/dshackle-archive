@@ -88,6 +88,7 @@ data class RunConfig(
             val individual: Boolean,
             val tail: Long = 100,
             val continueFromLast: Boolean = false,
+            val backward: Boolean = false,
             val aligned: Boolean = true,
     ) {
         companion object {
@@ -122,6 +123,16 @@ data class RunConfig(
         fun withContinueFromLast(value: Boolean): Range {
             return copy(continueFromLast = value)
         }
+        fun withBackward(value: Boolean): Range {
+            return copy(backward = value)
+        }
+
+        fun validate() {
+            require(!continueFromLast || !backward) {
+                "Only one of --continue or --back must be set"
+            }
+        }
+
     }
 
     data class Files(
