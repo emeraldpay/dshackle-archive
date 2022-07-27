@@ -89,7 +89,7 @@ abstract class BlockSource(
                     client.nativeCall(call)
                             .subscribeOn(scheduler)
                             .timeout(
-                                    Duration.ofSeconds(60),
+                                    Duration.ofMinutes(10), // some data is very slow to get and may take several minutes TODO global option
                                     Mono.fromCallable { retried = true }.then(Mono.error(TimeoutException("Timeout to load $method($params)")))
                             )
                             .doOnError { t ->
