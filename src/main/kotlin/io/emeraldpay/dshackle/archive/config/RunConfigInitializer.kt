@@ -2,6 +2,7 @@ package io.emeraldpay.dshackle.archive.config
 
 import io.emeraldpay.grpc.Chain
 import java.nio.file.Files
+import java.time.Duration
 import java.util.*
 import java.util.regex.Pattern
 import org.apache.commons.cli.CommandLine
@@ -38,6 +39,11 @@ class RunConfigInitializer {
         }
 
         Option(null, "connection.notls", false, "Disable TLS").let {
+            it.isRequired = false
+            options.addOption(it)
+        }
+
+        Option(null, "connection.timeout", true, "Timeout (in seconds) to get data from blockchain before retrying. Default: 60 seconds").let {
             it.isRequired = false
             options.addOption(it)
         }
@@ -160,6 +166,10 @@ class RunConfigInitializer {
                 if (cmd.hasOption("connection.notls")) {
                     it.copy(useTls = false)
                 } else it
+            }.let {
+                cmd.getOptionValue("connection.timeout")?.let { value ->
+                    it.copy(timeout = Duration.ofSeconds(value.toLong()))
+                } ?: it
             }
         } else null
 

@@ -3,6 +3,7 @@ package io.emeraldpay.dshackle.archive.config
 import com.fasterxml.jackson.annotation.JsonValue
 import io.emeraldpay.dshackle.archive.avro.BlockchainType
 import io.emeraldpay.grpc.Chain
+import java.time.Duration
 import java.util.*
 
 data class RunConfig(
@@ -68,6 +69,7 @@ data class RunConfig(
             val host: String,
             val port: Int,
             val useTls: Boolean = true,
+            val timeout: Duration = Duration.ofSeconds(60)
     ) {
         companion object {
             fun default(): Connection {

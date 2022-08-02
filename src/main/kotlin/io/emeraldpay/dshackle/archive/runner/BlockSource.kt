@@ -34,6 +34,8 @@ abstract class BlockSource(
         const val parallelTx = 4
     }
 
+    private val timeout = runConfig.connection!!.timeout
+
     protected val scheduler = Schedulers.newParallel("dshackle-run", threads)
     protected val chain = Common.ChainRef.forNumber(runConfig.blockchain.id)
     protected val id = AtomicInteger(0)
@@ -89,7 +91,7 @@ abstract class BlockSource(
                     client.nativeCall(call)
                             .subscribeOn(scheduler)
                             .timeout(
-                                    Duration.ofMinutes(10), // some data is very slow to get and may take several minutes TODO global option
+                                    timeout,
                                     Mono.fromCallable { retried = true }.then(Mono.error(TimeoutException("Timeout to load $method($params)")))
                             )
                             .doOnError { t ->

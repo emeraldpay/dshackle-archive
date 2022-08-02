@@ -18,7 +18,7 @@
     </Appenders>
 
     <Loggers>
-        <Logger name="io.emeraldpay.dshackle.archive" level="DEBUG" additivity="false">
+        <Logger name="io.emeraldpay.dshackle.archive" level="${env:DSHACKLE_LOG_LEVEL:-info}" additivity="false">
             <AppenderRef ref="STDOUT"/>
             <AppenderRef ref="STDERR" level="warn"/>
         </Logger>
