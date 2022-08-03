@@ -30,13 +30,13 @@ abstract class BlockSource(
         private val log = LoggerFactory.getLogger(BlockSource::class.java)
 
         private const val threads = 20
-        const val parallelBlock = 2
-        const val parallelTx = 4
     }
 
     private val timeout = runConfig.connection!!.timeout
+    val parallelBlock = runConfig.connection!!.parallel
+    val parallelTx = parallelBlock * 4
 
-    protected val scheduler = Schedulers.newParallel("dshackle-run", threads)
+    protected val scheduler = Schedulers.boundedElastic()
     protected val chain = Common.ChainRef.forNumber(runConfig.blockchain.id)
     protected val id = AtomicInteger(0)
 
@@ -46,7 +46,7 @@ abstract class BlockSource(
     fun getData(start: Long, limit: Long): Flux<BlockDetails> {
         return Flux.range(start.toInt(), limit.toInt())
                 .flatMapSequential({
-                    getDataAtHeight(it.toLong())
+                    getDataAtHeight(it.toLong()).subscribeOn(scheduler)
                 }, parallelBlock)
     }
 

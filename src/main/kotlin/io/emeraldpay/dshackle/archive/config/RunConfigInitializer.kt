@@ -48,6 +48,11 @@ class RunConfigInitializer {
             options.addOption(it)
         }
 
+        Option(null, "parallel", true, "How many blocks to request in parallel. Range: 1..64. Default: 8").let {
+            it.isRequired = false
+            options.addOption(it)
+        }
+
         Option("r", "range", true, "Blocks Range (N...M)").let {
             it.isRequired = false
             options.addOption(it)
@@ -170,7 +175,12 @@ class RunConfigInitializer {
                 cmd.getOptionValue("connection.timeout")?.let { value ->
                     it.copy(timeout = Duration.ofSeconds(value.toLong()))
                 } ?: it
+            }.let {
+                cmd.getOptionValue("parallel")?.let { value ->
+                    it.copy(parallel = value.toInt().coerceAtLeast(1).coerceAtMost(64))
+                } ?: it
             }
+
         } else null
 
         var files = RunConfig.Files()

@@ -69,7 +69,8 @@ data class RunConfig(
             val host: String,
             val port: Int,
             val useTls: Boolean = true,
-            val timeout: Duration = Duration.ofSeconds(60)
+            val timeout: Duration = Duration.ofSeconds(60),
+            val parallel: Int = 8,
     ) {
         companion object {
             fun default(): Connection {

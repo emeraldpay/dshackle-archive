@@ -43,6 +43,11 @@ class BlockSourceEthereum(
 
     override fun getDataAtHeight(height: Long): Mono<BlockDetails> {
         return getBlock(height)
+                .doOnSubscribe {
+                    if (log.isTraceEnabled) {
+                        log.trace("Get data for block at $height")
+                    }
+                }
                 .flatMap { block ->
                     getUncles(block.result!!)
                             .map { it.map { it.raw } }
@@ -158,7 +163,7 @@ class BlockSourceEthereum(
                     traceJson = it.t4.orElse(null),
                     stateDiff = it.t5.orElse(null)
             )
-        }
+        }.subscribeOn(scheduler)
     }
 
     fun getTransactions(block: BlockJson<TransactionRefJson>): Mono<List<TransactionDetails>> {
