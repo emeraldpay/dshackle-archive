@@ -24,8 +24,8 @@ plugins {
     id 'maven'
     id 'application'
 
-    id "org.jetbrains.kotlin.jvm" version '1.5.31'
-    id 'org.jetbrains.kotlin.plugin.spring' version '1.5.31'
+    id "org.jetbrains.kotlin.jvm" version '1.7.10'
+    id 'org.jetbrains.kotlin.plugin.spring' version '1.7.10'
 
     id 'org.springframework.boot' version '2.5.6'
 
