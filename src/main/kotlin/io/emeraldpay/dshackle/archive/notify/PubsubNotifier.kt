@@ -5,15 +5,19 @@ import com.google.api.core.ApiFuture
 import com.google.api.core.ApiFutureCallback
 import com.google.api.core.ApiFutures
 import com.google.api.gax.core.CredentialsProvider
+import com.google.api.gax.core.GoogleCredentialsProvider
 import com.google.api.gax.rpc.TransportChannelProvider
 import com.google.cloud.pubsub.v1.Publisher
 import com.google.protobuf.ByteString
 import com.google.pubsub.v1.PubsubMessage
+import io.emeraldpay.dshackle.archive.config.GoogleAuthProvider
+import io.emeraldpay.dshackle.archive.model.ProcessedException
 import java.util.concurrent.CompletableFuture
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicReference
 import org.slf4j.LoggerFactory
+import org.springframework.beans.factory.annotation.Autowired
 import org.springframework.context.Lifecycle
 import reactor.core.publisher.Mono
 
@@ -26,7 +30,7 @@ class PubsubNotifier(
         private val log = LoggerFactory.getLogger(PubsubNotifier::class.java)
     }
 
-    var credentialsProvider: CredentialsProvider? = null
+    var credentialsProvider: GoogleAuthProvider? = null
     var channelProvider: TransportChannelProvider? = null
 
     private val executor = Executors.newSingleThreadExecutor()
@@ -48,7 +52,12 @@ class PubsubNotifier(
                 future.complete(messageId)
             }
             override fun onFailure(t: Throwable) {
-                future.completeExceptionally(t)
+                if (t is com.google.api.gax.rpc.PermissionDeniedException) {
+                    log.warn("Permission Denied to publish to topic $topic from user ${credentialsProvider?.username}")
+                    future.completeExceptionally(ProcessedException(t))
+                } else {
+                    future.completeExceptionally(t)
+                }
             }
         }, executor)
 

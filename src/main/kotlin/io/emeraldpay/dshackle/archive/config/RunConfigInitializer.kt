@@ -99,7 +99,7 @@ class RunConfigInitializer {
             options.addOption(it)
         }
 
-        Option(null, "authGCP", true, "Path to GCP Authentication JSON").also {
+        Option(null, "auth.gcp", true, "Path to GCP Authentication JSON").also {
             it.isRequired = false
             options.addOption(it)
         }
@@ -201,12 +201,15 @@ class RunConfigInitializer {
         var exportGS: RunConfig.ExportGS? = null
         if (isGSPath(files.dir)) {
             exportGS = extractGSConfig(files.dir)
-            cmd.getOptionValue("authGCP")?.let {
-                exportGS = exportGS!!.copy(credentials = it)
-            }
             files = files.copy(
                     Files.createTempDirectory("emerald-dshackle-archive").toString()
             )
+        }
+
+        val auth: RunConfig.Auth = RunConfig.Auth.default().let { auth ->
+            cmd.getOptionValue("auth.gcp")?.let { path ->
+                auth.copy(gcp = RunConfig.AuthGcp(path))
+            } ?: auth
         }
 
         val archiveOptions = cmd.getOptionValue("include")?.let {
@@ -250,7 +253,7 @@ class RunConfigInitializer {
             notify = notify.copy(pubsub = cmd.getOptionValue("notify.pubsub"))
         }
 
-        return RunConfig(command, blockchain, connection, archiveOptions, range, files, notify=notify).let { config ->
+        return RunConfig(command, blockchain, connection, archiveOptions, range, files, notify=notify, auth = auth).let { config ->
             if (command == RunConfig.Command.COPY || command == RunConfig.Command.COMPACT) {
                 val inputs = cmd.getOptionValues("inputs").flatMap {
                     it.split(",")

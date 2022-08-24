@@ -20,6 +20,8 @@ import com.google.pubsub.v1.PullResponse
 import com.google.pubsub.v1.PushConfig
 import com.google.pubsub.v1.SubscriptionName
 import com.google.pubsub.v1.TopicName
+import io.emeraldpay.dshackle.archive.config.GoogleAuthProvider
+import io.emeraldpay.dshackle.archive.config.RunConfig
 import io.grpc.ManagedChannel
 import io.grpc.ManagedChannelBuilder
 import org.testcontainers.containers.PubSubEmulatorContainer
@@ -76,7 +78,7 @@ class PubsubNotifierIntegrationSpec extends Specification {
                 new ObjectMapper()
         )
         notifier.channelProvider = channelProvider
-        notifier.credentialsProvider = credentialsProvider
+        notifier.credentialsProvider = new GoogleAuthProvider.Delegated(RunConfig.default(), credentialsProvider)
     }
 
     def "Can send a message"() {

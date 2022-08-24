@@ -3,6 +3,7 @@ package io.emeraldpay.dshackle.archive.storage.gcp
 import com.google.auth.oauth2.GoogleCredentials
 import com.google.cloud.storage.Storage
 import com.google.cloud.storage.StorageOptions
+import io.emeraldpay.dshackle.archive.config.GoogleAuthProvider
 import io.emeraldpay.dshackle.archive.config.RunConfig
 import java.io.FileInputStream
 import javax.annotation.PostConstruct
@@ -16,6 +17,7 @@ import org.springframework.stereotype.Repository
 @Profile("with-gcp")
 class GoogleStorage(
         @Autowired private val runConfig: RunConfig,
+        @Autowired private val googleAuthProvider: GoogleAuthProvider,
 ) {
 
     companion object {
@@ -30,18 +32,7 @@ class GoogleStorage(
 
     @PostConstruct
     fun prepare() {
-        val jsonPath = export.credentials
-        val credentials: GoogleCredentials = (
-                if (StringUtils.isNotEmpty(jsonPath)) {
-                    log.info("Use GCP Credentials from: $jsonPath")
-                    GoogleCredentials.fromStream(FileInputStream(jsonPath!!))
-                } else {
-                    log.warn("Using system default GCP Credentials")
-                    GoogleCredentials.getApplicationDefault()
-                }
-                ).createScoped(listOf("https://www.googleapis.com/auth/cloud-platform"))
-
-
+        val credentials = googleAuthProvider.credentials
         storage = StorageOptions.newBuilder()
                 .setCredentials(credentials)
                 .build().service

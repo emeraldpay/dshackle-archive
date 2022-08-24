@@ -2,6 +2,7 @@ package io.emeraldpay.dshackle.archive.notify
 
 import com.fasterxml.jackson.databind.ObjectMapper
 import io.emeraldpay.dshackle.archive.FileType
+import io.emeraldpay.dshackle.archive.config.GoogleAuthProvider
 import io.emeraldpay.dshackle.archive.config.RunConfig
 import io.emeraldpay.dshackle.archive.model.Chunk
 import java.nio.file.Path
@@ -19,6 +20,7 @@ import reactor.core.publisher.Mono
 class CurrentNotifier(
         @Autowired private val runConfig: RunConfig,
         @Autowired private val objectMapper: ObjectMapper,
+        @Autowired(required = false) private val googleAuthProvider: GoogleAuthProvider?,
 ): Notifier, Lifecycle, SmartLifecycle {
 
     companion object {
@@ -52,6 +54,9 @@ class CurrentNotifier(
         }
         if (config.pubsub != null) {
             val notifier = PubsubNotifier(config.pubsub, objectMapper)
+            googleAuthProvider?.let { provider ->
+                notifier.credentialsProvider = provider
+            }
             notifiers.add(notifier)
             lifecycle.add(notifier)
         }

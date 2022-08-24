@@ -16,6 +16,7 @@ data class RunConfig(
         val inputFiles: InputFiles? = null,
         val export: Export = Export.default(),
         val notify: Notify = Notify.default(),
+        val auth: Auth = Auth.default(),
 ) {
     companion object {
         @JvmStatic
@@ -157,8 +158,7 @@ data class RunConfig(
 
     data class ExportGS(
             val bucket: String,
-            val path: String,
-            val credentials: String? = null
+            val path: String
     )
 
     data class InputFiles(
@@ -176,4 +176,18 @@ data class RunConfig(
             }
         }
     }
+
+    data class Auth(
+            val gcp: AuthGcp?
+    ) {
+        companion object {
+            fun default(): Auth {
+                return Auth(null)
+            }
+        }
+    }
+
+    data class AuthGcp(
+            val credentials: String
+    )
 }
