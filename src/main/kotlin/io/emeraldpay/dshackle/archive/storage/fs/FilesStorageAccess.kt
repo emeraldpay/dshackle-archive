@@ -115,42 +115,62 @@ class FilesStorageAccess(
         }
 
         fun scan(cancelled: AtomicBoolean, s: Subscriber<in Path>) {
-            val visitor: FileVisitor<Path> = object : FileVisitor<Path> {
-                override fun visitFile(file: Path, attrs: BasicFileAttributes): FileVisitResult {
-                    s.onNext(file)
-                    return if (!cancelled.get()) {
-                        FileVisitResult.CONTINUE
-                    } else {
-                        FileVisitResult.TERMINATE
-                    }
-                }
-
-                override fun preVisitDirectory(dir: Path?, attrs: BasicFileAttributes?): FileVisitResult {
-                    return if (!cancelled.get()) {
-                        FileVisitResult.CONTINUE
-                    } else {
-                        FileVisitResult.TERMINATE
-                    }
-                }
-
-                override fun visitFileFailed(file: Path?, exc: IOException?): FileVisitResult {
-                    return if (!cancelled.get()) {
-                        FileVisitResult.CONTINUE
-                    } else {
-                        FileVisitResult.TERMINATE
-                    }
-                }
-
-                override fun postVisitDirectory(dir: Path?, exc: IOException?): FileVisitResult {
-                    return if (!cancelled.get()) {
-                        FileVisitResult.CONTINUE
-                    } else {
-                        FileVisitResult.TERMINATE
-                    }
+            val done = AtomicBoolean(false)
+            val shouldContinue = {
+                if (!cancelled.get() && !done.get()) {
+                    FileVisitResult.CONTINUE
+                } else {
+                    FileVisitResult.TERMINATE
                 }
             }
 
-            Files.walkFileTree(start, setOf(), 4, visitor)
+            val visitor: FileVisitor<Path> = object : FileVisitor<Path> {
+                override fun visitFile(file: Path, attrs: BasicFileAttributes): FileVisitResult {
+                    s.onNext(file)
+                    return shouldContinue()
+                }
+
+                override fun preVisitDirectory(dir: Path?, attrs: BasicFileAttributes?): FileVisitResult {
+                    return shouldContinue()
+                }
+
+                override fun visitFileFailed(file: Path, exc: IOException): FileVisitResult {
+                    if (file == start) {
+                        if (exc is java.nio.file.NoSuchFileException) {
+                            s.onComplete()
+                            done.set(true)
+                            return FileVisitResult.TERMINATE
+                        }
+                    }
+                    done.set(true)
+                    s.onError(exc)
+                    return FileVisitResult.TERMINATE
+                }
+
+                override fun postVisitDirectory(dir: Path, exc: IOException?): FileVisitResult {
+                    if (dir == start) {
+                        s.onComplete()
+                        done.set(true)
+                        return FileVisitResult.TERMINATE
+                    }
+                    return shouldContinue()
+                }
+            }
+
+            try {
+                Files.walkFileTree(start, setOf(), 4, visitor)
+                // Make sure the publisher is complete if for a some reason it didn't complete by the visitor.
+                // Should never happen
+                if (!done.get()) {
+                    done.set(true)
+                    s.onComplete()
+                }
+            } catch (t: Throwable) {
+                // Must be already catch by the visitor, but checking here just in case
+                if (!done.get()) {
+                    s.onError(t)
+                }
+            }
         }
     }
 

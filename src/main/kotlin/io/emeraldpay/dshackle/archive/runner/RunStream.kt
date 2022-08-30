@@ -76,6 +76,7 @@ class RunStream(
                 }
                 .collectList()
                 .defaultIfEmpty(emptyList())
+                .doOnError { t -> log.error("Failed to initialize archival", t) }
                 .map { archivedHeights ->
                     log.info("Start streaming from $height. Ensure blocks from $continueAfter are fully archived")
                     log.debug("Last loaded blocks: ${archivedHeights.size} of $tail")
