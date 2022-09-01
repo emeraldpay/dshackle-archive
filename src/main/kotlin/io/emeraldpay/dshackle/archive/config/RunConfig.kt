@@ -13,6 +13,7 @@ data class RunConfig(
         val options: ArchiveOptions,
         val range: Range,
         val files: Files,
+        val dryRun: Boolean = false,
         val inputFiles: InputFiles? = null,
         val export: Export = Export.default(),
         val notify: Notify = Notify.default(),
@@ -28,6 +29,7 @@ data class RunConfig(
                     ArchiveOptions(),
                     Range.default(),
                     Files(),
+                    false,
                     null
             )
         }
@@ -58,6 +60,7 @@ data class RunConfig(
         COMPACT,
         REPORT,
         FIX,
+        VERIFY,
         ;
 
         @JsonValue

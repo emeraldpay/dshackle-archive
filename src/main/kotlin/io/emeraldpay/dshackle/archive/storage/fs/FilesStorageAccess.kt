@@ -15,6 +15,8 @@ import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.locks.ReentrantLock
 import kotlin.concurrent.withLock
+import org.apache.avro.file.SeekableFileInput
+import org.apache.avro.file.SeekableInput
 import org.reactivestreams.Publisher
 import org.reactivestreams.Subscriber
 import org.reactivestreams.Subscription
@@ -95,6 +97,11 @@ class FilesStorageAccess(
     override fun createWriter(path: String): OutputStream {
         val target = ensureFile(path, false)
         return Files.newOutputStream(target)
+    }
+
+    override fun createReader(path: String): SeekableInput {
+        val fullPath = dir.resolve(path)
+        return SeekableFileInput(fullPath.toFile())
     }
 
     class FilesPublisher(

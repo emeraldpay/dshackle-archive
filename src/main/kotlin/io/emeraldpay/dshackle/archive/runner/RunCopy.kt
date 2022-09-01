@@ -13,6 +13,8 @@ import org.springframework.stereotype.Service
 import reactor.core.publisher.Flux
 import java.nio.file.Path
 import reactor.core.publisher.Mono
+import reactor.core.scheduler.Schedulers
+import java.util.function.Function
 
 @Service
 @Profile("run-copy")
@@ -39,14 +41,20 @@ class RunCopy(
         val sources = sourceStorage.getInputFiles()
 
         return Mono.zip(
-                processBlocks(sources.blocks),
+                processBlocks(sources.blocks)
+                        .thenReturn(true)
+                        .subscribeOn(Schedulers.boundedElastic()),
+
                 processTransactions(sources.transactions)
-        ).then()
+                        .thenReturn(true)
+                        .subscribeOn(Schedulers.boundedElastic())
+        ).then(completeWriter.closeOpenFiles()).then()
     }
 
     fun processBlocks(files: Flux<Path>): Mono<Void> {
-        log.info("Process blocks")
+        // not it's overriden for compactions
         val source = files
+                .doOnSubscribe { log.info("Process blocks") }
                 .flatMap(blocksReader::open)
                 .filter {
                     blocksRange.includes(it.height)
@@ -55,8 +63,9 @@ class RunCopy(
     }
 
     fun processTransactions(files: Flux<Path>): Mono<Void> {
-        log.info("Process transactions")
+        // not it's overriden for compactions
         val source = files
+                .doOnSubscribe { log.info("Process transactions") }
                 .flatMap(transactionsReader::open)
                 .filter {
                     blocksRange.includes(it.height)

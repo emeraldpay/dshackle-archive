@@ -79,6 +79,11 @@ class RunConfigInitializer {
             options.addOption(it)
         }
 
+        Option(null, "dryRun", false, "Do not modify the storage").also {
+            it.isRequired = false
+            options.addOption(it)
+        }
+
         Option(null, "prefix", true, "File prefix").let {
             it.isRequired = false
             options.addOption(it)
@@ -270,6 +275,12 @@ class RunConfigInitializer {
             } else {
                 it
             }
+        }.let {
+            if (cmd.hasOption("dryRun")) {
+                it.copy(dryRun = true)
+            } else {
+                it
+            }
         }
     }
 
@@ -298,7 +309,8 @@ class RunConfigInitializer {
                 " compact - merge individual block files into larger range files\n" +
                 " copy    - copy/recover from existing archive by copying into a new one\n" +
                 " report  - show summary on what is in archive for the specified range\n" +
-                " fix     - fix archive by making new archives for missing chunks"
+                " fix     - fix archive by making new archives for missing chunks\n" +
+                " verify  - verify that archive files contains required data and delete incomplete files\n"
 
         formatter.printHelp("dshackle-archive [options] <command>", header, options, footer)
     }

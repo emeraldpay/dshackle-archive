@@ -23,7 +23,7 @@ import java.nio.ByteBuffer
 import java.util.*
 
 @Service
-@Profile("!run-copy & !run-compact & !run-report & ethereum")
+@Profile("!run-copy & !run-compact & !run-report & ethereum & with-blockchain")
 class BlockSourceEthereum(
         @Autowired private val client: ReactorBlockchainGrpc.ReactorBlockchainStub,
         @Autowired private val objectMapper: ObjectMapper,

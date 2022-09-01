@@ -14,6 +14,7 @@ import org.springframework.context.annotation.Profile
 import org.springframework.stereotype.Repository
 import reactor.core.publisher.Flux
 import reactor.core.publisher.Mono
+import reactor.core.scheduler.Schedulers
 import reactor.util.function.Tuple2
 import reactor.util.function.Tuples
 
@@ -29,6 +30,13 @@ class CompleteWriter(
 
     companion object {
         private val log = LoggerFactory.getLogger(CompleteWriter::class.java)
+    }
+
+    fun closeOpenFiles(): Mono<Void> {
+        return Mono.fromCallable {
+            blocksWriter.closeAll()
+            transactionsWriter.closeAll()
+        }.then()
     }
 
     fun consume(dataSource: Flux<BlockDetails>, chunk: Chunk): Mono<Void> {
@@ -85,16 +93,16 @@ class CompleteWriter(
                 .doOnSubscribe {
                     progress.start()
                 }
-                .flatMap({ block ->
+                .flatMapSequential ({ block ->
                     Mono.fromCallable {
                         val blockFile = configuredFilenameGenerator.fileForAutoRange(FileType.BLOCKS, block.height)
                         blocksWriter.open(blockFile).append(block)
+                        1
                     }
                 }, 4)
                 .doOnNext {
                     progress.onNext()
                 }
-                .map { 1 }
                 .reduce { a, b ->
                     val total = a + b
                     if (total % 10000 == 0) {
@@ -103,7 +111,6 @@ class CompleteWriter(
                     total
                 }
                 .doFinally {
-                    blocksWriter.closeAll()
                     val time = System.currentTimeMillis() - startTime
                     val minutes = time / 60_000
                     val seconds = (time % 60_000) / 1000
@@ -118,17 +125,17 @@ class CompleteWriter(
                 .doOnSubscribe {
                     progress.start()
                 }
-                .flatMap({ tx ->
+                .flatMapSequential ({ tx ->
                     Mono.fromCallable {
                         // note that it most likely appends to an existing file
                         val txesFile = configuredFilenameGenerator.fileForAutoRange(FileType.TRANSACTIONS, tx.height)
                         transactionsWriter.open(txesFile).append(tx)
+                        1
                     }
                 }, 4)
                 .doOnNext {
                     progress.onNext()
                 }
-                .map { 1 }
                 .reduce { a, b ->
                     val total = a + b
                     if (total % 100000 == 0) {
@@ -137,7 +144,6 @@ class CompleteWriter(
                     total
                 }
                 .doFinally {
-                    transactionsWriter.closeAll()
                     val time = System.currentTimeMillis() - startTime
                     val minutes = time / 60_000
                     val seconds = (time % 60_000) / 1000

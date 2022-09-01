@@ -31,9 +31,9 @@ open class Config {
     }
 
     @Bean
-    @Profile("run-archive", "run-stream", "run-fix")
-    fun dshackleClient(runConfig: RunConfig): ReactorBlockchainGrpc.ReactorBlockchainStub {
-        val connectionConfig = runConfig.connection!!
+    @Profile("run-archive", "run-stream", "run-fix", "run-verify")
+    fun dshackleClient(runConfig: RunConfig): ReactorBlockchainGrpc.ReactorBlockchainStub? {
+        val connectionConfig = runConfig.connection ?: return null
         log.info("Connect to ${connectionConfig.host}:${runConfig.connection.port}")
         return EmeraldApi.newBuilder()
                 .connectTo(

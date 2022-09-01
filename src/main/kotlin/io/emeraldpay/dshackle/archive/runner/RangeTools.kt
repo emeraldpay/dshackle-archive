@@ -17,7 +17,7 @@ import reactor.core.publisher.Flux
 import reactor.core.publisher.Mono
 import reactor.util.function.Tuples
 
-@Profile("run-archive", "run-fix")
+@Profile("run-archive", "run-fix", "run-verify")
 @Service
 class RangeTools(
         @Autowired private val blocksRange: BlocksRange,

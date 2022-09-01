@@ -13,6 +13,7 @@ import java.io.OutputStream
 import java.nio.channels.Channels
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicLong
+import org.apache.avro.file.SeekableInput
 import org.reactivestreams.Publisher
 import org.reactivestreams.Subscriber
 import org.reactivestreams.Subscription
@@ -89,7 +90,7 @@ open class GSStorageAccess(
                     Flux.from(BlobsPublisher(googleStorage.storage, googleStorage.bucket, prefix.prefix, prefix.rangeStart))
                 }
                 .map {
-                    it.blobId.name.substring(this.path.length)
+                    blockchainDir + it.blobId.name.substring(this.path.length)
                 }
     }
 
@@ -117,8 +118,15 @@ open class GSStorageAccess(
         val channel = googleStorage.storage.writer(blobInfo, Storage.BlobWriteOption.disableGzipContent())
                 ?: throw IllegalStateException("Blob ${blobId.toGsUtilUri()} cannot be created")
 
-//        val channel: WritableByteChannel = blob.writer()
         return Channels.newOutputStream(channel)
+    }
+
+    override fun createReader(path: String): SeekableInput {
+        val blobId = BlobId.of(googleStorage.bucket, googleStorage.getBucketPath(path))
+        val blob = googleStorage.storage.get(blobId)
+        val channel = googleStorage.storage.reader(blobId)
+                ?: throw IllegalStateException("Blob ${blobId.toGsUtilUri()} cannot be created")
+        return SeekableChannelInput(blob.size, channel)
     }
 
     data class ListQuery(

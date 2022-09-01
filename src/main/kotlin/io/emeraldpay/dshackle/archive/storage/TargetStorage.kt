@@ -18,7 +18,6 @@ import reactor.core.publisher.Mono
 class TargetStorage(
         @Autowired private val runConfig: RunConfig,
         @Autowired private val allStorageAccess: List<StorageAccess>,
-        @Autowired private val filenameGenerator: FilenameGenerator,
 ) {
 
     companion object {

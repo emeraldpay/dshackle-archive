@@ -17,7 +17,7 @@ import org.springframework.stereotype.Service
 import reactor.core.publisher.Flux
 import reactor.core.publisher.Mono
 
-@Profile("run-compact", "run-copy", "run-report", "run-fix")
+@Profile("run-compact", "run-copy", "run-report", "run-fix", "run-verify")
 @Qualifier("sourceStorage")
 @Service
 class SourceStorage(

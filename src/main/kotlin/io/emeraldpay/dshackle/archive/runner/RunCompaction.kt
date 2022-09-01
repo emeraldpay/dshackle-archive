@@ -84,7 +84,7 @@ class RunCompaction(
         val source = chunkInputs
                 // remember the file
                 .doOnNext(consumed::add)
-                .flatMap(open)
+                .flatMapSequential(open)
 
         return accept(source)
                 .then(

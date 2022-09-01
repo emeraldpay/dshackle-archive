@@ -9,6 +9,7 @@ import io.emeraldpay.dshackle.archive.runner.RunCopy
 import io.emeraldpay.dshackle.archive.runner.RunFix
 import io.emeraldpay.dshackle.archive.runner.RunReport
 import io.emeraldpay.dshackle.archive.runner.RunStream
+import io.emeraldpay.dshackle.archive.runner.RunVerify
 import io.emeraldpay.grpc.BlockchainType
 import java.util.*
 import kotlin.collections.ArrayList
@@ -47,6 +48,10 @@ fun main(args: Array<String>) {
         profiles.add("with-gcp")
     }
 
+    if (config.connection != null) {
+        profiles.add("with-blockchain")
+    }
+
     app.setAdditionalProfiles(*profiles.toTypedArray())
     val ctx = app.run(*args)
     val runner: Mono<Void> = when (config.command) {
@@ -56,6 +61,7 @@ fun main(args: Array<String>) {
         RunConfig.Command.COMPACT -> ctx.getBean(RunCompaction::class.java).run()
         RunConfig.Command.REPORT -> ctx.getBean(RunReport::class.java).run()
         RunConfig.Command.FIX -> ctx.getBean(RunFix::class.java).run()
+        RunConfig.Command.VERIFY -> ctx.getBean(RunVerify::class.java).run()
     }
     runner.block()
     // make sure it exits after the completion even if there are still running threads

@@ -6,15 +6,13 @@ import io.emeraldpay.dshackle.archive.storage.FilenameGenerator
 import io.emeraldpay.dshackle.archive.storage.SourceStorage
 import org.slf4j.LoggerFactory
 import reactor.core.publisher.Mono
-import reactor.util.function.Tuple2
-import java.util.function.Function
 import org.springframework.beans.factory.annotation.Autowired
 import org.springframework.context.annotation.Profile
 import org.springframework.stereotype.Service
 import reactor.core.publisher.Flux
 
 @Service
-@Profile("run-report", "run-fix")
+@Profile("run-report", "run-fix", "run-verify")
 class ScanningTools(
         @Autowired private val filenameGenerator: FilenameGenerator,
         @Autowired private val sourceStorage: SourceStorage,
@@ -25,8 +23,18 @@ class ScanningTools(
     }
 
     data class FileChunk(
+            /**
+             * Type of the file
+             */
             val type: FileType,
+            /**
+             * Archive range contained in the file
+             */
             val chunk: Chunk,
+            /**
+             * Relative path to the file inside the storage
+             */
+            val path: String,
     )
 
     data class Report(
@@ -78,14 +86,14 @@ class ScanningTools(
                     val range = filenameGenerator.parseRange(it)
                     range == null || wholeChunk.intersects(range)
                 }
-                .flatMap {
-                    val type = filenameGenerator.extractType(it)
+                .flatMap { file ->
+                    val type = filenameGenerator.extractType(file)
                             ?.let(FileType.Companion::fromFilenameType)
-                    val range = filenameGenerator.parseRange(it)
+                    val range = filenameGenerator.parseRange(file)
                     when {
                         type == null || range == null -> Mono.empty()
                         !wholeChunk.intersects(range) -> Mono.empty()
-                        else -> Mono.just(FileChunk(type, range))
+                        else -> Mono.just(FileChunk(type, range, file))
                     }
                 }
     }
