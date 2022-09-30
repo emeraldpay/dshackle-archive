@@ -19,7 +19,9 @@ import org.springframework.stereotype.Service
 import reactor.core.publisher.Flux
 import reactor.core.publisher.Mono
 import reactor.util.function.Tuples
+import reactor.util.retry.Retry
 import java.nio.ByteBuffer
+import java.time.Duration
 import java.util.*
 
 @Service
@@ -105,30 +107,48 @@ class BlockSourceEthereum(
     }
 
     fun getTransaction(txid: TransactionId, stateDiffSource: ReplayProcessor.ReplyValues): Mono<TransactionDetails> {
-        val json = executeAndRead("eth_getTransactionByHash", listOf(txid.toHex()), TransactionJson::class.java).doOnNext {
-            if (it.result == null) {
-                //val json = String(ByteBufferBackedInputStream(it.raw).readAllBytes())
-                log.warn("No transaction for $txid")
+        val json = executeAndRead("eth_getTransactionByHash", listOf(txid.toHex()), TransactionJson::class.java)
+            .doOnNext {
+                if (it.result == null) {
+                    //val json = String(ByteBufferBackedInputStream(it.raw).readAllBytes())
+                    log.warn("No transaction for $txid")
+                    throw IllegalStateException("No transaction for $txid")
+                }
             }
-        }.doOnError { t ->
-            log.error("Failed to read Transaction Details $txid. ${t.message}")
-        }
-        val receiptJson = executeAndRead("eth_getTransactionReceipt", listOf(txid.toHex()), TransactionReceiptJson::class.java).doOnError { t ->
-            log.error("Failed to read Transaction Receipt $txid. ${t.message}")
-        }
-        val raw = executeAndRead("eth_getRawTransactionByHash", listOf(txid.toHex()), String::class.java).map {
-            // reading as a hex string, but storing as actual bytes
-            ByteBuffer.wrap(HexData.from(it.result).bytes)
-        }.doOnError { t ->
-            log.error("Failed to read Raw Transaction $txid. ${t.message}")
-        }
+            .doOnError { t ->
+                log.error("Failed to read Transaction Details $txid. ${t.message}")
+            }
+        val receiptJson = executeAndRead("eth_getTransactionReceipt", listOf(txid.toHex()), TransactionReceiptJson::class.java)
+            .doOnNext {
+                if (it.result == null) {
+                    throw IllegalStateException("No transaction receipt for $txid")
+                }
+            }
+            .doOnError { t ->
+                log.error("Failed to read Transaction Receipt $txid. ${t.message}")
+            }
+        val raw = executeAndRead("eth_getRawTransactionByHash", listOf(txid.toHex()), String::class.java)
+            .doOnNext {
+                if (it.result == null) {
+                    throw IllegalStateException("No raw transaction for $txid")
+                }
+            }
+            .map {
+                // reading as a hex string, but storing as actual bytes
+                ByteBuffer.wrap(HexData.from(it.result).bytes)
+            }
+            .doOnError { t ->
+                log.error("Failed to read Raw Transaction $txid. ${t.message}")
+            }
 
         val traceJson: Mono<Optional<ByteBuffer>> = if (runConfig.options.trace) {
-            execute("debug_traceTransaction", listOf(txid.toHex())).map {
-                Optional.of(it)
-            }.doOnError { t ->
-                log.error("Failed to Trace Transaction $txid. ${t.message}")
-            }
+            execute("debug_traceTransaction", listOf(txid.toHex()))
+                .map {
+                    Optional.of(it)
+                }
+                .doOnError { t ->
+                    log.error("Failed to Trace Transaction $txid. ${t.message}")
+                }
         } else {
             Mono.just(Optional.empty())
         }
@@ -176,8 +196,21 @@ class BlockSourceEthereum(
             replayProcessor.empty()
         }
         return Flux.fromIterable(block.transactions)
-                .flatMapSequential({ getTransaction(it.hash, blockState) }, parallelTx)
-                .collectList()
+            .flatMapSequential(
+                {
+                    val hash = it.hash
+                    getTransaction(hash, blockState)
+                        .doOnError { t ->
+                            log.warn("Error getting transaction, could be retried $hash: ${t.message}")
+                        }
+                        .retryWhen(Retry.backoff(10, Duration.ofSeconds(1)))
+                        .doOnError { t ->
+                            log.error("Failed to get transaction $hash: ${t.message}")
+                        }
+                },
+                parallelTx
+            )
+            .collectList()
     }
 
 
