@@ -18,6 +18,7 @@ data class RunConfig(
         val export: Export = Export.default(),
         val notify: Notify = Notify.default(),
         val auth: Auth = Auth.default(),
+        val compaction: CompactionOptions = CompactionOptions()
 ) {
     companion object {
         @JvmStatic
@@ -192,5 +193,9 @@ data class RunConfig(
 
     data class AuthGcp(
             val credentials: String
+    )
+
+    data class CompactionOptions(
+            val acceptForks: Boolean = true
     )
 }

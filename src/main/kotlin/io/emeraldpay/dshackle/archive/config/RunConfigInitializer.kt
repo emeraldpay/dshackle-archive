@@ -119,6 +119,11 @@ class RunConfigInitializer {
             options.addOption(it)
         }
 
+        Option(null, "compact.forks", false, "Should accept all blocks including forks in stream compaction").let {
+            it.isRequired = false
+            options.addOption(it)
+        }
+
         val parser: CommandLineParser = DefaultParser()
         val formatter = HelpFormatter()
         val cmd: CommandLine = try {
@@ -281,6 +286,15 @@ class RunConfigInitializer {
             } else {
                 it
             }
+        }.let {
+            if (cmd.hasOption("compact.forks")) {
+                it.copy(
+                        compaction = it.compaction.copy(acceptForks = false)
+                )
+            } else {
+                it
+            }
+
         }
     }
 

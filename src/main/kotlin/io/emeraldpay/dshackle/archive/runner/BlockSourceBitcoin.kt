@@ -27,6 +27,12 @@ class BlockSourceBitcoin(
         private val log = LoggerFactory.getLogger(BlockSourceBitcoin::class.java)
     }
 
+    override fun getBlockIdAtHeight(height: Long): Mono<String> {
+        return executeAndRead("getblockhash", listOf(height), String::class.java).map {
+            it.result ?: ""
+        }
+    }
+
     override fun getDataAtHeight(height: Long): Mono<BlockDetails> {
         return executeAndRead("getblockhash", listOf(height), String::class.java).flatMap { hash ->
             executeAndReadMap("getblock", listOf(hash.result!!)).flatMap { block ->
