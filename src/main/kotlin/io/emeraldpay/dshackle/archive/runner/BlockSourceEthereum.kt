@@ -25,7 +25,7 @@ import java.time.Duration
 import java.util.*
 
 @Service
-@Profile("!run-copy & !run-compact & !run-report & ethereum & with-blockchain")
+@Profile("!run-copy & !run-report & ethereum & with-blockchain")
 class BlockSourceEthereum(
         @Autowired private val client: ReactorBlockchainGrpc.ReactorBlockchainStub,
         @Autowired private val objectMapper: ObjectMapper,
@@ -41,6 +41,12 @@ class BlockSourceEthereum(
 
     init {
         log.info("Use blockchain: $chain")
+    }
+
+    override fun getBlockIdAtHeight(height: Long): Mono<String> {
+        return getBlock(height).map {
+            it.result?.hash?.toHex() ?: ""
+        }
     }
 
     override fun getDataAtHeight(height: Long): Mono<BlockDetails> {

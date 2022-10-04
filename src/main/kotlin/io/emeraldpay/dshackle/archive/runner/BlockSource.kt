@@ -41,6 +41,7 @@ abstract class BlockSource(
     protected val id = AtomicInteger(0)
 
     abstract fun getDataAtHeight(height: Long): Mono<BlockDetails>
+    abstract fun getBlockIdAtHeight(height: Long): Mono<String>
     abstract fun getCurrentHeight(): Mono<Long>
 
     fun getData(start: Long, limit: Long): Flux<BlockDetails> {
