@@ -13,6 +13,7 @@ import java.nio.file.Path
 import java.nio.file.attribute.BasicFileAttributes
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicLong
 import java.util.concurrent.locks.ReentrantLock
 import kotlin.concurrent.withLock
 import org.apache.avro.file.SeekableFileInput
@@ -68,18 +69,14 @@ class FilesStorageAccess(
         return fullPath
     }
 
-    override fun listArchive(height: Long): Flux<String> {
-        val dirs = listOf(
-                "${filenameGenerator.parentDir}/${filenameGenerator.getLevel0(height)}"
-        )
-        val parent = Path.of(filenameGenerator.parentDir)
+    override fun getDirBlockSizeL1(): Long {
+        return filenameGenerator.dirBlockSizeL1
+    }
 
-        return Flux.fromIterable(dirs)
-                .flatMap { dir ->
-                    Flux.from(FilesPublisher(Path.of(dir)))
-                }.map {
-                    parent.relativize(it).toString()
-                }
+    override fun listArchiveLevel0(height: Long): Flux<String> {
+        val subdir = "${filenameGenerator.parentDir}${filenameGenerator.getLevel0(height)}"
+        return Flux.from(FilesPublisher(dir.resolve(subdir)))
+                .map { it.toString() }
     }
 
     override fun deleteArchives(files: List<String>): Mono<Void> {
@@ -111,8 +108,24 @@ class FilesStorageAccess(
         override fun subscribe(s: Subscriber<in Path>) {
             val cancelled = AtomicBoolean(false)
             s.onSubscribe(object : Subscription {
+                private val limit = AtomicLong()
+                private val started = AtomicBoolean(false)
+
                 override fun request(n: Long) {
-                    scan(cancelled, s)
+                    limit.updateAndGet {
+                        // n can be  MAX_LONG, so adding it to anything produces a negative result.
+                        // sp here we ensure that it stays at least as n (i.e, a positive number)
+                        (it + n).coerceAtLeast(n)
+                    }
+
+                    // use a separate thread because Files.walkFileTree is blocking and cannot be paused,
+                    // so in a separate thread we just list all files when limit value is positive
+                    val alreadyStarted = started.getAndSet(true)
+                    if (!alreadyStarted) {
+                        Thread {
+                            scan(limit, cancelled, s)
+                        }.start()
+                    }
                 }
 
                 override fun cancel() {
@@ -121,7 +134,7 @@ class FilesStorageAccess(
             })
         }
 
-        fun scan(cancelled: AtomicBoolean, s: Subscriber<in Path>) {
+        fun scan(limit: AtomicLong, cancelled: AtomicBoolean, s: Subscriber<in Path>) {
             val done = AtomicBoolean(false)
             val shouldContinue = {
                 if (!cancelled.get() && !done.get()) {
@@ -131,9 +144,20 @@ class FilesStorageAccess(
                 }
             }
 
+            val waitRequested = {
+                while (limit.get() <= 0 && !cancelled.get() && !done.get()) {
+                    // here we wait until an action is requested
+                    Thread.sleep(50)
+                }
+            }
+
             val visitor: FileVisitor<Path> = object : FileVisitor<Path> {
                 override fun visitFile(file: Path, attrs: BasicFileAttributes): FileVisitResult {
-                    s.onNext(file)
+                    waitRequested()
+                    if (limit.get() > 0 && !cancelled.get()) {
+                        limit.decrementAndGet()
+                        s.onNext(file)
+                    }
                     return shouldContinue()
                 }
 
@@ -165,6 +189,7 @@ class FilesStorageAccess(
             }
 
             try {
+                waitRequested()
                 Files.walkFileTree(start, setOf(), 4, visitor)
                 // Make sure the publisher is complete if for a some reason it didn't complete by the visitor.
                 // Should never happen

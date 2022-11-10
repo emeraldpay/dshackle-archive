@@ -40,40 +40,11 @@ open class GSStorageAccess(
     private val blockchainDir = filenameGenerator.parentDir
     private val path = googleStorage.bucketPath + "/" + blockchainDir
 
-    override fun listArchive(height: Long): Flux<String> {
-        val firstLevel0Pos = height / filenameGenerator.dirBlockSizeL1
-        return listArchiveLevel0(height)
-                .concatWith(nextLevel0(firstLevel0Pos.toInt() + 1))
+    override fun getDirBlockSizeL1(): Long {
+        return filenameGenerator.dirBlockSizeL1
     }
 
-    /**
-     * Recursively checks all heights at level0 starting from the specified pos. Stops when a Level 0 dir has no elements.
-     *
-     * Because the target archive keeps files in different directories (as Level 0)
-     * which are also used to narrow the query we need to iterate all Level 0 dirs after the
-     * initial height.
-     *
-     * @param index of level 0 dir; note it's not the height
-     * @return elements at each as Level 0 after the specified, until the dir doesn't exist/empty
-     */
-    fun nextLevel0(pos: Int): Flux<String> {
-        val items = Mono.fromCallable {
-            filenameGenerator.dirBlockSizeL1 * pos
-        }.flatMapMany {
-            listArchiveLevel0(it)
-        }
-        return items.switchOnFirst { t, u ->
-            if (t.hasValue()) {
-                // if we have got any file in the dir then also check the next level 0 dir for items
-                u.concatWith(nextLevel0(pos + 1))
-            } else {
-                // if dir is empty just stop at this point and return nothing
-                Flux.empty()
-            }
-        }
-    }
-
-    open fun listArchiveLevel0(height: Long): Flux<String> {
+    override fun listArchiveLevel0(height: Long): Flux<String> {
         // use separate filters for Stream files and Ranges,
         // because for Stream we want to narrow the scope to 1000 files at the level 1
         // otherwise a filled storage gives up to two million files to process on level 0
