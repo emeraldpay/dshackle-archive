@@ -10,6 +10,7 @@ import org.springframework.beans.factory.annotation.Autowired
 import org.springframework.context.annotation.Profile
 import org.springframework.stereotype.Service
 import reactor.core.publisher.Flux
+import reactor.util.function.Tuples
 
 @Service
 @Profile("run-report", "run-fix", "run-verify")
@@ -82,18 +83,36 @@ class ScanningTools(
 
     fun scanArchives(wholeChunk: Chunk): Flux<FileChunk> {
         return sourceStorage.current.listArchive(wholeChunk.startBlock)
-                .takeWhile {
+                .flatMap {
                     val range = filenameGenerator.parseRange(it)
-                    range == null || wholeChunk.intersects(range)
+                    if (range == null) {
+                        Mono.empty()
+                    } else {
+                        Mono.just(Tuples.of(range, it))
+                    }
                 }
-                .flatMap { file ->
+                .takeWhile {
+                    val range = it.t1
+                    // do not stop if we _inside_ or _before_ the required range
+                    wholeChunk.intersects(range) || range.endBlock < wholeChunk.startBlock
+                }
+                .filter {
+                    // now process only what's inside the required range. i.e., ignore anything before it
+                    val range = it.t1
+                    wholeChunk.intersects(range)
+                }
+                .flatMap {
+                    val file = it.t2
+                    val range = it.t1
+
+                    // type may be empty if it's not an archive file. ignore those too
                     val type = filenameGenerator.extractType(file)
                             ?.let(FileType.Companion::fromFilenameType)
-                    val range = filenameGenerator.parseRange(file)
-                    when {
-                        type == null || range == null -> Mono.empty()
-                        !wholeChunk.intersects(range) -> Mono.empty()
-                        else -> Mono.just(FileChunk(type, range, file))
+
+                    if (type == null) {
+                        Mono.empty()
+                    } else {
+                        Mono.just(FileChunk(type, range, file))
                     }
                 }
     }
