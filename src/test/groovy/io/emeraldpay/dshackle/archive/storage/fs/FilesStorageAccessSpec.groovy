@@ -45,7 +45,7 @@ class FilesStorageAccessSpec extends Specification {
         def act = Flux.from(publisher)
                 .collectList().block(Duration.ofSeconds(1))
         then:
-        act.collect {dir.relativize(it).toString() } == [
+        act.collect {dir.relativize(it).toString() }.toSorted() == [
                 "test1.txt", "test2.txt"
         ]
     }
@@ -63,7 +63,7 @@ class FilesStorageAccessSpec extends Specification {
         def act = Flux.from(publisher)
                 .collectList().block(Duration.ofSeconds(1))
         then:
-        act.collect {dir.relativize(it).toString() } == [
+        act.collect {dir.relativize(it).toString() }.toSorted() == [
                 "subdir/test1.txt", "subdir/test2.txt"
         ]
     }
@@ -107,17 +107,7 @@ class FilesStorageAccessSpec extends Specification {
         when:
         def act = Flux.from(publisher)
                 .filter {
-                    def i = it.fileName.toString().substring(4, 6).toInteger()
-                    println("++++ i = $i / ${it.fileName.toString()} - ${it.fileName.toString().substring(4, 6)}")
-                    i < 15
-                }
-                .doOnNext {
-                    println("!!!!!!!!")
-                    println("!!!!!!!! ACCEPT $it")
-                    println("!!!!!!!!")
-                }
-                .doOnError { t ->
-                    t.printStackTrace()
+                    it.fileName.toString().substring(4, 6).toInteger() < 15
                 }
                 .collectList().block(Duration.ofSeconds(1))
         then:
