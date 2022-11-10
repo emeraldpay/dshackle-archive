@@ -35,15 +35,20 @@ class SourceStorage(
 
     @PostConstruct
     fun init() {
-        val sourceIsFiles = runConfig.inputFiles != null
-
-        val instance = if (sourceIsFiles) {
-            allStorageAccess.find {
-                it is FilesStorageAccess
-            }
+        val instance = if (allStorageAccess.size == 1) {
+            allStorageAccess.first()
         } else {
-            allStorageAccess.find {
-                it is GSStorageAccess
+            // when we do a COPY from one source to another
+            // TODO right now works only for FS->STORAGE. Allo to specify a direction
+            val sourceIsFiles = runConfig.inputFiles != null
+            if (sourceIsFiles) {
+                allStorageAccess.find {
+                    it is FilesStorageAccess
+                }
+            } else {
+                allStorageAccess.find {
+                    it is GSStorageAccess
+                }
             }
         }
         if (instance == null) {
