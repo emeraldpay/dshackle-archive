@@ -52,10 +52,13 @@ class RunVerify(
     override fun run(): Mono<Void> {
         return rangeTools.checkStartBlock()
                 .map(BlocksRange::wholeChunk)
+                .doOnNext { log.info("Verify blocks ${it.startBlock}..${it.endBlock}") }
                 .flatMapMany(scanningTools::scanArchives)
                 .flatMap(::processFile, 8)
                 .doOnError { t -> log.error("Failed to verify archive", t) }
                 .then()
+                .doOnSubscribe { log.info("Verifying archive at ${runConfig.files.dir}") }
+                .doFinally { log.info("Stopped...") }
     }
 
     fun processFile(file: ScanningTools.FileChunk): Mono<Void> {
