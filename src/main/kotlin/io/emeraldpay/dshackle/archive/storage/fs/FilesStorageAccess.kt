@@ -16,6 +16,7 @@ import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicLong
 import java.util.concurrent.locks.ReentrantLock
 import kotlin.concurrent.withLock
+import kotlin.io.path.exists
 import org.apache.avro.file.SeekableFileInput
 import org.apache.avro.file.SeekableInput
 import org.reactivestreams.Publisher
@@ -154,7 +155,7 @@ class FilesStorageAccess(
             val visitor: FileVisitor<Path> = object : FileVisitor<Path> {
                 override fun visitFile(file: Path, attrs: BasicFileAttributes): FileVisitResult {
                     waitRequested()
-                    if (limit.get() > 0 && !cancelled.get()) {
+                    if (!cancelled.get() && !done.get()) {
                         limit.decrementAndGet()
                         s.onNext(file)
                     }
@@ -166,16 +167,27 @@ class FilesStorageAccess(
                 }
 
                 override fun visitFileFailed(file: Path, exc: IOException): FileVisitResult {
-                    if (file == start) {
-                        if (exc is java.nio.file.NoSuchFileException) {
-                            s.onComplete()
-                            done.set(true)
-                            return FileVisitResult.TERMINATE
+                    return if (file == start && exc is java.nio.file.NoSuchFileException) {
+                        // happens when the target doesn't exist
+                        if (!file.parent.exists()) {
+                            // when the whole archive doesn't exist, not just level0
+                            log.warn("The directory doesn't exist ${file.parent}")
                         }
+                        s.onComplete()
+                        done.set(true)
+                        FileVisitResult.TERMINATE
+                    } else if (exc is java.nio.file.NoSuchFileException) {
+                        // this is when the file was deleted during the scan,
+                        // i.e. when there are active writes to the same archive from another process
+                        log.info("Skip deleted file $file")
+                        FileVisitResult.CONTINUE
+                    } else {
+                        // other error
+                        log.warn("Error when checking the archive at $file: ${exc.message}")
+                        done.set(true)
+                        s.onError(exc)
+                        FileVisitResult.TERMINATE
                     }
-                    done.set(true)
-                    s.onError(exc)
-                    return FileVisitResult.TERMINATE
                 }
 
                 override fun postVisitDirectory(dir: Path, exc: IOException?): FileVisitResult {
