@@ -82,6 +82,10 @@ data class RunConfig(
                 return Connection("127.0.0.1", 2448)
             }
         }
+
+        fun describe(): String {
+            return "$host:$port " + if (useTls) "(use TLS)" else "(no TLS)"
+        }
     }
 
     data class ArchiveOptions(

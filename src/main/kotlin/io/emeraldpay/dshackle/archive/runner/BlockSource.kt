@@ -8,6 +8,7 @@ import io.emeraldpay.api.proto.Common
 import io.emeraldpay.api.proto.ReactorBlockchainGrpc
 import io.emeraldpay.dshackle.archive.config.RunConfig
 import io.emeraldpay.dshackle.archive.storage.BlockDetails
+import java.net.ConnectException
 import java.nio.ByteBuffer
 import java.nio.charset.StandardCharsets
 import java.time.Duration
@@ -21,7 +22,7 @@ import reactor.core.scheduler.Schedulers
 import reactor.util.retry.Retry
 
 abstract class BlockSource(
-        runConfig: RunConfig,
+        private val runConfig: RunConfig,
         private val client: ReactorBlockchainGrpc.ReactorBlockchainStub,
         private val objectMapper: ObjectMapper
 ) {
@@ -98,6 +99,8 @@ abstract class BlockSource(
                             .doOnError { t ->
                                 if (t is TimeoutException) {
                                     log.warn(t.message)
+                                } else if (t is ConnectException || t is io.grpc.StatusRuntimeException) {
+                                    log.error("Cannot connect to the Blockchain ${runConfig.connection?.describe()}: ${t.message}")
                                 } else {
                                     log.error("Unhandled error for $method($params)", t)
                                 }
