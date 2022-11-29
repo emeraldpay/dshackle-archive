@@ -20,6 +20,7 @@ import org.springframework.boot.SpringApplication
 import org.springframework.boot.autoconfigure.SpringBootApplication
 import org.springframework.context.annotation.Import
 import reactor.core.publisher.Mono
+import reactor.tools.agent.ReactorDebugAgent
 
 @SpringBootApplication(scanBasePackages = ["io.emeraldpay.dshackle.archive"])
 @Import(Config::class)
@@ -31,6 +32,8 @@ fun main(args: Array<String>) {
     RunConfigHolder.value = config
 
     log.info("Run: ${config.command}")
+
+    ReactorDebugAgent.init()
 
     val app = SpringApplication(App::class.java)
     app.setBannerMode(Banner.Mode.OFF)

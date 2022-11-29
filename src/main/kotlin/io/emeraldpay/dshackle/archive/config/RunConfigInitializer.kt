@@ -18,6 +18,10 @@ class RunConfigInitializer {
 
     companion object {
         private val log = LoggerFactory.getLogger(RunConfigInitializer::class.java)
+
+        const val DEFAULT_PARALLEL = 8
+        private const val DEFAULT_MIN_PARALLEL = 1
+        private const val DEFAULT_MAX_PARALLEL = 512
     }
 
     fun create(args: Array<String>): RunConfig? {
@@ -48,7 +52,7 @@ class RunConfigInitializer {
             options.addOption(it)
         }
 
-        Option(null, "parallel", true, "How many blocks to request in parallel. Range: 1..64. Default: 8").let {
+        Option(null, "parallel", true, "How many blocks to request in parallel. Range: ${DEFAULT_MIN_PARALLEL}..${DEFAULT_MAX_PARALLEL}. Default: ${DEFAULT_PARALLEL}").let {
             it.isRequired = false
             options.addOption(it)
         }
@@ -187,7 +191,8 @@ class RunConfigInitializer {
                 } ?: it
             }.let {
                 cmd.getOptionValue("parallel")?.let { value ->
-                    it.copy(parallel = value.toInt().coerceAtLeast(1).coerceAtMost(64))
+                    it.copy(parallel = value.toInt()
+                            .coerceAtLeast(DEFAULT_MIN_PARALLEL).coerceAtMost(DEFAULT_MAX_PARALLEL))
                 } ?: it
             }
 

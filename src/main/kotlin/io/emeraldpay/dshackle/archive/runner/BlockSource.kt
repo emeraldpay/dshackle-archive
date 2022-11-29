@@ -29,17 +29,26 @@ abstract class BlockSource(
 
     companion object {
         private val log = LoggerFactory.getLogger(BlockSource::class.java)
-
-        private const val threads = 20
     }
 
     private val timeout = runConfig.connection!!.timeout
-    val parallelBlock = runConfig.connection!!.parallel
-    val parallelTx = parallelBlock * 4
+    val parallel = runConfig.connection!!.parallel
+            .coerceAtLeast(4)
+    val parallelBlock = parallel
+            .coerceAtLeast(1)
+            .coerceAtMost(4)
+    val parallelTx = (parallelBlock * 8)
+            .coerceAtMost(parallel)
 
-    protected val scheduler = Schedulers.boundedElastic()
+    protected val scheduler = Schedulers.newBoundedElastic(
+            parallel, Integer.MAX_VALUE, "blockchain-data"
+    )
     protected val chain = Common.ChainRef.forNumber(runConfig.blockchain.id)
     protected val id = AtomicInteger(0)
+
+    init {
+        log.info("Run up to $parallel requests in parallel (query $parallelBlock blocks * $parallelTx tx)")
+    }
 
     abstract fun getDataAtHeight(height: Long): Mono<BlockDetails>
     abstract fun getBlockIdAtHeight(height: Long): Mono<String>
@@ -49,7 +58,10 @@ abstract class BlockSource(
         return Flux.range(start.toInt(), limit.toInt())
                 .flatMapSequential({
                     getDataAtHeight(it.toLong()).subscribeOn(scheduler)
-                }, parallelBlock)
+                }, parallelBlock, parallelBlock)
+                .onBackpressureBuffer(64) {
+                    log.error("Too many blocks in queue to archive. Decrease the value for --parallel option")
+                }
     }
 
     fun executeAndReadMap(method: String, params: List<Any>): Mono<Result<Map<String, Any>>> {

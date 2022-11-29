@@ -1,5 +1,6 @@
 package io.emeraldpay.dshackle.archive.runner
 
+import java.time.Duration
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicLong
@@ -7,7 +8,8 @@ import java.util.concurrent.atomic.AtomicReference
 import org.slf4j.LoggerFactory
 
 class ProgressIndicator(
-        private val n: Int = 5
+        private val n: Int = 5,
+        private val opLabel: String = "op"
 ) {
 
     companion object {
@@ -17,6 +19,8 @@ class ProgressIndicator(
     private val counter = AtomicInteger(0)
     private val history = AtomicReference<List<HistoryItem>>(emptyList())
     private val timer = AtomicLong(System.currentTimeMillis())
+
+    private val period = Duration.ofSeconds(60)
 
     fun start() {
         val time = timer.updateAndGet { System.currentTimeMillis() }
@@ -31,7 +35,7 @@ class ProgressIndicator(
         }
         val time = System.currentTimeMillis()
         val timeUpdated = timer.updateAndGet {
-            if (it < time - TimeUnit.MINUTES.toMillis(10)) {
+            if (it < time - period.toMillis()) {
                 time
             } else {
                 it
@@ -67,7 +71,7 @@ class ProgressIndicator(
             return
         }
         val opsPerMin = countDelta / minutes
-        log.info("Processing: $opsPerMin op/min")
+        log.info("Processing: $opsPerMin $opLabel/min")
     }
 
     data class HistoryItem(

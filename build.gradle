@@ -76,6 +76,7 @@ dependencies {
 
     implementation 'io.projectreactor:reactor-core:' + reactorVersion
     implementation 'io.projectreactor.netty:reactor-netty:' + reactorNettyVersion
+    implementation 'io.projectreactor:reactor-tools:' + reactorVersion
     implementation "com.fasterxml.jackson.module:jackson-module-kotlin"
     implementation "com.fasterxml.jackson.datatype:jackson-datatype-jdk8"
     implementation "com.fasterxml.jackson.datatype:jackson-datatype-jsr310"

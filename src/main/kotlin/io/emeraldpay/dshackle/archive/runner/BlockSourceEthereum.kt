@@ -176,7 +176,13 @@ class BlockSourceEthereum(
             Mono.just(Optional.empty())
         }
 
-        return Mono.zip(json, receiptJson, raw, traceJson, stateDiffJson).map {
+        return Mono.zip(
+                json.subscribeOn(scheduler),
+                receiptJson.subscribeOn(scheduler),
+                raw.subscribeOn(scheduler),
+                traceJson.subscribeOn(scheduler),
+                stateDiffJson.subscribeOn(scheduler)
+        ).map {
             val jsonResult = it.t1
             val receiptResult = it.t2
             TransactionDetails(

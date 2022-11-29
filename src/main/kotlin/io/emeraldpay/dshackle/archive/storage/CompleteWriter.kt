@@ -40,18 +40,32 @@ class CompleteWriter(
     }
 
     fun consume(dataSource: Flux<BlockDetails>, chunk: Chunk): Mono<Void> {
+        val progress = ProgressIndicator(opLabel = "blocks")
         //NOTE rewrites the files
         val blockFile = configuredFilenameGenerator.fileFor(FileType.BLOCKS, chunk)
         val blockWrt = blocksWriter.open(blockFile)
         val txFile = configuredFilenameGenerator.fileFor(FileType.TRANSACTIONS, chunk)
         val txWrt = transactionsWriter.open(txFile)
         val saving = dataSource
-                .map { block ->
-                    block.transactions.forEach { tx ->
-                        txWrt.append(block, tx)
-                    }
-                    blockWrt.append(block)
-                    1
+                .doOnSubscribe {
+                    progress.start()
+                }
+                .flatMap({ block ->
+                    Mono.zip(
+                            Mono.fromCallable {
+                                block.transactions.forEach { tx ->
+                                    txWrt.append(block, tx)
+                                }
+                                1
+                            }.subscribeOn(Schedulers.boundedElastic()),
+                            Mono.fromCallable {
+                                blockWrt.append(block)
+                                1
+                            }.subscribeOn(Schedulers.boundedElastic())
+                    ).then(Mono.just(1))
+                }, 1)
+                .doOnNext {
+                    progress.onNext()
                 }
                 .doFinally {
                     txWrt.close()
@@ -87,7 +101,7 @@ class CompleteWriter(
     }
 
     fun consumeBlocks(dataSource: Flux<Block>) : Mono<Int> {
-        val progress = ProgressIndicator()
+        val progress = ProgressIndicator(opLabel = "blocks")
         val startTime = System.currentTimeMillis()
         return dataSource
                 .doOnSubscribe {
@@ -119,7 +133,7 @@ class CompleteWriter(
     }
 
     fun consumeTransactions(dataSource: Flux<Transaction>) : Mono<Int> {
-        val progress = ProgressIndicator()
+        val progress = ProgressIndicator(opLabel = "transactions")
         val startTime = System.currentTimeMillis()
         return dataSource
                 .doOnSubscribe {
