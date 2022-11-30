@@ -51,6 +51,15 @@ class BlockSourceEthereum(
 
     override fun getDataAtHeight(height: Long): Mono<BlockDetails> {
         return getBlock(height)
+                .flatMap {
+                    if (it.result == null) {
+                        log.warn("RPC returned a `null` response for a block at $height")
+                        Mono.error(IllegalStateException())
+                    } else {
+                        Mono.just(it)
+                    }
+                }
+                .retryWhen(Retry.backoff(10, Duration.ofSeconds(60)))
                 .doOnSubscribe {
                     if (log.isTraceEnabled) {
                         log.trace("Get data for block at $height")
