@@ -66,7 +66,11 @@ fun main(args: Array<String>) {
         RunConfig.Command.FIX -> ctx.getBean(RunFix::class.java).run()
         RunConfig.Command.VERIFY -> ctx.getBean(RunVerify::class.java).run()
     }
-    runner.block()
-    // make sure it exits after the completion even if there are still running threads
-    exitProcess(0)
+    try {
+        runner.block()
+    } finally {
+        log.info("Done: ${config.command}")
+        // make sure it exits after the completion even if there are still running threads
+        exitProcess(0)
+    }
 }

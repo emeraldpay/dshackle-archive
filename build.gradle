@@ -21,7 +21,7 @@ plugins {
     id 'java'
     id 'groovy'
     id 'idea'
-    id 'maven'
+    id 'maven-publish'
     id 'application'
 
     id "org.jetbrains.kotlin.jvm" version '1.7.10'
@@ -70,7 +70,10 @@ dependencies {
     implementation "io.emeraldpay.etherjar:etherjar-rpc-emerald:$etherjarVersion"
     implementation "io.emeraldpay:emerald-api:0.12-alpha.2"
 
+    implementation "io.grpc:grpc-stub:$grpcVersion"
     implementation "io.grpc:grpc-protobuf:$grpcVersion"
+    implementation "io.grpc:grpc-protobuf-lite:$grpcVersion"
+    implementation "io.grpc:grpc-api:$grpcVersion"
     implementation "io.grpc:grpc-core:$grpcVersion"
     implementation "io.grpc:grpc-netty:$grpcVersion"
 
@@ -100,8 +103,9 @@ dependencies {
         exclude group: "com.linkedin.avroutil1", module: "helper"
     }
 
-    implementation 'com.google.cloud:google-cloud-storage:2.4.2'
-    implementation 'com.google.cloud:google-cloud-pubsub:1.117.0'
+    implementation platform('com.google.cloud:libraries-bom:26.4.0')
+    implementation 'com.google.cloud:google-cloud-storage'
+    implementation 'com.google.cloud:google-cloud-pubsub'
 
     implementation "org.jetbrains.kotlin:kotlin-stdlib-jdk8"
     implementation "org.jetbrains.kotlin:kotlin-reflect"
