@@ -5,18 +5,16 @@ import com.fasterxml.jackson.databind.ObjectMapper
 import com.fasterxml.jackson.databind.module.SimpleModule
 import com.fasterxml.jackson.datatype.jdk8.Jdk8Module
 import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule
-import io.emeraldpay.api.proto.ReactorBlockchainGrpc
+import io.emeraldpay.api.EmeraldConnection
+import io.emeraldpay.api.blockchain.BlockchainApi
 import io.emeraldpay.dshackle.archive.config.RunConfig
 import io.emeraldpay.dshackle.archive.config.RunConfigHolder
-import io.emeraldpay.grpc.EmeraldApi
 import org.slf4j.LoggerFactory
-import org.springframework.beans.factory.annotation.Autowired
 import org.springframework.context.annotation.Bean
 import org.springframework.context.annotation.Configuration
-import org.springframework.core.env.Environment
-import java.text.SimpleDateFormat
-import java.util.*
 import org.springframework.context.annotation.Profile
+import java.text.SimpleDateFormat
+import java.util.TimeZone
 
 @Configuration
 open class Config {
@@ -32,10 +30,10 @@ open class Config {
 
     @Bean
     @Profile("run-archive", "run-stream", "run-fix", "run-verify")
-    fun dshackleClient(runConfig: RunConfig): ReactorBlockchainGrpc.ReactorBlockchainStub? {
+    fun dshackleClient(runConfig: RunConfig): BlockchainApi? {
         val connectionConfig = runConfig.connection ?: return null
         log.info("Connect to ${connectionConfig.host}:${runConfig.connection.port}")
-        return EmeraldApi.newBuilder()
+        val connection = EmeraldConnection.newBuilder()
                 .connectTo(
                         runConfig.connection.host,
                         runConfig.connection.port
@@ -54,7 +52,7 @@ open class Config {
                 // So the Dshackle Archive Java options must be tuned for such usage scenario.
                 .maxMessageSize(Int.MAX_VALUE)
                 .build()
-                .blockchainApi
+        return BlockchainApi(connection)
     }
 
     @Bean

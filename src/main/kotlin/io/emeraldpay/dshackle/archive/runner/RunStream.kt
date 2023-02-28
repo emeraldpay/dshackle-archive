@@ -1,17 +1,11 @@
 package io.emeraldpay.dshackle.archive.runner
 
+import io.emeraldpay.api.blockchain.BlockchainApi
 import io.emeraldpay.api.proto.Common
-import io.emeraldpay.api.proto.ReactorBlockchainGrpc
 import io.emeraldpay.dshackle.archive.config.RunConfig
 import io.emeraldpay.dshackle.archive.storage.CompleteWriter
 import io.emeraldpay.dshackle.archive.storage.FilenameGenerator
 import io.emeraldpay.dshackle.archive.storage.TargetStorage
-import java.time.Duration
-import java.time.Instant
-import java.util.*
-import java.util.concurrent.ConcurrentHashMap
-import java.util.concurrent.ConcurrentSkipListSet
-import kotlin.collections.HashMap
 import org.slf4j.LoggerFactory
 import org.springframework.beans.factory.annotation.Autowired
 import org.springframework.context.annotation.Profile
@@ -20,16 +14,21 @@ import reactor.core.publisher.Flux
 import reactor.core.publisher.Mono
 import reactor.core.scheduler.Schedulers
 import reactor.util.function.Tuples
+import java.time.Duration
+import java.time.Instant
+import java.util.*
+import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.ConcurrentSkipListSet
 
 @Service
 @Profile("run-stream")
 class RunStream(
-        @Autowired private val blockSource: BlockSource,
-        @Autowired private val client: ReactorBlockchainGrpc.ReactorBlockchainStub,
-        @Autowired private val completeWriter: CompleteWriter,
-        @Autowired private val runConfig: RunConfig,
-        @Autowired private val targetStorage: TargetStorage,
-        @Autowired private val filenameGenerator: FilenameGenerator
+    @Autowired private val blockSource: BlockSource,
+    @Autowired private val client: BlockchainApi,
+    @Autowired private val completeWriter: CompleteWriter,
+    @Autowired private val runConfig: RunConfig,
+    @Autowired private val targetStorage: TargetStorage,
+    @Autowired private val filenameGenerator: FilenameGenerator
 ) : RunCommand {
 
     companion object {
@@ -88,7 +87,7 @@ class RunStream(
     }
 
     fun processWindow(window: ProcessingWindow): Mono<Void> {
-        val follow = client.subscribeHead(Common.Chain.newBuilder().setType(Common.ChainRef.forNumber(runConfig.blockchain.id)).build())
+        val follow = client.reactorStub.subscribeHead(Common.Chain.newBuilder().setType(Common.ChainRef.forNumber(runConfig.blockchain.id)).build())
                 .map { it.height }
                 .doOnNext(window::onHeight)
 

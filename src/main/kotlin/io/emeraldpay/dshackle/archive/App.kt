@@ -1,5 +1,6 @@
 package io.emeraldpay.dshackle.archive
 
+import io.emeraldpay.api.BlockchainType
 import io.emeraldpay.dshackle.archive.config.RunConfig
 import io.emeraldpay.dshackle.archive.config.RunConfigHolder
 import io.emeraldpay.dshackle.archive.config.RunConfigInitializer
@@ -10,10 +11,6 @@ import io.emeraldpay.dshackle.archive.runner.RunFix
 import io.emeraldpay.dshackle.archive.runner.RunReport
 import io.emeraldpay.dshackle.archive.runner.RunStream
 import io.emeraldpay.dshackle.archive.runner.RunVerify
-import io.emeraldpay.grpc.BlockchainType
-import java.util.*
-import kotlin.collections.ArrayList
-import kotlin.system.exitProcess
 import org.slf4j.LoggerFactory
 import org.springframework.boot.Banner
 import org.springframework.boot.SpringApplication
@@ -21,6 +18,8 @@ import org.springframework.boot.autoconfigure.SpringBootApplication
 import org.springframework.context.annotation.Import
 import reactor.core.publisher.Mono
 import reactor.tools.agent.ReactorDebugAgent
+import java.util.*
+import kotlin.system.exitProcess
 
 @SpringBootApplication(scanBasePackages = ["io.emeraldpay.dshackle.archive"])
 @Import(Config::class)

@@ -3,28 +3,28 @@ package io.emeraldpay.dshackle.archive.runner
 import com.fasterxml.jackson.databind.ObjectMapper
 import com.fasterxml.jackson.databind.util.ByteBufferBackedInputStream
 import com.google.protobuf.ByteString
+import io.emeraldpay.api.blockchain.BlockchainApi
 import io.emeraldpay.api.proto.BlockchainOuterClass
 import io.emeraldpay.api.proto.Common
-import io.emeraldpay.api.proto.ReactorBlockchainGrpc
 import io.emeraldpay.dshackle.archive.config.RunConfig
 import io.emeraldpay.dshackle.archive.storage.BlockDetails
-import java.net.ConnectException
-import java.nio.ByteBuffer
-import java.nio.charset.StandardCharsets
-import java.time.Duration
-import java.util.concurrent.TimeoutException
-import java.util.concurrent.atomic.AtomicInteger
 import org.apache.commons.lang3.StringUtils
 import org.slf4j.LoggerFactory
 import reactor.core.publisher.Flux
 import reactor.core.publisher.Mono
 import reactor.core.scheduler.Schedulers
 import reactor.util.retry.Retry
+import java.net.ConnectException
+import java.nio.ByteBuffer
+import java.nio.charset.StandardCharsets
+import java.time.Duration
+import java.util.concurrent.TimeoutException
+import java.util.concurrent.atomic.AtomicInteger
 
 abstract class BlockSource(
-        private val runConfig: RunConfig,
-        private val client: ReactorBlockchainGrpc.ReactorBlockchainStub,
-        private val objectMapper: ObjectMapper
+    private val runConfig: RunConfig,
+    private val client: BlockchainApi,
+    private val objectMapper: ObjectMapper
 ) {
 
     companion object {
@@ -102,7 +102,7 @@ abstract class BlockSource(
                             .setChain(chain)
                             .addItems(callItem)
                             .build()
-                    client.nativeCall(call)
+                    client.reactorStub.nativeCall(call)
                             .subscribeOn(scheduler)
                             .timeout(
                                     timeout,

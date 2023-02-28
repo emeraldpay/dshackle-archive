@@ -1,10 +1,10 @@
 package io.emeraldpay.dshackle.archive.config
 
 import com.fasterxml.jackson.annotation.JsonValue
+import io.emeraldpay.api.Chain
 import io.emeraldpay.dshackle.archive.avro.BlockchainType
-import io.emeraldpay.grpc.Chain
 import java.time.Duration
-import java.util.*
+import java.util.Locale
 
 data class RunConfig(
         val command: Command,
@@ -36,9 +36,9 @@ data class RunConfig(
         }
     }
 
-    val chainType: BlockchainType = when (io.emeraldpay.grpc.BlockchainType.from(blockchain)) {
-        io.emeraldpay.grpc.BlockchainType.ETHEREUM -> BlockchainType.ETHEREUM
-        io.emeraldpay.grpc.BlockchainType.BITCOIN -> BlockchainType.BITCOIN
+    val chainType: BlockchainType = when (io.emeraldpay.api.BlockchainType.from(blockchain)) {
+        io.emeraldpay.api.BlockchainType.ETHEREUM -> BlockchainType.ETHEREUM
+        io.emeraldpay.api.BlockchainType.BITCOIN -> BlockchainType.BITCOIN
         else -> throw IllegalStateException("Unsupported chain: $blockchain")
     }
 
