@@ -1,7 +1,7 @@
 package io.emeraldpay.dshackle.archive.runner
 
 import com.fasterxml.jackson.databind.ObjectMapper
-import io.emeraldpay.api.proto.ReactorBlockchainGrpc
+import io.emeraldpay.api.blockchain.BlockchainApi
 import io.emeraldpay.dshackle.archive.config.RunConfig
 import io.emeraldpay.dshackle.archive.storage.BlockDetails
 import io.emeraldpay.dshackle.archive.storage.TransactionDetails
@@ -27,7 +27,7 @@ import java.util.*
 @Service
 @Profile("!run-copy & !run-report & ethereum & with-blockchain")
 class BlockSourceEthereum(
-        @Autowired private val client: ReactorBlockchainGrpc.ReactorBlockchainStub,
+        @Autowired private val client: BlockchainApi,
         @Autowired private val objectMapper: ObjectMapper,
         @Autowired private val runConfig: RunConfig
 ) : BlockSource(runConfig, client, objectMapper) {

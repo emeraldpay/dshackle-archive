@@ -1,12 +1,10 @@
 package io.emeraldpay.dshackle.archive.runner
 
 import com.fasterxml.jackson.databind.ObjectMapper
-import io.emeraldpay.api.proto.ReactorBlockchainGrpc
+import io.emeraldpay.api.blockchain.BlockchainApi
 import io.emeraldpay.dshackle.archive.config.RunConfig
 import io.emeraldpay.dshackle.archive.storage.BlockDetails
 import io.emeraldpay.dshackle.archive.storage.TransactionDetails
-import java.nio.ByteBuffer
-import java.time.Instant
 import org.apache.commons.codec.binary.Hex
 import org.slf4j.LoggerFactory
 import org.springframework.beans.factory.annotation.Autowired
@@ -14,11 +12,13 @@ import org.springframework.context.annotation.Profile
 import org.springframework.stereotype.Service
 import reactor.core.publisher.Flux
 import reactor.core.publisher.Mono
+import java.nio.ByteBuffer
+import java.time.Instant
 
 @Service
 @Profile("!run-copy & !run-compact & !run-report & bitcoin & with-blockchain")
 class BlockSourceBitcoin(
-        @Autowired private val client: ReactorBlockchainGrpc.ReactorBlockchainStub,
+        @Autowired private val client: BlockchainApi,
         @Autowired private val objectMapper: ObjectMapper,
         @Autowired private val runConfig: RunConfig
 ) : BlockSource(runConfig, client, objectMapper) {
