@@ -99,4 +99,8 @@ open class FilenameGenerator(
     fun rangePadded(block: Long): String {
         return StringUtils.leftPad(block.toString(), 9, "0")
     }
+
+    fun maxLevelValue(): String {
+        return StringUtils.leftPad("9", 9, "9")
+    }
 }
