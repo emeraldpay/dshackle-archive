@@ -46,24 +46,30 @@ open class GSStorageAccess(
 
     override fun listArchiveLevel0(height: Long): Flux<String> {
         // use separate filters for Stream files and Ranges,
-        // because for Stream we want to narrow the scope to 1000 files at the level 1
-        // otherwise a filled storage gives up to two million files to process on level 0
-        val query =listOf(
-                ListQuery(path + filenameGenerator.getLevel0(height) + "/" + filenameGenerator.getLevel1(height) + "/",
-                        googleStorage.bucketPath + "/" + filenameGenerator.getIndividualFilename(FileType.BLOCKS.asTypeSingle(), height),
+        // it stops processing stream files when last block is reached and starts processing ranges form given height
+        val query = listOf(
+                ListQuery(
+                    prefix = path + filenameGenerator.getLevel0(height) + "/", // + filenameGenerator.getLevel1(height), // + "/",
+                    rangeStart = googleStorage.bucketPath + "/" + filenameGenerator.getIndividualFilename(FileType.BLOCKS.asTypeSingle(), height),
+                    rangeEnd = path + filenameGenerator.getLevel0(height) + "/" + filenameGenerator.maxLevelValue() // stop at the max level value, before range-* starts
                 ),
                 ListQuery(path + filenameGenerator.getLevel0(height) + "/",
                         googleStorage.bucketPath + "/" + filenameGenerator.getRangeFilename(FileType.BLOCKS.asTypeSingle(), Chunk(height, 0)),
                 ),
         )
+        log.info("Query lists for for: $query")
         return Flux.fromIterable(query)
-                .flatMap { prefix ->
-                    Flux.from(BlobsPublisher(googleStorage.storage, googleStorage.bucket, prefix.prefix, prefix.rangeStart))
-                }
+                .flatMap { query(it) }
                 .map {
                     blockchainDir + it.blobId.name.substring(this.path.length)
                 }
+            .doOnNext {
+                log.info("File: $it")
+            }
     }
+
+    fun query(query: ListQuery): Flux<BlobInfo> =
+        Flux.from(BlobsPublisher(googleStorage.storage, googleStorage.bucket, query.prefix, query.rangeStart, query.rangeEnd))
 
     override fun deleteArchives(files: List<String>): Mono<Void> {
         return Flux.fromIterable(files)
@@ -103,20 +109,21 @@ open class GSStorageAccess(
     data class ListQuery(
             val prefix: String,
             val rangeStart: String,
+            val rangeEnd: String? = null,
     )
-
 
     class BlobsPublisher(
             private val storage: Storage,
             private val bucket: String,
             private val path: String,
             private val rangeStart: String?,
-    ) : Publisher<Blob> {
+            private val rangeEnd: String?,
+    ) : Publisher<BlobInfo> {
 
         private var currentPage: Page<Blob>? = null
         private var index: Int = 0
 
-        override fun subscribe(s: Subscriber<in Blob>) {
+        override fun subscribe(s: Subscriber<in BlobInfo>) {
             val cancelled = AtomicBoolean(false)
             val limit = AtomicLong(0)
             s.onSubscribe(object : Subscription {
@@ -139,6 +146,12 @@ open class GSStorageAccess(
                 ).let {
                     if (rangeStart != null) {
                         it + listOf(Storage.BlobListOption.startOffset(rangeStart))
+                    } else {
+                        it
+                    }
+                }.let {
+                    if (rangeEnd != null) {
+                        it + listOf(Storage.BlobListOption.endOffset(rangeEnd))
                     } else {
                         it
                     }
