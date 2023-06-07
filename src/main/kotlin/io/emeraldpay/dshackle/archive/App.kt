@@ -11,9 +11,12 @@ import io.emeraldpay.dshackle.archive.runner.RunFix
 import io.emeraldpay.dshackle.archive.runner.RunReport
 import io.emeraldpay.dshackle.archive.runner.RunStream
 import io.emeraldpay.dshackle.archive.runner.RunVerify
-import java.util.*
-import kotlin.collections.ArrayList
+import java.lang.management.ManagementFactory
+import java.time.Duration
+import java.util.Locale
+import kotlin.concurrent.thread
 import kotlin.system.exitProcess
+import kotlin.time.toKotlinDuration
 import org.slf4j.LoggerFactory
 import org.springframework.boot.Banner
 import org.springframework.boot.SpringApplication
@@ -32,6 +35,7 @@ fun main(args: Array<String>) {
     RunConfigHolder.value = config
 
     log.info("Run: ${config.command}")
+    log.info("Run arguments: {}", args.joinToString(" "))
 
     ReactorDebugAgent.init()
 
@@ -68,9 +72,23 @@ fun main(args: Array<String>) {
     }
     try {
         runner.block()
+        log.info("Attempting to close the context")
+        ctx.close()
     } finally {
         log.info("Done: ${config.command}")
-        // make sure it exits after the completion even if there are still running threads
-        exitProcess(0)
+        val bean = ManagementFactory.getThreadMXBean()
+        val infos = bean.dumpAllThreads(true, true)
+        val runningThreads = infos.filter { it.threadName != "main" && !it.isDaemon }
+        if (runningThreads.isNotEmpty()) {
+            log.warn("Some threads ({}) are still running and prevent application to exit: \n{}", runningThreads.size, runningThreads.map { it.toString() })
+            // make sure it exits after the completion even if there are still running threads
+            thread(isDaemon = true) {
+                val waitTime = Duration.ofSeconds(10)
+                log.warn("Wait for {} before calling exit", waitTime.toKotlinDuration().toString())
+                Thread.sleep(waitTime.toMillis())
+                log.warn("Calling exit")
+                exitProcess(0)
+            }
+        }
     }
 }
