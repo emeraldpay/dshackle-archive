@@ -1,5 +1,6 @@
 package io.emeraldpay.dshackle.archive
 
+import io.emeraldpay.api.BlockchainType
 import io.emeraldpay.dshackle.archive.config.RunConfig
 import io.emeraldpay.dshackle.archive.config.RunConfigHolder
 import io.emeraldpay.dshackle.archive.config.RunConfigInitializer
@@ -10,7 +11,6 @@ import io.emeraldpay.dshackle.archive.runner.RunFix
 import io.emeraldpay.dshackle.archive.runner.RunReport
 import io.emeraldpay.dshackle.archive.runner.RunStream
 import io.emeraldpay.dshackle.archive.runner.RunVerify
-import io.emeraldpay.grpc.BlockchainType
 import java.util.*
 import kotlin.collections.ArrayList
 import kotlin.system.exitProcess
