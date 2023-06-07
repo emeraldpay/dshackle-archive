@@ -1,10 +1,6 @@
 package io.emeraldpay.dshackle.archive.config
 
-import io.emeraldpay.grpc.Chain
-import java.nio.file.Files
-import java.time.Duration
-import java.util.*
-import java.util.regex.Pattern
+import io.emeraldpay.api.Chain
 import org.apache.commons.cli.CommandLine
 import org.apache.commons.cli.CommandLineParser
 import org.apache.commons.cli.DefaultParser
@@ -13,6 +9,10 @@ import org.apache.commons.cli.Option
 import org.apache.commons.cli.Options
 import org.apache.commons.cli.ParseException
 import org.slf4j.LoggerFactory
+import java.nio.file.Files
+import java.time.Duration
+import java.util.Locale
+import java.util.regex.Pattern
 
 class RunConfigInitializer {
 
@@ -228,7 +228,7 @@ class RunConfigInitializer {
         }
 
         val archiveOptions = cmd.getOptionValue("include")?.let {
-            val targets = it.split(",").map(String::trim).map(String::toLowerCase)
+            val targets = it.split(",").map(String::trim).map(String::lowercase)
             RunConfig.ArchiveOptions(
                     trace = targets.contains("trace"),
                     stateDiff = targets.contains("statediff") || targets.contains("state")
