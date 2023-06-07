@@ -1,12 +1,9 @@
 package io.emeraldpay.dshackle.archive.runner
 
 import io.emeraldpay.dshackle.archive.BlocksRange
-import io.emeraldpay.dshackle.archive.FileType
 import io.emeraldpay.dshackle.archive.config.RunConfig
-import io.emeraldpay.dshackle.archive.model.AlignedChunkIterator
 import io.emeraldpay.dshackle.archive.model.Chunk
 import io.emeraldpay.dshackle.archive.storage.CompleteWriter
-import java.util.function.Function
 import org.slf4j.LoggerFactory
 import org.springframework.beans.factory.annotation.Autowired
 import org.springframework.context.annotation.Profile
@@ -42,10 +39,10 @@ class RunFix(
                 .flatMap {
                     val range = it.wholeChunk()
                     val missing: Flux<Chunk> = getMissing(range)
-                            .switchIfEmpty {
+                            .switchIfEmpty(
                                 Mono.fromCallable { log.info("No broken ranges") }
-                                        .then(Mono.empty<Chunk>())
-                            }
+                                        .then(Mono.empty())
+                            )
                             .doOnError { t -> log.error("Failed to find missing blocks", t) }
 
                     if (dryRun) {
