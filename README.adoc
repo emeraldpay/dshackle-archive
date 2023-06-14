@@ -1,19 +1,33 @@
 = Dshackle Archive
 
-Dshackle Archive is a tool to copy JSON data from a blockchain to a plain files storage (or a Data Lake) for a further processing.
-I.e., it's a _E_ step from ETL. Extraction of data.
+image:https://github.com/emeraldpay/dshackle-archive/workflows/Tests/badge.svg["Unit Tests"]
+image:https://codecov.io/gh/emeraldpay/dshackle-archive/branch/master/graph/badge.svg["Coverage",link="https://codecov.io/gh/emeraldpay/dshackle-archive"]
+image:https://img.shields.io/docker/pulls/emeraldpay/dshackle-archive?style=flat-square["Docker",link="https://hub.docker.com/r/emeraldpay/dshackle-archive"]
+image:https://img.shields.io/github/license/emeraldpay/dshackle-archive.svg?style=flat-square&maxAge=2592000["License",link="https://github.com/emeraldpay/dshackle-archive/blob/master/LICENSE"]
+image:https://img.shields.io/discord/1107840420240707704?style=flat-square[Discord,link="https://discord.gg/k9HpF9Jqee"]
 
+Dshackle Archive is a tool that efficiently extracts blockchain data in JSON format and archives it into Avro files for scalable analysis using traditional Big Data tools. It supports Bitcoin and Ethereum-compatible blockchains and can operate in both batch mode for historical data and streaming mode for real-time data extraction.
+
+Dshackle Archive copies JSON data from a blockchain to a plain files archive
+(i.e., it's the _Extraction_ of data, as in ETL).
 The archive is Avro files which contain blocks and transaction details fetched from blockchain nodes via their API.
 The Avro contain the JSON responses _as is_.
-See more about Avro structure and Java stubs at https://github.com/emeraldpay/dshackle-archive-avro
+
 
 Features:
 
-- Extracts data from Bitcoin and Ethereum compatible blockchains
-- Produces data in Avro format, where one file could be a _range_ of blocks or a _separate_ file per each block
+- Extracts data from *Bitcoin and Ethereum* compatible blockchains.
+- Produces data in *Avro format*, where one file could be a _range_ of blocks or a _separate_ file per each block
+- Archival can be scaled by using multiple blockchain nodes by using https://github.com/emeraldpay/dshackle[Dshackle Load Balancer].
 - Runs in batch archive mode, when _historical data_ is archived; or in a _streaming mode_ when only fresh data is added to the archive
 - Archive to a Filesystem or Google Storage
 - Produces Notification via Google PubSub or as a JSON
+
+The general idea it to use Dshackle Archive to copy data from a blockchain to a plain files, keeping the data structures as is, and then use traditional Big Data tools (Spark, Beam, etc.) to analyse data in a scalable way.
+
+NOTE: It takes several weeks to archive the whole blockchain. It's a very IO intensive operation, but can be scaled by using multiple nodes.
+
+NOTE: It uses https://github.com/emeraldpay/dshackle[Dshackle] protocol to connect to the blockchain, not a plain HTTP/JSON RPC. So a Dshackle instance is required to be running.
 
 == Usage
 
@@ -22,30 +36,166 @@ Features:
 ----
 usage: dshackle-archive [options] <command>
 Copy blockchain data into files for further analysis
-    --authGCP <arg>         Path to GCP Authentication JSON
- -b,--blockchain <arg>      Blockchain
- -c,--connection <arg>      Connection (host:port)
-    --continue              Continue from the last file if set
- -d,--dir <arg>             Target directory
-    --dirBlocks <arg>       How many blocks keep per subdirectory
- -h,--help                  Show Help
- -i,--inputs <arg>          Input File(s). Accepts a glob pattern for filename
-    --include <arg>         Include optional details in JSON (trace, stateDiff)
-    --notify.dir <arg>      Write notifications as JSON line to the specified dir in a file
-                            <dshackle-archive-%STARTTIME.jsonl>
-    --notify.pubsub <arg>   Send notifications as JSON to the specified Google Pubsub topic
-    --prefix <arg>          File prefix
- -r,--range <arg>           Blocks Range (N...M)
-    --rangeChunk <arg>      Range chunk size (default 1000)
-    --tail <arg>            Last T block to ensure are archived in streaming mode
-
+    --auth.gcp <arg>             Path to GCP Authentication JSON
+ -b,--blockchain <arg>           Blockchain
+    --back                       Apply the blocks range (--range option)
+                                 back from to the current blockchain
+                                 height, i.e. process N..M not starting
+                                 not from zero by from the current height
+ -c,--connection <arg>           Connection (host:port)
+    --compact.forks              Should accept all blocks including forks
+                                 in stream compaction
+    --connection.notls           Disable TLS
+    --connection.timeout <arg>   Timeout (in seconds) to get data from
+                                 blockchain before retrying. Default: 60
+                                 seconds
+    --continue                   Continue from the last file if set
+ -d,--dir <arg>                  Target directory
+    --dirBlocks <arg>            How many blocks keep per subdirectory
+    --dryRun                     Do not modify the storage
+ -h,--help                       Show Help
+ -i,--inputs <arg>               Input File(s). Accepts a glob pattern for
+                                 filename
+    --include <arg>              Include optional details in JSON (trace,
+                                 stateDiff)
+    --notify.dir <arg>           Write notifications as JSON line to the
+                                 specified dir in a file
+                                 <dshackle-archive-%STARTTIME.jsonl>
+    --notify.pubsub <arg>        Send notifications as JSON to the
+                                 specified Google Pubsub topic
+    --parallel <arg>             How many blocks to request in parallel.
+                                 Range: 1..512. Default: 8
+    --prefix <arg>               File prefix
+ -r,--range <arg>                Blocks Range (N...M)
+    --rangeChunk <arg>           Range chunk size (default 1000)
+    --tail <arg>                 Last T block to ensure are archived in
+                                 streaming mode
 Available commands:
  archive - the main operation, copies data from a blockchain to archive
  stream  - append fresh blocks one by one to the archive
  compact - merge individual block files into larger range files
  copy    - copy/recover from existing archive by copying into a new one
+ report  - show summary on what is in archive for the specified range
+ fix     - fix archive by making new archives for missing chunks
+ verify  - verify that archive files contains required data and delete incomplete files
 ----
 
+=== Commands
+
+==== Archive
+
+The main operation, copies historical data from a blockchain to archive.
+
+The data is copied in ranges, and with default range of 1000 blocks it produces two files per range.
+One for blocks in that range, and another one with _all_ transactions in all blocks in that range.
+
+See <<archive-format>>.
+
+==== Stream
+
+Continuously append fresh blocks one by one to the archive.
+In addition to the copying, Dshackle archive can be configured to notify an external system about new blocks in the archive.
+
+Note that when it's in streaming mode the archives are writen in a per-block basis.
+I.e., each block comes with in a separate pair of two files.
+One for the block itself, and another one for all transactions in that block.
+To merge the individual files into larger ranges use `compact` command.
+
+To notify an external system, there are two options:
+
+- `--notify.dir` - write notifications as JSON line to the specified dir in a file `<dshackle-archive-%STARTTIME.jsonl>`
+- `--notify.pubsub` - send notifications as JSON to the specified Google Pubsub topic
+
+See <<notification-format>>.
+
+==== Compact
+
+Merge individual block files into larger range files.
+
+==== Copy
+
+Copy from one archive to another.
+
+Technically, you can copy files as is, but the command is useful because by using it you can change the range sizes for the target archive.
+Also, it can be used to recover from a corrupted archive, b/c it makes additional checks and so it skips the corrupted data.
+
+==== Report
+
+Show summary on what is in archive for the specified range.
+
+==== Fix
+
+Fixes the archive by checking if there are any missing blocks, and if so, it creates new archives for the missing blocks.
+
+==== Verify
+
+Verify that archive files contains required data and delete incomplete/corrupted files.
+The a `fix` command is supposed to run to download missing blocks.
+
+WARNING: This command is destructive, it deletes files from the archive.
+
+=== Archive Size
+
+Dshackle Archive copies and stored data as JSON responses from blockchain nodes the resulting archive is much larger that the node database size, which keeps data in a compact format.
+It uses Snappy compression for Avro files, which give a good compression ratio, but still the resulting archive is large.
+
+Average size of a 1000 blocks range (w/o expensive JSON such as `stateDiff` and `trace`):
+
+- ~300Mb for Ethereum
+- ~400Mb for Bitcoin
+
+And the whole archive (w/o expensive JSON such as `stateDiff` and `trace`):
+
+- ~2.5Tb for Ethereum
+- ~1.9Tb for Bitcoin
+
+=== Related projects:
+
+- Avro structure and Java stubs: https://github.com/emeraldpay/dshackle-archive-avro
+- Dshackle load balancer: https://github.com/emeraldpay/dshackle
+
+=== Project Roadmap
+
+- [ ] support AWS S3 as a storage
+- [ ] support Pulsar as a notification system
+- [ ] support Kafka as a notification system
+- [ ] archive to Cassandra
+
+=== FAQ
+
+==== How to organize the data gathering process?
+
+- First you need to archive the historical data, which may takes several week depending on how many and how fast nodes you have.
+- After finishing the initial archive, you run in the Streaming mode which append new blocks to the archive as they are mined.
+- Periodically (ex. once a day) you run Compaction to merge individual block files into larger range files.
+- Also, periodically (ex. once a day) you run a pair of Verify and Fix commands to ensure the integrity of the archive.
+
+==== What are supported blockchains?
+
+Dshackle requires only compatibility onj JSON RPC level, so technically it can work with any blockchain that uses similar API.
+I.e., it's compatible with all major blockchains, including Bitcoin, Ethereum, Binance Smart Chain, Polygon, etc.
+
+==== What blockchain API it uses?
+
+It uses https://github.com/emeraldpay/dshackle[Dshackle] protocol to connect to the blockchain, not a plain HTTP/JSON RPC.
+So a Dshackle instance is required to be running.
+
+Dshackle is a Load Balancer for Blockchain APIs, and it can route requests to multiple nodes, which scales up the archival throughput.
+
+==== How does Dshackle Archive ensure the integrity and accuracy?
+
+Dshackle provides two commands to ensure the integrity of the archive:
+
+- first you run `verify` command, which checks the archive and deletes incomplete or corrupted files
+- then you run `fix` command, which copies the data again for the blocks deleted in the previous step
+
+You can schedule the execution of these commands to run periodically, e.g. once a day.
+To avoid scanning the whole archive every time, you can specify a range to check, e.g. `--back --range 100...1100`.
+The option above specifies that is thould verify/fix only the last 1000 blocks, starting from 100 behind the current height.
+I.e., it goes backward from the current head block.
+
+
+[[archive-format]]
 === Archive Format
 
 For a complete descriptions, schema and libs to access Avro files please refer to https://github.com/emeraldpay/dshackle-archive-avro
@@ -76,15 +226,12 @@ Milliseconds since epoch
 ==== Transaction
 
 .Fields common between different blockchains
-- `blockchainType` - _type of blockchain_, as a definitions of what fields to expect.
-One of `ETHEREUM` or `BITCOIN`
-- `blockchainId` - actual blockchain id (`ETH`, `BTC`, etc)
-- `archiveTimestamp` - when the archive record was created.
-Milliseconds since epoch
+- `blockchainType` - _type of blockchain_, as a definitions of what fields to expect. One of `ETHEREUM` or `BITCOIN`
+- `blockchainId` - blockchain id (`ETH`, `BTC`, etc)
+- `archiveTimestamp` - when the archive record was created. Milliseconds since epoch
 - `height` - block height
 - `blockId` - block hash
-- `timestamp` - block timestamp.
-Milliseconds since epoch
+- `timestamp` - block timestamp. Milliseconds since epoch
 - `index` - index of the transaction in block
 - `txid` - hash or transaction id of the transaction
 - `json` - JSON response for that transaction
@@ -100,7 +247,8 @@ Milliseconds since epoch
 .Bitcoin specific fields
 - none
 
-=== Notifications format
+[[notification-format]]
+=== Notification format
 
 [source, json]
 ----
@@ -124,3 +272,29 @@ Milliseconds since epoch
 - `run` mode in which the Dshackle Archive is run (`archive`, `stream`, `copy` or `compact`)
 - `heightStart` and `heightEnd` range of blocks in the archived files
 - `location` a URL to the archived file
+
+== Community
+
+=== Development Chat
+
+Join our Discord chat to discuss development and ask questions:
+
+image:https://img.shields.io/discord/1107840420240707704?style=flat-square[Discord,link="https://discord.gg/k9HpF9Jqee"]
+
+
+== Commercial Support
+
+Want to support the project, prioritize a specific feature, or get commercial help with using Dshackle in your project?
+Please contact splix@emerald.cash to discuss the possibility.
+
+== License
+
+Copyright 2023 EmeraldPay, Inc
+
+Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software distributed under the License is distributed on an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and limitations under the License.
