@@ -109,4 +109,17 @@ class AlignedChunkIteratorSpec extends Specification {
             it.length == 2
         }
     }
+
+    def "Aligned chunk is not greater than initial chunk"() {
+        when:
+        def iter = new AlignedChunkIterator(2_199_998, 1, 5000)
+        def act = iter.chunks
+        then:
+        act.size() == 1
+        with(act[0]) {
+            it.startBlock == 2_199_998
+            it.endBlock == 2_199_998
+            it.length == 1
+        }
+    }
 }

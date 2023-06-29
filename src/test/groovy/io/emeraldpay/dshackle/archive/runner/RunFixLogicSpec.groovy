@@ -1,6 +1,8 @@
 package io.emeraldpay.dshackle.archive.runner
 
+import io.emeraldpay.dshackle.archive.BlocksRange
 import io.emeraldpay.dshackle.archive.FileType
+import io.emeraldpay.dshackle.archive.config.RunConfig
 import io.emeraldpay.dshackle.archive.model.Chunk
 import reactor.core.publisher.Flux
 import spock.lang.Specification
@@ -197,5 +199,34 @@ class RunFixLogicSpec extends Specification {
         archived[1] == new Chunk(35, 5)
         archived[2] == new Chunk(50, 10)
         archived[3] == new Chunk(70, 30)
+    }
+
+    def "Align correctly"() {
+        setup:
+        def range = [
+                new Chunk(0, 10),
+                new Chunk(10, 10),
+                new Chunk(30, 5),
+                new Chunk(40, 10),
+                new Chunk(60, 10),
+        ]
+
+        def runFix = new RunFixLogic()
+
+        when:
+
+        def target = new Chunk(0, 100)
+        def blocksRange = new BlocksRange(RunConfig.Range.forRange(0, 100, 100))
+        def aligned = Flux.fromIterable(range)
+                .transform(runFix.findBroken(target))
+                .transform(runFix.align(blocksRange))
+                .collectList().block()
+
+        then:
+        aligned.size() == 4
+        aligned[0] == new Chunk(20, 10)
+        aligned[1] == new Chunk(35, 5)
+        aligned[2] == new Chunk(50, 10)
+        aligned[3] == new Chunk(70, 30)
     }
 }
