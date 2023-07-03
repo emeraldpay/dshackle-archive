@@ -30,9 +30,9 @@ class AvroPublisher<T>(
     }
 
     private fun doComplete(subscriber: Subscriber<in T>, read: AtomicBoolean) {
+        close()
         subscriber.onComplete()
         read.set(true)
-        close()
     }
 
 
