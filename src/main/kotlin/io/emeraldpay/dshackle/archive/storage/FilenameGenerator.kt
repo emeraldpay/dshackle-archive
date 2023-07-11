@@ -5,10 +5,10 @@ import org.apache.commons.lang3.StringUtils
 import org.slf4j.LoggerFactory
 
 open class FilenameGenerator(
-        val versionId: String,
-        val parentDir: String,
-        val dirBlockSizeL1: Long = 1_000_000,
-        val dirBlockSizeL2: Long = 1_000,
+    val versionId: String,
+    val parentDir: String,
+    val dirBlockSizeL1: Long = 1_000_000,
+    val dirBlockSizeL2: Long = 1_000,
 ) {
 
     companion object {
@@ -19,7 +19,9 @@ open class FilenameGenerator(
     private val singleRegex = Regex("(\\d+)\\.(\\w+)\\.(\\w+\\.)?avro")
     private val version = if (StringUtils.isNotEmpty(versionId)) {
         ".$versionId"
-    } else ""
+    } else {
+        ""
+    }
 
     init {
         check(dirBlockSizeL1 > dirBlockSizeL2)
@@ -63,14 +65,14 @@ open class FilenameGenerator(
     fun getRangeFilename(type: String, chunk: Chunk): String {
         val level0 = chunk.startBlock / dirBlockSizeL1 * dirBlockSizeL1
         return listOf(
-                parentDir,
-                rangePadded(level0), "/",
-                "range-",
-                rangePadded(chunk.startBlock), "_", rangePadded(chunk.startBlock + chunk.length - 1),
-                ".",
-                type,
-                version,
-                ".avro"
+            parentDir,
+            rangePadded(level0), "/",
+            "range-",
+            rangePadded(chunk.startBlock), "_", rangePadded(chunk.startBlock + chunk.length - 1),
+            ".",
+            type,
+            version,
+            ".avro",
         ).joinToString("")
     }
 
@@ -78,6 +80,7 @@ open class FilenameGenerator(
         val level0 = height / dirBlockSizeL1 * dirBlockSizeL1
         return rangePadded(level0)
     }
+
     fun getLevel1(height: Long): String {
         val level1 = height / dirBlockSizeL2 * dirBlockSizeL2
         return rangePadded(level1)
@@ -85,14 +88,14 @@ open class FilenameGenerator(
 
     fun getIndividualFilename(type: String, height: Long): String {
         return listOf(
-                parentDir,
-                getLevel0(height), "/",
-                getLevel1(height), "/",
-                rangePadded(height),
-                ".",
-                type,
-                version,
-                ".avro"
+            parentDir,
+            getLevel0(height), "/",
+            getLevel1(height), "/",
+            rangePadded(height),
+            ".",
+            type,
+            version,
+            ".avro",
         ).joinToString("")
     }
 

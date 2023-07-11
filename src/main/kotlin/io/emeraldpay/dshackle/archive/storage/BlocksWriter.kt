@@ -1,12 +1,9 @@
 package io.emeraldpay.dshackle.archive.storage
 
-import io.emeraldpay.dshackle.archive.config.RunConfig
-import io.emeraldpay.dshackle.archive.avro.Block
 import io.emeraldpay.dshackle.archive.FileType
+import io.emeraldpay.dshackle.archive.avro.Block
+import io.emeraldpay.dshackle.archive.config.RunConfig
 import io.emeraldpay.dshackle.archive.model.Chunk
-import java.time.Instant
-import java.util.concurrent.locks.ReentrantLock
-import kotlin.concurrent.withLock
 import org.apache.avro.AvroRuntimeException
 import org.apache.avro.file.CodecFactory
 import org.apache.avro.file.DataFileWriter
@@ -14,12 +11,15 @@ import org.apache.avro.specific.SpecificDatumWriter
 import org.slf4j.LoggerFactory
 import org.springframework.beans.factory.annotation.Autowired
 import org.springframework.stereotype.Repository
+import java.time.Instant
+import java.util.concurrent.locks.ReentrantLock
+import kotlin.concurrent.withLock
 
 @Repository
 class BlocksWriter(
-        @Autowired private val configuredFilenameGenerator: ConfiguredFilenameGenerator,
-        @Autowired private val runConfig: RunConfig,
-        @Autowired private val targetStorage: TargetStorage,
+    @Autowired private val configuredFilenameGenerator: ConfiguredFilenameGenerator,
+    @Autowired private val runConfig: RunConfig,
+    @Autowired private val targetStorage: TargetStorage,
 ) {
 
     companion object {
@@ -55,11 +55,11 @@ class BlocksWriter(
     }
 
     class LocalFileAccess(
-            dataFileWriter: DataFileWriter<Block>,
-            private val runConfig: RunConfig,
-            path: String,
-            currentStorage: CurrentStorage,
-            access: StorageAccess,
+        dataFileWriter: DataFileWriter<Block>,
+        private val runConfig: RunConfig,
+        path: String,
+        currentStorage: CurrentStorage,
+        access: StorageAccess,
     ) : BlocksFileAccess, AutoCloseable, BaseAvroWriter<Block>(dataFileWriter, path, currentStorage, access) {
 
         private val writeLock = ReentrantLock()
@@ -99,7 +99,5 @@ class BlocksWriter(
                 throw t
             }
         }
-
     }
-
 }

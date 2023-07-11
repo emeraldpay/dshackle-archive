@@ -1,10 +1,9 @@
 package io.emeraldpay.dshackle.archive.storage
 
-import java.io.InputStream
-import java.io.OutputStream
 import org.apache.avro.file.SeekableInput
 import reactor.core.publisher.Flux
 import reactor.core.publisher.Mono
+import java.io.OutputStream
 
 interface StorageAccess {
 
@@ -31,7 +30,7 @@ interface StorageAccess {
     fun listArchive(height: Long): Flux<String> {
         val firstLevel0Pos = height / getDirBlockSizeL1()
         return listArchiveLevel0(height)
-                .concatWith(nextLevel0(firstLevel0Pos.toInt() + 1))
+            .concatWith(nextLevel0(firstLevel0Pos.toInt() + 1))
     }
 
     /**

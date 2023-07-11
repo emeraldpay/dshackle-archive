@@ -2,21 +2,16 @@ package io.emeraldpay.dshackle.archive.storage
 
 import com.linkedin.avro.fastserde.FastSpecificDatumReader
 import io.emeraldpay.dshackle.archive.avro.Transaction
-import java.nio.file.Path
-import java.util.concurrent.atomic.AtomicBoolean
 import org.apache.avro.file.DataFileReader
-import org.apache.avro.file.FileReader
-import org.apache.avro.file.SeekableFileInput
 import org.apache.avro.file.SeekableInput
 import org.apache.avro.specific.SpecificDatumReader
 import org.reactivestreams.Publisher
-import org.reactivestreams.Subscriber
-import org.reactivestreams.Subscription
 import org.slf4j.LoggerFactory
 import org.springframework.stereotype.Repository
+import java.nio.file.Path
 
 @Repository
-class TransactionsReader: AvroReader<Transaction> {
+class TransactionsReader : AvroReader<Transaction> {
 
     companion object {
         private val log = LoggerFactory.getLogger(TransactionsReader::class.java)
@@ -36,5 +31,4 @@ class TransactionsReader: AvroReader<Transaction> {
         val dataFileReader: DataFileReader<Transaction> = DataFileReader<Transaction>(file.toFile(), datumReader)
         return AvroPublisher(dataFileReader)
     }
-
 }

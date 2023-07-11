@@ -1,14 +1,14 @@
 package io.emeraldpay.dshackle.archive.storage.gcp
 
 import com.google.cloud.ReadChannel
-import java.nio.ByteBuffer
 import org.apache.avro.file.SeekableInput
 import org.slf4j.LoggerFactory
+import java.nio.ByteBuffer
 
 class SeekableChannelInput(
-        private val length: Long,
-        private val channel: ReadChannel,
-): SeekableInput {
+    private val length: Long,
+    private val channel: ReadChannel,
+) : SeekableInput {
 
     companion object {
         private val log = LoggerFactory.getLogger(SeekableChannelInput::class.java)
@@ -41,5 +41,4 @@ class SeekableChannelInput(
         }
         return size
     }
-
 }

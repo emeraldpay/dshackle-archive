@@ -1,15 +1,13 @@
 package io.emeraldpay.dshackle.archive.storage
 
-import java.nio.file.Files
-import java.nio.file.Path
 import org.apache.avro.file.DataFileWriter
 import org.slf4j.LoggerFactory
 
 abstract class BaseAvroWriter<T>(
-        val dataFileWriter: DataFileWriter<T>,
-        private val path: String,
-        private val currentStorage: CurrentStorage,
-        private val access: StorageAccess,
+    val dataFileWriter: DataFileWriter<T>,
+    private val path: String,
+    private val currentStorage: CurrentStorage,
+    private val access: StorageAccess,
 ) : AutoCloseable {
 
     companion object {

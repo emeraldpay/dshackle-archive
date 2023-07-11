@@ -7,7 +7,8 @@ import io.emeraldpay.dshackle.archive.model.Chunk
 import org.slf4j.LoggerFactory
 import org.springframework.beans.factory.annotation.Autowired
 import org.springframework.stereotype.Service
-import java.util.*
+import java.util.EnumMap
+import java.util.Locale
 
 @Service
 class ConfiguredFilenameGenerator(
@@ -53,5 +54,4 @@ class ConfiguredFilenameGenerator(
     fun fileFor(type: FileType, chunk: Chunk): String {
         return getRangeFilename(fileTypes[type]!!, chunk)
     }
-
 }

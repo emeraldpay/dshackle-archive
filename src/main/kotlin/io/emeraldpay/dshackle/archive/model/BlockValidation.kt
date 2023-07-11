@@ -2,10 +2,9 @@ package io.emeraldpay.dshackle.archive.model
 
 import io.emeraldpay.dshackle.archive.avro.Block
 import io.emeraldpay.dshackle.archive.avro.BlockchainType
-import io.emeraldpay.dshackle.archive.avro.Transaction
 import org.slf4j.LoggerFactory
 
-abstract class BlockValidation: Validator<Block> {
+abstract class BlockValidation : Validator<Block> {
 
     companion object {
         private val log = LoggerFactory.getLogger(BlockValidation::class.java)
@@ -18,13 +17,13 @@ abstract class BlockValidation: Validator<Block> {
         return null
     }
 
-    class EthereumBlockValidator(): BlockValidation() {
+    class EthereumBlockValidator() : BlockValidation() {
         override fun validate(value: Block): String? {
             return super.validate(value)
         }
     }
 
-    class BitcoinBlockValidator(): BlockValidation() {
+    class BitcoinBlockValidator() : BlockValidation() {
         override fun validate(value: Block): String? {
             return super.validate(value)
         }
@@ -44,9 +43,11 @@ abstract class BlockValidation: Validator<Block> {
                 BlockchainType.ETHEREUM -> {
                     EthereumBlockValidator()
                 }
+
                 BlockchainType.BITCOIN -> {
                     BitcoinBlockValidator()
                 }
+
                 else -> {
                     throw IllegalStateException("Invalid blockchain type: $blockchainType")
                 }

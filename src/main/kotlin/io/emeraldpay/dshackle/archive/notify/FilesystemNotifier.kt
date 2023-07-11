@@ -1,21 +1,21 @@
 package io.emeraldpay.dshackle.archive.notify
 
 import com.fasterxml.jackson.databind.ObjectMapper
+import org.slf4j.LoggerFactory
+import reactor.core.publisher.Mono
+import reactor.core.scheduler.Schedulers
 import java.nio.file.Files
 import java.nio.file.Path
 import java.nio.file.StandardOpenOption
 import kotlin.io.path.exists
-import org.slf4j.LoggerFactory
-import reactor.core.publisher.Mono
-import reactor.core.scheduler.Schedulers
 
 /**
  * Writes notifications into a file in JSONL format
  */
 class FilesystemNotifier(
-        private val file: Path,
-        objectMapper: ObjectMapper,
-): Notifier.JsonBased(objectMapper) {
+    private val file: Path,
+    objectMapper: ObjectMapper,
+) : Notifier.JsonBased(objectMapper) {
 
     companion object {
         private val log = LoggerFactory.getLogger(FilesystemNotifier::class.java)

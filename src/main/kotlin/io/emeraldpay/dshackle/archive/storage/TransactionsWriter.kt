@@ -1,25 +1,25 @@
 package io.emeraldpay.dshackle.archive.storage
 
 import com.linkedin.avro.fastserde.FastSpecificDatumWriter
-import io.emeraldpay.dshackle.archive.avro.Transaction
 import io.emeraldpay.dshackle.archive.FileType
+import io.emeraldpay.dshackle.archive.avro.Transaction
 import io.emeraldpay.dshackle.archive.config.RunConfig
 import io.emeraldpay.dshackle.archive.model.Chunk
-import java.time.Instant
-import java.util.concurrent.locks.ReentrantLock
-import kotlin.concurrent.withLock
 import org.apache.avro.AvroRuntimeException
 import org.apache.avro.file.CodecFactory
 import org.apache.avro.file.DataFileWriter
 import org.slf4j.LoggerFactory
 import org.springframework.beans.factory.annotation.Autowired
 import org.springframework.stereotype.Repository
+import java.time.Instant
+import java.util.concurrent.locks.ReentrantLock
+import kotlin.concurrent.withLock
 
 @Repository
 class TransactionsWriter(
-        @Autowired private val configuredFilenameGenerator: ConfiguredFilenameGenerator,
-        @Autowired private val runConfig: RunConfig,
-        @Autowired private val targetStorage: TargetStorage,
+    @Autowired private val configuredFilenameGenerator: ConfiguredFilenameGenerator,
+    @Autowired private val runConfig: RunConfig,
+    @Autowired private val targetStorage: TargetStorage,
 ) {
 
     companion object {
@@ -40,7 +40,7 @@ class TransactionsWriter(
             val datumWriter = FastSpecificDatumWriter<Transaction>(Transaction.getClassSchema())
             val dataFileWriter: DataFileWriter<Transaction> = DataFileWriter<Transaction>(datumWriter)
             dataFileWriter.setCodec(CodecFactory.snappyCodec())
-            dataFileWriter.setSyncInterval(1 * 1024 * 1024) //flush every megabyte
+            dataFileWriter.setSyncInterval(1 * 1024 * 1024) // flush every megabyte
 
             val outputStream = targetStorage.current.createWriter(file)
 
@@ -58,11 +58,11 @@ class TransactionsWriter(
     }
 
     class LocalFileAccess(
-            dataFileWriter: DataFileWriter<Transaction>,
-            private val runConfig: RunConfig,
-            path: String,
-            currentStorage: CurrentStorage,
-            access: StorageAccess,
+        dataFileWriter: DataFileWriter<Transaction>,
+        private val runConfig: RunConfig,
+        path: String,
+        currentStorage: CurrentStorage,
+        access: StorageAccess,
     ) : TxFileAccess, AutoCloseable, BaseAvroWriter<Transaction>(dataFileWriter, path, currentStorage, access) {
 
         private val writeLock = ReentrantLock()
@@ -103,6 +103,5 @@ class TransactionsWriter(
                 throw t
             }
         }
-
     }
 }

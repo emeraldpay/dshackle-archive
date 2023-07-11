@@ -162,9 +162,9 @@ class RunConfigInitializer {
         }
 
         val accessBlockchain = listOf(
-                RunConfig.Command.ARCHIVE,
-                RunConfig.Command.STREAM,
-                RunConfig.Command.FIX
+            RunConfig.Command.ARCHIVE,
+            RunConfig.Command.STREAM,
+            RunConfig.Command.FIX,
         ).contains(command)
 
         val connection: RunConfig.Connection? = if (accessBlockchain) {
@@ -184,19 +184,24 @@ class RunConfigInitializer {
             }.let {
                 if (cmd.hasOption("connection.notls")) {
                     it.copy(useTls = false)
-                } else it
+                } else {
+                    it
+                }
             }.let {
                 cmd.getOptionValue("connection.timeout")?.let { value ->
                     it.copy(timeout = Duration.ofSeconds(value.toLong()))
                 } ?: it
             }.let {
                 cmd.getOptionValue("parallel")?.let { value ->
-                    it.copy(parallel = value.toInt()
-                            .coerceAtLeast(DEFAULT_MIN_PARALLEL).coerceAtMost(DEFAULT_MAX_PARALLEL))
+                    it.copy(
+                        parallel = value.toInt()
+                            .coerceAtLeast(DEFAULT_MIN_PARALLEL).coerceAtMost(DEFAULT_MAX_PARALLEL),
+                    )
                 } ?: it
             }
-
-        } else null
+        } else {
+            null
+        }
 
         var files = RunConfig.Files()
         cmd.getOptionValue("dir")?.let {
@@ -217,7 +222,7 @@ class RunConfigInitializer {
         if (isGSPath(files.dir)) {
             exportGS = extractGSConfig(files.dir)
             files = files.copy(
-                    Files.createTempDirectory("emerald-dshackle-archive").toString()
+                Files.createTempDirectory("emerald-dshackle-archive").toString(),
             )
         }
 
@@ -230,8 +235,8 @@ class RunConfigInitializer {
         val archiveOptions = cmd.getOptionValue("include")?.let {
             val targets = it.split(",").map(String::trim).map(String::lowercase)
             RunConfig.ArchiveOptions(
-                    trace = targets.contains("trace"),
-                    stateDiff = targets.contains("statediff") || targets.contains("state")
+                trace = targets.contains("trace"),
+                stateDiff = targets.contains("statediff") || targets.contains("state"),
             )
         } ?: RunConfig.ArchiveOptions()
 
@@ -240,7 +245,7 @@ class RunConfigInitializer {
         } ?: RunConfig.Range.default()
         cmd.getOptionValue("rangeChunk")?.let { value ->
             range = range.copy(
-                    chunk = value.toLong()
+                chunk = value.toLong(),
             )
         }
         if (cmd.hasOption("continue")) {
@@ -251,7 +256,7 @@ class RunConfigInitializer {
         }
         if (command == RunConfig.Command.STREAM) {
             range = range.copy(
-                    individual = true
+                individual = true,
             )
             cmd.getOptionValue("tail")?.let {
                 range = range.copy(tail = it.toLong())
@@ -268,7 +273,7 @@ class RunConfigInitializer {
             notify = notify.copy(pubsub = cmd.getOptionValue("notify.pubsub"))
         }
 
-        return RunConfig(command, blockchain, connection, archiveOptions, range, files, notify=notify, auth = auth).let { config ->
+        return RunConfig(command, blockchain, connection, archiveOptions, range, files, notify = notify, auth = auth).let { config ->
             if (command == RunConfig.Command.COPY || command == RunConfig.Command.COMPACT) {
                 val inputs = cmd.getOptionValues("inputs").flatMap {
                     it.split(",")
@@ -294,12 +299,11 @@ class RunConfigInitializer {
         }.let {
             if (cmd.hasOption("compact.forks")) {
                 it.copy(
-                        compaction = it.compaction.copy(acceptForks = false)
+                    compaction = it.compaction.copy(acceptForks = false),
                 )
             } else {
                 it
             }
-
         }
     }
 
@@ -315,21 +319,21 @@ class RunConfigInitializer {
             throw IllegalStateException()
         }
         return RunConfig.ExportGS(
-                m.group(1),
-                m.group(3) ?: ""
+            m.group(1),
+            m.group(3) ?: "",
         )
     }
 
     fun printHelp(formatter: HelpFormatter, options: Options) {
         val header = "Copy blockchain data into files for further analysis"
         val footer = "Available commands:\n" +
-                " archive - the main operation, copies data from a blockchain to archive\n" +
-                " stream  - append fresh blocks one by one to the archive\n" +
-                " compact - merge individual block files into larger range files\n" +
-                " copy    - copy/recover from existing archive by copying into a new one\n" +
-                " report  - show summary on what is in archive for the specified range\n" +
-                " fix     - fix archive by making new archives for missing chunks\n" +
-                " verify  - verify that archive files contains required data and delete incomplete files\n"
+            " archive - the main operation, copies data from a blockchain to archive\n" +
+            " stream  - append fresh blocks one by one to the archive\n" +
+            " compact - merge individual block files into larger range files\n" +
+            " copy    - copy/recover from existing archive by copying into a new one\n" +
+            " report  - show summary on what is in archive for the specified range\n" +
+            " fix     - fix archive by making new archives for missing chunks\n" +
+            " verify  - verify that archive files contains required data and delete incomplete files\n"
 
         formatter.printHelp("dshackle-archive [options] <command>", header, options, footer)
     }

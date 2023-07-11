@@ -35,24 +35,24 @@ open class Config {
         val connectionConfig = runConfig.connection ?: return null
         log.info("Connect to ${connectionConfig.host}:${runConfig.connection.port}")
         val connection = EmeraldConnection.newBuilder()
-                .connectTo(
-                        runConfig.connection.host,
-                        runConfig.connection.port
-                )
-                .let {
-                    if (!connectionConfig.useTls) {
-                        it.usePlaintext()
-                    } else {
-                        it
-                    }
+            .connectTo(
+                runConfig.connection.host,
+                runConfig.connection.port,
+            )
+            .let {
+                if (!connectionConfig.useTls) {
+                    it.usePlaintext()
+                } else {
+                    it
                 }
-                // Some Trace JSONs are really huge. 100mb and more are common, sometimes even 1gb+.
-                // We make it here to accept up to 2gb. But in practice it's still may fail.
-                // For example, with default memory config some of large messages are going to fail with
-                // `java.lang.OutOfMemoryError: Java heap space` when copying from a Protobuf.
-                // So the Dshackle Archive Java options must be tuned for such usage scenario.
-                .maxMessageSize(Int.MAX_VALUE)
-                .build()
+            }
+            // Some Trace JSONs are really huge. 100mb and more are common, sometimes even 1gb+.
+            // We make it here to accept up to 2gb. But in practice it's still may fail.
+            // For example, with default memory config some of large messages are going to fail with
+            // `java.lang.OutOfMemoryError: Java heap space` when copying from a Protobuf.
+            // So the Dshackle Archive Java options must be tuned for such usage scenario.
+            .maxMessageSize(Int.MAX_VALUE)
+            .build()
         return BlockchainApi(connection)
     }
 
@@ -66,10 +66,9 @@ open class Config {
         objectMapper.registerModule(Jdk8Module())
         objectMapper.registerModule(JavaTimeModule())
         objectMapper
-                .setDateFormat(SimpleDateFormat("yyyy-MM-dd\'T\'HH:mm:ss.SSS\'Z\'"))
-                .setTimeZone(TimeZone.getTimeZone("UTC"))
+            .setDateFormat(SimpleDateFormat("yyyy-MM-dd\'T\'HH:mm:ss.SSS\'Z\'"))
+            .setTimeZone(TimeZone.getTimeZone("UTC"))
 
         return objectMapper
     }
-
 }

@@ -16,19 +16,19 @@ import reactor.core.scheduler.Schedulers
 import reactor.util.function.Tuples
 import java.time.Duration
 import java.time.Instant
-import java.util.*
+import java.util.LinkedList
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.ConcurrentSkipListSet
 
 @Service
 @Profile("run-stream")
 class RunStream(
-        @Autowired private val blockSource: BlockSource,
-        @Autowired private val client: BlockchainApi,
-        @Autowired private val completeWriter: CompleteWriter,
-        @Autowired private val runConfig: RunConfig,
-        @Autowired private val targetStorage: TargetStorage,
-        @Autowired private val filenameGenerator: FilenameGenerator
+    @Autowired private val blockSource: BlockSource,
+    @Autowired private val client: BlockchainApi,
+    @Autowired private val completeWriter: CompleteWriter,
+    @Autowired private val runConfig: RunConfig,
+    @Autowired private val targetStorage: TargetStorage,
+    @Autowired private val filenameGenerator: FilenameGenerator,
 ) : RunCommand {
 
     companion object {
@@ -40,68 +40,68 @@ class RunStream(
     override fun run(): Mono<Void> {
         log.info("Initializing stream archival...")
         return blockSource.getCurrentHeight()
-                .defaultIfEmpty(0)
-                .map { height ->
-                    val continueAfter = (height - tail).coerceAtLeast(0)
-                    Tuples.of(height, continueAfter)
-                }
-                .flatMap { processHeight(it.t1, it.t2) }
+            .defaultIfEmpty(0)
+            .map { height ->
+                val continueAfter = (height - tail).coerceAtLeast(0)
+                Tuples.of(height, continueAfter)
+            }
+            .flatMap { processHeight(it.t1, it.t2) }
     }
 
     fun processHeight(height: Long, continueAfter: Long): Mono<Void> {
         return Flux.concat(
-                targetStorage.current.listArchive(height),
-                targetStorage.current.listArchive(continueAfter)
+            targetStorage.current.listArchive(height),
+            targetStorage.current.listArchive(continueAfter),
         )
-                .flatMap {
-                    val range = filenameGenerator.parseRange(it.substringAfterLast("/"))
-                            ?: return@flatMap Mono.empty<Long>()
-                    Flux.range(range.startBlock.toInt(), range.length.toInt())
+            .flatMap {
+                val range = filenameGenerator.parseRange(it.substringAfterLast("/"))
+                    ?: return@flatMap Mono.empty<Long>()
+                Flux.range(range.startBlock.toInt(), range.length.toInt())
+            }
+            .map { it.toLong() }
+            .filter { it in continueAfter until height }
+            // a synced height has two files: a block and txes
+            // so first count files per height
+            .reduce(HashMap<Long, Int>()) { a, b ->
+                a[b] = a.getOrDefault(b, 0) + 1
+                a
+            }
+            // and now produce only those which have 2 files
+            .flatMapMany {
+                Flux.fromIterable(it.entries)
+                    .map { Pair(it.key, it.value) }
+                    .filter { it.second == 2 }
+                    .map { it.first }
+            }
+            .collectList()
+            .defaultIfEmpty(emptyList())
+            .doOnError { t -> log.error("Failed to initialize archival", t) }
+            .map { archivedHeights ->
+                log.info("Start streaming from $height. Ensure blocks from $continueAfter are fully archived")
+                log.debug("Last loaded blocks: ${archivedHeights.size} of $tail")
+                ProcessingWindow(tail, archivedHeights).also {
+                    it.onHeight(height)
                 }
-                .map { it.toLong() }
-                .filter { it in continueAfter until height }
-                // a synced height has two files: a block and txes
-                // so first count files per height
-                .reduce(HashMap<Long, Int>()) { a, b ->
-                    a[b] = a.getOrDefault(b, 0) + 1
-                    a
-                }
-                // and now produce only those which have 2 files
-                .flatMapMany {
-                    Flux.fromIterable(it.entries)
-                            .map { Pair(it.key, it.value) }
-                            .filter { it.second == 2 }
-                            .map { it.first }
-                }
-                .collectList()
-                .defaultIfEmpty(emptyList())
-                .doOnError { t -> log.error("Failed to initialize archival", t) }
-                .map { archivedHeights ->
-                    log.info("Start streaming from $height. Ensure blocks from $continueAfter are fully archived")
-                    log.debug("Last loaded blocks: ${archivedHeights.size} of $tail")
-                    ProcessingWindow(tail, archivedHeights).also {
-                        it.onHeight(height)
-                    }
-                }
-                .flatMap(::processWindow)
+            }
+            .flatMap(::processWindow)
     }
 
     fun processWindow(window: ProcessingWindow): Mono<Void> {
         val follow = client.reactorStub.subscribeHead(Common.Chain.newBuilder().setType(Common.ChainRef.forNumber(runConfig.blockchain.id)).build())
-                .map { it.height }
-                .doOnNext(window::onHeight)
+            .map { it.height }
+            .doOnNext(window::onHeight)
 
         return Flux.merge(
-                follow.subscribeOn(Schedulers.boundedElastic()),
-                fillStart(window).subscribeOn(Schedulers.boundedElastic()),
-                fillGaps(window).subscribeOn(Schedulers.boundedElastic())
+            follow.subscribeOn(Schedulers.boundedElastic()),
+            fillStart(window).subscribeOn(Schedulers.boundedElastic()),
+            fillGaps(window).subscribeOn(Schedulers.boundedElastic()),
         )
-                .filter(window::onStartProcessing)
-                .flatMap(blockSource::getDataAtHeight, 4)
-                .transform(completeWriter.streamConsumer())
-                .doOnNext(window::onProcessed)
-                .doOnError { log.error("Stopped processing with unhandled error", it) }
-                .then()
+            .filter(window::onStartProcessing)
+            .flatMap(blockSource::getDataAtHeight, 4)
+            .transform(completeWriter.streamConsumer())
+            .doOnNext(window::onProcessed)
+            .doOnError { log.error("Stopped processing with unhandled error", it) }
+            .then()
     }
 
     fun fillStart(window: ProcessingWindow): Flux<Long> {
@@ -112,14 +112,14 @@ class RunStream(
 
     fun fillGaps(window: ProcessingWindow): Flux<Long> {
         return Flux.interval(Duration.ofSeconds(60))
-                .flatMap {
-                    Flux.fromIterable(window.getMissingGaps())
-                }
+            .flatMap {
+                Flux.fromIterable(window.getMissingGaps())
+            }
     }
 
     class ProcessingWindow(
-            private val size: Long,
-            initial: Collection<Long>
+        private val size: Long,
+        initial: Collection<Long>,
     ) {
 
         private val processed = ConcurrentSkipListSet<Long>()
@@ -145,7 +145,7 @@ class RunStream(
 
         fun getMissingHead(): List<Long> {
             val highest = if (processed.isEmpty()) 0 else processed.last()
-            val requiredMin = (highest - size).coerceAtLeast(0) //TODO 1 for bitcoin
+            val requiredMin = (highest - size).coerceAtLeast(0) // TODO 1 for bitcoin
             val lowest = if (processed.isEmpty()) 0 else processed.first()
             if (lowest > requiredMin) {
                 return (requiredMin until lowest).toList()
@@ -193,5 +193,4 @@ class RunStream(
             return true
         }
     }
-
 }
