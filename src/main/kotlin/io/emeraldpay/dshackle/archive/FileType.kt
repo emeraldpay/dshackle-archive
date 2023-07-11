@@ -1,11 +1,12 @@
 package io.emeraldpay.dshackle.archive
 
 import com.fasterxml.jackson.annotation.JsonValue
-import java.util.*
+import java.util.Locale
 
 enum class FileType {
     BLOCKS,
-    TRANSACTIONS;
+    TRANSACTIONS,
+    ;
 
     companion object {
         fun fromFilenameType(type: String): FileType? {

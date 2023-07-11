@@ -2,15 +2,13 @@ package io.emeraldpay.dshackle.archive.storage
 
 import org.slf4j.LoggerFactory
 import java.io.IOException
-import java.nio.file.Path
-import java.util.*
+import java.util.LinkedList
 import java.util.concurrent.locks.ReentrantReadWriteLock
 import kotlin.concurrent.read
 import kotlin.concurrent.write
-import kotlin.io.path.absolutePathString
 
 class CurrentStorage(
-        private val limit: Int = 32
+    private val limit: Int = 32,
 ) : AutoCloseable {
 
     companion object {
@@ -42,7 +40,7 @@ class CurrentStorage(
                 try {
                     current.removeFirst().also { it.storage.close() }
                 } catch (t: IOException) {
-                    log.warn("Failed to close [${path}]. ${t.javaClass}: ${t.message}")
+                    log.warn("Failed to close [$path]. ${t.javaClass}: ${t.message}")
                 }
             }
             return y.storage
@@ -58,17 +56,16 @@ class CurrentStorage(
     }
 
     data class Ref<T : AutoCloseable>(
-            val path: String,
-            val storage: T
+        val path: String,
+        val storage: T,
     )
 
     override fun close() {
         lock.write {
-            for (i in current.size-1 downTo 0){
+            for (i in current.size - 1 downTo 0) {
                 current[i].storage.close()
             }
             current.clear()
         }
     }
-
 }

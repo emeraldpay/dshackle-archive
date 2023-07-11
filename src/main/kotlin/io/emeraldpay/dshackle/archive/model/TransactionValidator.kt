@@ -3,10 +3,10 @@ package io.emeraldpay.dshackle.archive.model
 import io.emeraldpay.dshackle.archive.avro.BlockchainType
 import io.emeraldpay.dshackle.archive.avro.Transaction
 import io.emeraldpay.dshackle.archive.config.RunConfig
-import java.nio.ByteBuffer
 import org.slf4j.LoggerFactory
+import java.nio.ByteBuffer
 
-abstract class TransactionValidator: Validator<Transaction> {
+abstract class TransactionValidator : Validator<Transaction> {
 
     companion object {
         private val log = LoggerFactory.getLogger(TransactionValidator::class.java)
@@ -36,9 +36,9 @@ abstract class TransactionValidator: Validator<Transaction> {
     }
 
     class EthereumTransactionValidator(
-            private val requireStateDiff: Boolean,
-            private val requireTrace: Boolean,
-    ): TransactionValidator() {
+        private val requireStateDiff: Boolean,
+        private val requireTrace: Boolean,
+    ) : TransactionValidator() {
         override fun validate(value: Transaction): String? {
             val general = super.validate(value)
             if (general != null) {
@@ -57,8 +57,7 @@ abstract class TransactionValidator: Validator<Transaction> {
         }
     }
 
-
-    class BitcoinTransactionValidator(): TransactionValidator() {
+    class BitcoinTransactionValidator() : TransactionValidator() {
         override fun validate(value: Transaction): String? {
             val general = super.validate(value)
             if (general != null) {
@@ -90,9 +89,11 @@ abstract class TransactionValidator: Validator<Transaction> {
                     val requireTrace = archiveOptions?.trace ?: false
                     EthereumTransactionValidator(requireStateDiff, requireTrace)
                 }
+
                 BlockchainType.BITCOIN -> {
                     BitcoinTransactionValidator()
                 }
+
                 else -> {
                     throw IllegalStateException("Invalid blockchain type: $blockchainType")
                 }

@@ -11,11 +11,11 @@ import org.springframework.stereotype.Service
 
 @Service
 class ConfiguredBlocksRange(
-        @Autowired private val runConfig: RunConfig
+    @Autowired private val runConfig: RunConfig,
 ) : BlocksRange(runConfig.range)
 
 open class BlocksRange(
-        val range: RunConfig.Range
+    val range: RunConfig.Range,
 ) {
 
     companion object {
@@ -63,5 +63,4 @@ open class BlocksRange(
     fun includes(height: Long): Boolean {
         return height in startBlock..endBlock
     }
-
 }

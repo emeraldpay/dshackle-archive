@@ -6,5 +6,4 @@ import org.reactivestreams.Publisher
 interface AvroReader<T> {
 
     fun open(input: SeekableInput): Publisher<T>
-
 }

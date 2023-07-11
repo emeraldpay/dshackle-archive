@@ -1,15 +1,14 @@
 package io.emeraldpay.dshackle.archive.runner
 
+import org.slf4j.LoggerFactory
 import java.time.Duration
-import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicLong
 import java.util.concurrent.atomic.AtomicReference
-import org.slf4j.LoggerFactory
 
 class ProgressIndicator(
-        private val n: Int = 5,
-        private val opLabel: String = "op"
+    private val n: Int = 5,
+    private val opLabel: String = "op",
 ) {
 
     companion object {
@@ -75,7 +74,7 @@ class ProgressIndicator(
     }
 
     data class HistoryItem(
-            val count: Int,
-            val time: Long
+        val count: Int,
+        val time: Long,
     )
 }

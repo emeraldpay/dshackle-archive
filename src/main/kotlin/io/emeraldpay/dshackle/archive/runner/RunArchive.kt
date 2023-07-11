@@ -4,27 +4,20 @@ import io.emeraldpay.dshackle.archive.BlocksRange
 import io.emeraldpay.dshackle.archive.config.RunConfig
 import io.emeraldpay.dshackle.archive.model.Chunk
 import io.emeraldpay.dshackle.archive.storage.CompleteWriter
-import io.emeraldpay.dshackle.archive.storage.FilenameGenerator
-import io.emeraldpay.dshackle.archive.storage.RangeAccess
-import io.emeraldpay.dshackle.archive.storage.TargetStorage
-import java.util.concurrent.TimeUnit
-import java.util.concurrent.atomic.AtomicLong
-import org.apache.commons.lang3.time.StopWatch
 import org.slf4j.LoggerFactory
 import org.springframework.beans.factory.annotation.Autowired
-import org.springframework.stereotype.Service
 import org.springframework.context.annotation.Profile
+import org.springframework.stereotype.Service
 import reactor.core.publisher.Flux
 import reactor.core.publisher.Mono
-import reactor.util.function.Tuples
 
 @Service
 @Profile("run-archive")
 class RunArchive(
-        @Autowired private val blockSource: BlockSource,
-        @Autowired private val completeWriter: CompleteWriter,
-        @Autowired private val runConfig: RunConfig,
-        @Autowired private val rangeTools: RangeTools,
+    @Autowired private val blockSource: BlockSource,
+    @Autowired private val completeWriter: CompleteWriter,
+    @Autowired private val runConfig: RunConfig,
+    @Autowired private val rangeTools: RangeTools,
 ) : RunCommand {
 
     companion object {
@@ -40,10 +33,10 @@ class RunArchive(
         }
         log.info("  StateDiff : ${runConfig.options.stateDiff}")
         return rangeTools.checkStartBlock()
-                .doOnNext { blocksRange ->
-                    log.info("Running archive ${blocksRange.startBlock}..${blocksRange.endBlock} using ${runConfig.range.chunk} blocks per file")
-                }
-                .flatMap(::runPrepared)
+            .doOnNext { blocksRange ->
+                log.info("Running archive ${blocksRange.startBlock}..${blocksRange.endBlock} using ${runConfig.range.chunk} blocks per file")
+            }
+            .flatMap(::runPrepared)
     }
 
     private val data = { chunk: Chunk ->
@@ -68,12 +61,12 @@ class RunArchive(
 
     fun archiveRanges(blocksRange: BlocksRange): Mono<Void> {
         return ChunkedArchive(data, Flux.fromIterable(blocksRange.getChunks()), completeWriter)
-                .archiveRanges()
+            .archiveRanges()
     }
 
     fun archiveIndividual(blocksRange: BlocksRange): Mono<Void> {
         return blockSource.getData(blocksRange.startBlock, blocksRange.length)
-                .transform(completeWriter.streamConsumer())
-                .then()
+            .transform(completeWriter.streamConsumer())
+            .then()
     }
 }

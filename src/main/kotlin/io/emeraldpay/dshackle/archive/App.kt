@@ -11,12 +11,6 @@ import io.emeraldpay.dshackle.archive.runner.RunFix
 import io.emeraldpay.dshackle.archive.runner.RunReport
 import io.emeraldpay.dshackle.archive.runner.RunStream
 import io.emeraldpay.dshackle.archive.runner.RunVerify
-import java.lang.management.ManagementFactory
-import java.time.Duration
-import java.util.Locale
-import kotlin.concurrent.thread
-import kotlin.system.exitProcess
-import kotlin.time.toKotlinDuration
 import org.slf4j.LoggerFactory
 import org.springframework.boot.Banner
 import org.springframework.boot.SpringApplication
@@ -24,6 +18,12 @@ import org.springframework.boot.autoconfigure.SpringBootApplication
 import org.springframework.context.annotation.Import
 import reactor.core.publisher.Mono
 import reactor.tools.agent.ReactorDebugAgent
+import java.lang.management.ManagementFactory
+import java.time.Duration
+import java.util.Locale
+import kotlin.concurrent.thread
+import kotlin.system.exitProcess
+import kotlin.time.toKotlinDuration
 
 @SpringBootApplication(scanBasePackages = ["io.emeraldpay.dshackle.archive"])
 @Import(Config::class)

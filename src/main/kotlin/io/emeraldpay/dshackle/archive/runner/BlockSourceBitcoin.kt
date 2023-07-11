@@ -18,9 +18,9 @@ import java.time.Instant
 @Service
 @Profile("!run-copy & !run-compact & !run-report & bitcoin & with-blockchain")
 class BlockSourceBitcoin(
-        @Autowired private val client: BlockchainApi,
-        @Autowired private val objectMapper: ObjectMapper,
-        @Autowired private val runConfig: RunConfig
+    @Autowired private val client: BlockchainApi,
+    @Autowired private val objectMapper: ObjectMapper,
+    @Autowired private val runConfig: RunConfig,
 ) : BlockSource(runConfig, client, objectMapper) {
 
     companion object {
@@ -54,30 +54,29 @@ class BlockSourceBitcoin(
     fun getTransactions(block: Map<String, Any>): Mono<List<TransactionDetails>> {
         val txes: List<String> = block["tx"] as List<String>
         return Flux.fromIterable(txes)
-                .flatMap(::getTransaction, parallelTx)
-                .collectList()
+            .flatMap(::getTransaction, parallelTx)
+            .collectList()
     }
 
     fun getTransaction(hash: String): Mono<TransactionDetails> {
         return executeAndReadMap("getrawtransaction", listOf(hash, true)).map { tx ->
             TransactionDetails(
-                    hash = tx.result!!["txid"] as String,
-                    raw = ByteBuffer.wrap(Hex.decodeHex(tx.result["hex"] as String)),
-                    json = tx.raw,
+                hash = tx.result!!["txid"] as String,
+                raw = ByteBuffer.wrap(Hex.decodeHex(tx.result["hex"] as String)),
+                json = tx.raw,
             )
         }
     }
 
     fun toDetails(block: Map<String, Any>, blockRaw: ByteBuffer, transactions: List<TransactionDetails>): BlockDetails {
         return BlockDetails(
-                timestamp = Instant.ofEpochSecond((block["time"] as Number).toLong()),
-                height = (block["height"] as Number).toLong(),
-                hash = block["hash"] as String,
-                parentHash = block["previousblockhash"] as String,
-                raw = blockRaw,
-                transactionHashes = block["tx"] as List<String>,
-                transactions = transactions
+            timestamp = Instant.ofEpochSecond((block["time"] as Number).toLong()),
+            height = (block["height"] as Number).toLong(),
+            hash = block["hash"] as String,
+            parentHash = block["previousblockhash"] as String,
+            raw = blockRaw,
+            transactionHashes = block["tx"] as List<String>,
+            transactions = transactions,
         )
     }
-
 }

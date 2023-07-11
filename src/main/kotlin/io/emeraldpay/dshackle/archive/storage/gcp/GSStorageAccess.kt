@@ -9,10 +9,6 @@ import io.emeraldpay.dshackle.archive.FileType
 import io.emeraldpay.dshackle.archive.model.Chunk
 import io.emeraldpay.dshackle.archive.storage.FilenameGenerator
 import io.emeraldpay.dshackle.archive.storage.StorageAccess
-import java.io.OutputStream
-import java.nio.channels.Channels
-import java.util.concurrent.atomic.AtomicBoolean
-import java.util.concurrent.atomic.AtomicLong
 import org.apache.avro.file.SeekableInput
 import org.reactivestreams.Publisher
 import org.reactivestreams.Subscriber
@@ -24,13 +20,16 @@ import org.springframework.stereotype.Service
 import reactor.core.publisher.Flux
 import reactor.core.publisher.Mono
 import reactor.core.scheduler.Schedulers
-
+import java.io.OutputStream
+import java.nio.channels.Channels
+import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicLong
 
 @Service
 @Profile("with-gcp")
 open class GSStorageAccess(
-        @Autowired private val filenameGenerator: FilenameGenerator,
-        @Autowired private val googleStorage: GoogleStorage,
+    @Autowired private val filenameGenerator: FilenameGenerator,
+    @Autowired private val googleStorage: GoogleStorage,
 ) : StorageAccess {
 
     companion object {
@@ -48,21 +47,22 @@ open class GSStorageAccess(
         // use separate filters for Stream files and Ranges,
         // it stops processing stream files when last block is reached and starts processing ranges form given height
         val query = listOf(
-                ListQuery(
-                    prefix = path + filenameGenerator.getLevel0(height) + "/", // + filenameGenerator.getLevel1(height), // + "/",
-                    rangeStart = googleStorage.bucketPath + "/" + filenameGenerator.getIndividualFilename(FileType.BLOCKS.asTypeSingle(), height),
-                    rangeEnd = path + filenameGenerator.getLevel0(height) + "/" + filenameGenerator.maxLevelValue() // stop at the max level value, before range-* starts
-                ),
-                ListQuery(path + filenameGenerator.getLevel0(height) + "/",
-                        googleStorage.bucketPath + "/" + filenameGenerator.getRangeFilename(FileType.BLOCKS.asTypeSingle(), Chunk(height, 0)),
-                ),
+            ListQuery(
+                prefix = path + filenameGenerator.getLevel0(height) + "/", // + filenameGenerator.getLevel1(height), // + "/",
+                rangeStart = googleStorage.bucketPath + "/" + filenameGenerator.getIndividualFilename(FileType.BLOCKS.asTypeSingle(), height),
+                rangeEnd = path + filenameGenerator.getLevel0(height) + "/" + filenameGenerator.maxLevelValue(), // stop at the max level value, before range-* starts
+            ),
+            ListQuery(
+                path + filenameGenerator.getLevel0(height) + "/",
+                googleStorage.bucketPath + "/" + filenameGenerator.getRangeFilename(FileType.BLOCKS.asTypeSingle(), Chunk(height, 0)),
+            ),
         )
         log.info("Query lists for for: $query")
         return Flux.fromIterable(query)
-                .flatMap { query(it) }
-                .map {
-                    blockchainDir + it.blobId.name.substring(this.path.length)
-                }
+            .flatMap { query(it) }
+            .map {
+                blockchainDir + it.blobId.name.substring(this.path.length)
+            }
             .doOnNext {
                 log.info("File: $it")
             }
@@ -73,16 +73,16 @@ open class GSStorageAccess(
 
     override fun deleteArchives(files: List<String>): Mono<Void> {
         return Flux.fromIterable(files)
-                .map {
-                    BlobId.of(googleStorage.bucket, googleStorage.getBucketPath(it))
-                }
-                .collectList()
-                .flatMap {
-                    Mono.fromCallable {
-                        googleStorage.storage.delete(it)
-                    }.subscribeOn(Schedulers.boundedElastic())
-                }
-                .then()
+            .map {
+                BlobId.of(googleStorage.bucket, googleStorage.getBucketPath(it))
+            }
+            .collectList()
+            .flatMap {
+                Mono.fromCallable {
+                    googleStorage.storage.delete(it)
+                }.subscribeOn(Schedulers.boundedElastic())
+            }
+            .then()
     }
 
     override fun getURI(file: String): String {
@@ -93,7 +93,7 @@ open class GSStorageAccess(
         val blobId = BlobId.of(googleStorage.bucket, googleStorage.getBucketPath(path))
         val blobInfo = BlobInfo.newBuilder(blobId).build()
         val channel = googleStorage.storage.writer(blobInfo, Storage.BlobWriteOption.disableGzipContent())
-                ?: throw IllegalStateException("Blob ${blobId.toGsUtilUri()} cannot be created")
+            ?: throw IllegalStateException("Blob ${blobId.toGsUtilUri()} cannot be created")
 
         return Channels.newOutputStream(channel)
     }
@@ -102,22 +102,22 @@ open class GSStorageAccess(
         val blobId = BlobId.of(googleStorage.bucket, googleStorage.getBucketPath(path))
         val blob = googleStorage.storage.get(blobId)
         val channel = googleStorage.storage.reader(blobId)
-                ?: throw IllegalStateException("Blob ${blobId.toGsUtilUri()} cannot be created")
+            ?: throw IllegalStateException("Blob ${blobId.toGsUtilUri()} cannot be created")
         return SeekableChannelInput(blob.size, channel)
     }
 
     data class ListQuery(
-            val prefix: String,
-            val rangeStart: String,
-            val rangeEnd: String? = null,
+        val prefix: String,
+        val rangeStart: String,
+        val rangeEnd: String? = null,
     )
 
     class BlobsPublisher(
-            private val storage: Storage,
-            private val bucket: String,
-            private val path: String,
-            private val rangeStart: String?,
-            private val rangeEnd: String?,
+        private val storage: Storage,
+        private val bucket: String,
+        private val path: String,
+        private val rangeStart: String?,
+        private val rangeEnd: String?,
     ) : Publisher<BlobInfo> {
 
         private var currentPage: Page<Blob>? = null
@@ -126,23 +126,25 @@ open class GSStorageAccess(
         override fun subscribe(s: Subscriber<in BlobInfo>) {
             val cancelled = AtomicBoolean(false)
             val limit = AtomicLong(0)
-            s.onSubscribe(object : Subscription {
-                override fun request(n: Long) {
-                    limit.set(n)
-                    scan(cancelled, limit, s)
-                }
+            s.onSubscribe(
+                object : Subscription {
+                    override fun request(n: Long) {
+                        limit.set(n)
+                        scan(cancelled, limit, s)
+                    }
 
-                override fun cancel() {
-                    cancelled.set(true)
-                }
-            })
+                    override fun cancel() {
+                        cancelled.set(true)
+                    }
+                },
+            )
         }
 
         fun scan(cancelled: AtomicBoolean, limit: AtomicLong, s: Subscriber<in Blob>) {
             if (currentPage == null) {
                 val opts: List<Storage.BlobListOption> = listOf(
-                        Storage.BlobListOption.prefix(path),
-                        Storage.BlobListOption.pageSize(100)
+                    Storage.BlobListOption.prefix(path),
+                    Storage.BlobListOption.pageSize(100),
                 ).let {
                     if (rangeStart != null) {
                         it + listOf(Storage.BlobListOption.startOffset(rangeStart))
@@ -181,5 +183,4 @@ open class GSStorageAccess(
             }
         }
     }
-
 }

@@ -22,9 +22,9 @@ import java.util.concurrent.TimeoutException
 import java.util.concurrent.atomic.AtomicInteger
 
 abstract class BlockSource(
-        private val runConfig: RunConfig,
-        private val client: BlockchainApi,
-        private val objectMapper: ObjectMapper
+    private val runConfig: RunConfig,
+    private val client: BlockchainApi,
+    private val objectMapper: ObjectMapper,
 ) {
 
     companion object {
@@ -33,15 +33,17 @@ abstract class BlockSource(
 
     private val timeout = runConfig.connection!!.timeout
     val parallel = runConfig.connection!!.parallel
-            .coerceAtLeast(4)
+        .coerceAtLeast(4)
     val parallelBlock = parallel
-            .coerceAtLeast(1)
-            .coerceAtMost(4)
+        .coerceAtLeast(1)
+        .coerceAtMost(4)
     val parallelTx = (parallelBlock * 8)
-            .coerceAtMost(parallel)
+        .coerceAtMost(parallel)
 
     protected val scheduler = Schedulers.newBoundedElastic(
-            parallel, Integer.MAX_VALUE, "blockchain-data"
+        parallel,
+        Integer.MAX_VALUE,
+        "blockchain-data",
     )
     protected val chain = Common.ChainRef.forNumber(runConfig.blockchain.id)
     protected val id = AtomicInteger(0)
@@ -56,12 +58,16 @@ abstract class BlockSource(
 
     fun getData(start: Long, limit: Long): Flux<BlockDetails> {
         return Flux.range(start.toInt(), limit.toInt())
-                .flatMapSequential({
+            .flatMapSequential(
+                {
                     getDataAtHeight(it.toLong()).subscribeOn(scheduler)
-                }, parallelBlock, parallelBlock)
-                .onBackpressureBuffer(64) {
-                    log.error("Too many blocks in queue to archive. Decrease the value for --parallel option")
-                }
+                },
+                parallelBlock,
+                parallelBlock,
+            )
+            .onBackpressureBuffer(64) {
+                log.error("Too many blocks in queue to archive. Decrease the value for --parallel option")
+            }
     }
 
     fun executeAndReadMap(method: String, params: List<Any>): Mono<Result<Map<String, Any>>> {
@@ -75,11 +81,13 @@ abstract class BlockSource(
             buffer.mark()
             val result = try {
                 objectMapper.readerFor(target)
-                        .readValue<T>(ByteBufferBackedInputStream(buffer))
+                    .readValue<T>(ByteBufferBackedInputStream(buffer))
             } catch (t: Throwable) {
                 buffer.reset()
                 val json = StringUtils.abbreviateMiddle(
-                        StandardCharsets.UTF_8.decode(buffer).toString(), "...", 250
+                    StandardCharsets.UTF_8.decode(buffer).toString(),
+                    "...",
+                    250,
                 )
                 log.warn("Cannot parse JSON. Call: $method($params). Error: ${t.javaClass} ${t.message} Target class: $target. JSON: $json")
                 throw t
@@ -91,54 +99,54 @@ abstract class BlockSource(
 
     fun execute(method: String, params: List<Any>): Mono<ByteBuffer> {
         val callItem = BlockchainOuterClass.NativeCallItem.newBuilder()
-                .setId(id.incrementAndGet())
-                .setMethod(method)
-                .setPayload(ByteString.copyFromUtf8(objectMapper.writeValueAsString(params)))
-                .build()
+            .setId(id.incrementAndGet())
+            .setMethod(method)
+            .setPayload(ByteString.copyFromUtf8(objectMapper.writeValueAsString(params)))
+            .build()
         var retried = false
         return Mono.just(callItem)
-                .flatMapMany {
-                    val call = BlockchainOuterClass.NativeCallRequest.newBuilder()
-                            .setChain(chain)
-                            .addItems(callItem)
-                            .build()
-                    client.reactorStub.nativeCall(call)
-                            .subscribeOn(scheduler)
-                            .timeout(
-                                    timeout,
-                                    Mono.fromCallable { retried = true }.then(Mono.error(TimeoutException("Timeout to load $method($params)")))
-                            )
-                            .doOnError { t ->
-                                if (t is TimeoutException) {
-                                    log.warn(t.message)
-                                } else if (t is ConnectException || t is io.grpc.StatusRuntimeException) {
-                                    log.error("Cannot connect to the Blockchain ${runConfig.connection?.describe()}: ${t.message}")
-                                } else {
-                                    log.error("Unhandled error for $method($params)", t)
-                                }
-                            }
-                            // fast retry for connection errors
-                            .retryWhen(Retry.backoff(3, Duration.ofSeconds(1)))
-                            .map { reply ->
-                                if (!reply.succeed) {
-                                    throw IllegalStateException("Not succeeded: ${reply.errorMessage}")
-                                }
-                                if (retried) {
-                                    log.info("Recovered for $method($params)")
-                                }
-                                reply.payload.asReadOnlyByteBuffer()
-                            }
-                }
-                // a slow retry when operation did not succeed on remote side, ex. when dshackle lost its upstreams
-                .retryWhen(Retry.backoff(25, Duration.ofSeconds(5)))
-                .doOnError { t ->
-                    log.error("Failed to get $method", t)
-                }
-                .single()
+            .flatMapMany {
+                val call = BlockchainOuterClass.NativeCallRequest.newBuilder()
+                    .setChain(chain)
+                    .addItems(callItem)
+                    .build()
+                client.reactorStub.nativeCall(call)
+                    .subscribeOn(scheduler)
+                    .timeout(
+                        timeout,
+                        Mono.fromCallable { retried = true }.then(Mono.error(TimeoutException("Timeout to load $method($params)"))),
+                    )
+                    .doOnError { t ->
+                        if (t is TimeoutException) {
+                            log.warn(t.message)
+                        } else if (t is ConnectException || t is io.grpc.StatusRuntimeException) {
+                            log.error("Cannot connect to the Blockchain ${runConfig.connection?.describe()}: ${t.message}")
+                        } else {
+                            log.error("Unhandled error for $method($params)", t)
+                        }
+                    }
+                    // fast retry for connection errors
+                    .retryWhen(Retry.backoff(3, Duration.ofSeconds(1)))
+                    .map { reply ->
+                        if (!reply.succeed) {
+                            throw IllegalStateException("Not succeeded: ${reply.errorMessage}")
+                        }
+                        if (retried) {
+                            log.info("Recovered for $method($params)")
+                        }
+                        reply.payload.asReadOnlyByteBuffer()
+                    }
+            }
+            // a slow retry when operation did not succeed on remote side, ex. when dshackle lost its upstreams
+            .retryWhen(Retry.backoff(25, Duration.ofSeconds(5)))
+            .doOnError { t ->
+                log.error("Failed to get $method", t)
+            }
+            .single()
     }
 
     data class Result<T>(
-            val raw: ByteBuffer,
-            val result: T?
+        val raw: ByteBuffer,
+        val result: T?,
     )
 }

@@ -1,9 +1,9 @@
 package io.emeraldpay.dshackle.archive.model
 
 class StandardChunkIterator(
-        val startBlock: Long,
-        val length: Long,
-        val chunk: Long,
+    val startBlock: Long,
+    val length: Long,
+    val chunk: Long,
 ) : ChunkIterator {
 
     override fun getChunks(): List<Chunk> {
