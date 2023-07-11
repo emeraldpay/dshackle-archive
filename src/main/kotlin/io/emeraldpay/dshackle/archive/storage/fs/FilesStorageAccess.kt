@@ -3,6 +3,16 @@ package io.emeraldpay.dshackle.archive.storage.fs
 import io.emeraldpay.dshackle.archive.config.RunConfig
 import io.emeraldpay.dshackle.archive.storage.FilenameGenerator
 import io.emeraldpay.dshackle.archive.storage.StorageAccess
+import org.apache.avro.file.SeekableFileInput
+import org.apache.avro.file.SeekableInput
+import org.reactivestreams.Publisher
+import org.reactivestreams.Subscriber
+import org.reactivestreams.Subscription
+import org.slf4j.LoggerFactory
+import org.springframework.beans.factory.annotation.Autowired
+import org.springframework.stereotype.Service
+import reactor.core.publisher.Flux
+import reactor.core.publisher.Mono
 import java.io.File
 import java.io.IOException
 import java.io.OutputStream
@@ -17,21 +27,11 @@ import java.util.concurrent.atomic.AtomicLong
 import java.util.concurrent.locks.ReentrantLock
 import kotlin.concurrent.withLock
 import kotlin.io.path.exists
-import org.apache.avro.file.SeekableFileInput
-import org.apache.avro.file.SeekableInput
-import org.reactivestreams.Publisher
-import org.reactivestreams.Subscriber
-import org.reactivestreams.Subscription
-import org.slf4j.LoggerFactory
-import org.springframework.beans.factory.annotation.Autowired
-import org.springframework.stereotype.Service
-import reactor.core.publisher.Flux
-import reactor.core.publisher.Mono
 
 @Service
 class FilesStorageAccess(
-        @Autowired private val runConfig: RunConfig,
-        @Autowired private val filenameGenerator: FilenameGenerator,
+    @Autowired private val runConfig: RunConfig,
+    @Autowired private val filenameGenerator: FilenameGenerator,
 ) : StorageAccess {
 
     companion object {
@@ -77,7 +77,7 @@ class FilesStorageAccess(
     override fun listArchiveLevel0(height: Long): Flux<String> {
         val subdir = "${filenameGenerator.parentDir}${filenameGenerator.getLevel0(height)}"
         return Flux.from(FilesPublisher(dir.resolve(subdir)))
-                .map { it.toString() }
+            .map { it.toString() }
     }
 
     override fun deleteArchives(files: List<String>): Mono<Void> {
@@ -85,7 +85,8 @@ class FilesStorageAccess(
             files.forEach {
                 Files.deleteIfExists(Path.of(it))
             }
-        }.then()
+        }
+            .then()
     }
 
     override fun getURI(file: String): String {
@@ -103,36 +104,38 @@ class FilesStorageAccess(
     }
 
     class FilesPublisher(
-            private val start: Path,
+        private val start: Path,
     ) : Publisher<Path> {
 
         override fun subscribe(s: Subscriber<in Path>) {
             val cancelled = AtomicBoolean(false)
-            s.onSubscribe(object : Subscription {
-                private val limit = AtomicLong()
-                private val started = AtomicBoolean(false)
+            s.onSubscribe(
+                object : Subscription {
+                    private val limit = AtomicLong()
+                    private val started = AtomicBoolean(false)
 
-                override fun request(n: Long) {
-                    limit.updateAndGet {
-                        // n can be  MAX_LONG, so adding it to anything produces a negative result.
-                        // sp here we ensure that it stays at least as n (i.e, a positive number)
-                        (it + n).coerceAtLeast(n)
+                    override fun request(n: Long) {
+                        limit.updateAndGet {
+                            // n can be  MAX_LONG, so adding it to anything produces a negative result.
+                            // sp here we ensure that it stays at least as n (i.e, a positive number)
+                            (it + n).coerceAtLeast(n)
+                        }
+
+                        // use a separate thread because Files.walkFileTree is blocking and cannot be paused,
+                        // so in a separate thread we just list all files when limit value is positive
+                        val alreadyStarted = started.getAndSet(true)
+                        if (!alreadyStarted) {
+                            Thread {
+                                scan(limit, cancelled, s)
+                            }.start()
+                        }
                     }
 
-                    // use a separate thread because Files.walkFileTree is blocking and cannot be paused,
-                    // so in a separate thread we just list all files when limit value is positive
-                    val alreadyStarted = started.getAndSet(true)
-                    if (!alreadyStarted) {
-                        Thread {
-                            scan(limit, cancelled, s)
-                        }.start()
+                    override fun cancel() {
+                        cancelled.set(true)
                     }
-                }
-
-                override fun cancel() {
-                    cancelled.set(true)
-                }
-            })
+                },
+            )
         }
 
         fun scan(limit: AtomicLong, cancelled: AtomicBoolean, s: Subscriber<in Path>) {
@@ -217,5 +220,4 @@ class FilesStorageAccess(
             }
         }
     }
-
 }

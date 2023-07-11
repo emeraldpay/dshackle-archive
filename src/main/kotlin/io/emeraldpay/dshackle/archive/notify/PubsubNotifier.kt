@@ -4,27 +4,24 @@ import com.fasterxml.jackson.databind.ObjectMapper
 import com.google.api.core.ApiFuture
 import com.google.api.core.ApiFutureCallback
 import com.google.api.core.ApiFutures
-import com.google.api.gax.core.CredentialsProvider
-import com.google.api.gax.core.GoogleCredentialsProvider
 import com.google.api.gax.rpc.TransportChannelProvider
 import com.google.cloud.pubsub.v1.Publisher
 import com.google.protobuf.ByteString
 import com.google.pubsub.v1.PubsubMessage
 import io.emeraldpay.dshackle.archive.config.GoogleAuthProvider
 import io.emeraldpay.dshackle.archive.model.ProcessedException
+import org.slf4j.LoggerFactory
+import org.springframework.context.Lifecycle
+import reactor.core.publisher.Mono
 import java.util.concurrent.CompletableFuture
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicReference
-import org.slf4j.LoggerFactory
-import org.springframework.beans.factory.annotation.Autowired
-import org.springframework.context.Lifecycle
-import reactor.core.publisher.Mono
 
 class PubsubNotifier(
-        private val topic: String,
-        objectMapper: ObjectMapper,
-): Notifier.JsonBased(objectMapper), Lifecycle {
+    private val topic: String,
+    objectMapper: ObjectMapper,
+) : Notifier.JsonBased(objectMapper), Lifecycle {
 
     companion object {
         private val log = LoggerFactory.getLogger(PubsubNotifier::class.java)
@@ -37,7 +34,8 @@ class PubsubNotifier(
     private var publisher: AtomicReference<Publisher?> = AtomicReference(null)
 
     override fun onCreated(archiveJson: String): Mono<Void> {
-        return Mono.fromCompletionStage(send(archiveJson)).then()
+        return Mono.fromCompletionStage(send(archiveJson))
+            .then()
     }
 
     private fun send(json: String): CompletableFuture<String> {
@@ -45,21 +43,28 @@ class PubsubNotifier(
         val future = CompletableFuture<String>()
 
         val data: ByteString = ByteString.copyFromUtf8(json)
-        val pubsubMessage = PubsubMessage.newBuilder().setData(data).build()
+        val pubsubMessage = PubsubMessage.newBuilder()
+            .setData(data)
+            .build()
         val messageIdFuture: ApiFuture<String> = publisher.publish(pubsubMessage)
-        ApiFutures.addCallback(messageIdFuture, object : ApiFutureCallback<String> {
-            override fun onSuccess(messageId: String) {
-                future.complete(messageId)
-            }
-            override fun onFailure(t: Throwable) {
-                if (t is com.google.api.gax.rpc.PermissionDeniedException) {
-                    log.warn("Permission Denied to publish to topic $topic from user ${credentialsProvider?.username}")
-                    future.completeExceptionally(ProcessedException(t))
-                } else {
-                    future.completeExceptionally(t)
+        ApiFutures.addCallback(
+            messageIdFuture,
+            object : ApiFutureCallback<String> {
+                override fun onSuccess(messageId: String) {
+                    future.complete(messageId)
                 }
-            }
-        }, executor)
+
+                override fun onFailure(t: Throwable) {
+                    if (t is com.google.api.gax.rpc.PermissionDeniedException) {
+                        log.warn("Permission Denied to publish to topic $topic from user ${credentialsProvider?.username}")
+                        future.completeExceptionally(ProcessedException(t))
+                    } else {
+                        future.completeExceptionally(t)
+                    }
+                }
+            },
+            executor,
+        )
 
         return future
     }
@@ -72,9 +77,9 @@ class PubsubNotifier(
                 current.awaitTermination(1, TimeUnit.MINUTES)
             }
             Publisher.newBuilder(topic)
-                    .let { builder -> credentialsProvider?.let { builder.setCredentialsProvider(it) } ?: builder }
-                    .let { builder -> channelProvider?.let { builder.setChannelProvider(it) } ?: builder }
-                    .build()
+                .let { builder -> credentialsProvider?.let { builder.setCredentialsProvider(it) } ?: builder }
+                .let { builder -> channelProvider?.let { builder.setChannelProvider(it) } ?: builder }
+                .build()
         }
         log.debug("Connected to PubSub topic: $topic")
     }
@@ -92,5 +97,4 @@ class PubsubNotifier(
     override fun isRunning(): Boolean {
         return publisher.get() != null
     }
-
 }

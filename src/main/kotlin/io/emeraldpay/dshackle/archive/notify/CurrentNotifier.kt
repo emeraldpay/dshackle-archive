@@ -5,23 +5,23 @@ import io.emeraldpay.dshackle.archive.FileType
 import io.emeraldpay.dshackle.archive.config.GoogleAuthProvider
 import io.emeraldpay.dshackle.archive.config.RunConfig
 import io.emeraldpay.dshackle.archive.model.Chunk
-import java.nio.file.Path
-import java.time.Instant
-import java.time.ZoneId
-import java.time.format.DateTimeFormatter
 import org.slf4j.LoggerFactory
 import org.springframework.beans.factory.annotation.Autowired
 import org.springframework.context.Lifecycle
 import org.springframework.context.SmartLifecycle
 import org.springframework.stereotype.Service
 import reactor.core.publisher.Mono
+import java.nio.file.Path
+import java.time.Instant
+import java.time.ZoneId
+import java.time.format.DateTimeFormatter
 
 @Service
 class CurrentNotifier(
-        @Autowired private val runConfig: RunConfig,
-        @Autowired private val objectMapper: ObjectMapper,
-        @Autowired(required = false) private val googleAuthProvider: GoogleAuthProvider?,
-): Notifier, Lifecycle, SmartLifecycle {
+    @Autowired private val runConfig: RunConfig,
+    @Autowired private val objectMapper: ObjectMapper,
+    @Autowired(required = false) private val googleAuthProvider: GoogleAuthProvider?,
+) : Notifier, Lifecycle, SmartLifecycle {
 
     companion object {
         private val log = LoggerFactory.getLogger(CurrentNotifier::class.java)
@@ -36,20 +36,20 @@ class CurrentNotifier(
         val lifecycle = mutableListOf<Lifecycle>()
 
         if (config.file != null) {
-             notifiers.add(
-                     FilesystemNotifier(Path.of(config.file), objectMapper)
-             )
+            notifiers.add(
+                FilesystemNotifier(Path.of(config.file), objectMapper),
+            )
         }
         if (config.directory != null) {
             val formatter: DateTimeFormatter = DateTimeFormatter.ofPattern("yyyyMMddhhmmss")
-                    .withZone(ZoneId.systemDefault())
+                .withZone(ZoneId.systemDefault())
             val filename = listOf(
-                    "dshackle-archive",
-                    formatter.format(Instant.now()),
-                    "jsonl"
+                "dshackle-archive",
+                formatter.format(Instant.now()),
+                "jsonl",
             ).joinToString(".")
             notifiers.add(
-                    FilesystemNotifier(Path.of(config.directory, filename), objectMapper)
+                FilesystemNotifier(Path.of(config.directory, filename), objectMapper),
             )
         }
         if (config.pubsub != null) {
@@ -81,13 +81,13 @@ class CurrentNotifier(
 
     fun createEvent(type: FileType, heightStart: Long, heightEnd: Long, location: String): Notifier.ArchiveCreated {
         return Notifier.ArchiveCreated(
-                ts = Instant.now(),
-                blockchain = runConfig.getChainId(),
-                run = runConfig.command,
-                type = type,
-                heightStart = heightStart,
-                heightEnd = heightEnd,
-                location = location
+            ts = Instant.now(),
+            blockchain = runConfig.getChainId(),
+            run = runConfig.command,
+            type = type,
+            heightStart = heightStart,
+            heightEnd = heightEnd,
+            location = location,
         )
     }
 

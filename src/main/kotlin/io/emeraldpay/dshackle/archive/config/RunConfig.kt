@@ -7,31 +7,31 @@ import java.time.Duration
 import java.util.Locale
 
 data class RunConfig(
-        val command: Command,
-        val blockchain: Chain,
-        val connection: Connection?,
-        val options: ArchiveOptions,
-        val range: Range,
-        val files: Files,
-        val dryRun: Boolean = false,
-        val inputFiles: InputFiles? = null,
-        val export: Export = Export.default(),
-        val notify: Notify = Notify.default(),
-        val auth: Auth = Auth.default(),
-        val compaction: CompactionOptions = CompactionOptions()
+    val command: Command,
+    val blockchain: Chain,
+    val connection: Connection?,
+    val options: ArchiveOptions,
+    val range: Range,
+    val files: Files,
+    val dryRun: Boolean = false,
+    val inputFiles: InputFiles? = null,
+    val export: Export = Export.default(),
+    val notify: Notify = Notify.default(),
+    val auth: Auth = Auth.default(),
+    val compaction: CompactionOptions = CompactionOptions(),
 ) {
     companion object {
         @JvmStatic
         fun default(): RunConfig {
             return RunConfig(
-                    Command.ARCHIVE,
-                    Chain.ETHEREUM,
-                    Connection.default(),
-                    ArchiveOptions(),
-                    Range.default(),
-                    Files(),
-                    false,
-                    null
+                Command.ARCHIVE,
+                Chain.ETHEREUM,
+                Connection.default(),
+                ArchiveOptions(),
+                Range.default(),
+                Files(),
+                false,
+                null,
             )
         }
     }
@@ -71,11 +71,11 @@ data class RunConfig(
     }
 
     data class Connection(
-            val host: String,
-            val port: Int,
-            val useTls: Boolean = true,
-            val timeout: Duration = Duration.ofSeconds(15),
-            val parallel: Int = RunConfigInitializer.DEFAULT_PARALLEL,
+        val host: String,
+        val port: Int,
+        val useTls: Boolean = true,
+        val timeout: Duration = Duration.ofSeconds(15),
+        val parallel: Int = RunConfigInitializer.DEFAULT_PARALLEL,
     ) {
         companion object {
             fun default(): Connection {
@@ -89,19 +89,19 @@ data class RunConfig(
     }
 
     data class ArchiveOptions(
-            val trace: Boolean = false,
-            val stateDiff: Boolean = false
+        val trace: Boolean = false,
+        val stateDiff: Boolean = false,
     )
 
     data class Range(
-            val start: Long,
-            val count: Long,
-            val chunk: Long,
-            val individual: Boolean,
-            val tail: Long = 100,
-            val continueFromLast: Boolean = false,
-            val backward: Boolean = false,
-            val aligned: Boolean = true,
+        val start: Long,
+        val count: Long,
+        val chunk: Long,
+        val individual: Boolean,
+        val tail: Long = 100,
+        val continueFromLast: Boolean = false,
+        val backward: Boolean = false,
+        val aligned: Boolean = true,
     ) {
         companion object {
             private const val DEFAULT_CHUNK: Long = 1_000
@@ -113,14 +113,17 @@ data class RunConfig(
             }
 
             private fun parseNumber(s: String): Long {
-                return s.replace("_", "").trim().toLong()
+                return s.replace("_", "")
+                    .trim()
+                    .toLong()
             }
 
             fun parse(range: String): Range {
                 return if (range.contains("..")) {
-                    range.split("..").let {
-                        Range(parseNumber(it[0]), parseNumber(it[1]) - parseNumber(it[0]), DEFAULT_CHUNK, DEFAULT_INDIVIDUAL)
-                    }
+                    range.split("..")
+                        .let {
+                            Range(parseNumber(it[0]), parseNumber(it[1]) - parseNumber(it[0]), DEFAULT_CHUNK, DEFAULT_INDIVIDUAL)
+                        }
                 } else {
                     Range(parseNumber(range), 1, DEFAULT_CHUNK, true)
                 }
@@ -135,6 +138,7 @@ data class RunConfig(
         fun withContinueFromLast(value: Boolean): Range {
             return copy(continueFromLast = value)
         }
+
         fun withBackward(value: Boolean): Range {
             return copy(backward = value)
         }
@@ -144,18 +148,17 @@ data class RunConfig(
                 "Only one of --continue or --back must be set"
             }
         }
-
     }
 
     data class Files(
-            val dir: String = ".",
-            val prefix: String = "",
-            val dirBlockSizeL1: Long = 1_000_000,
-            val dirBlockSizeL2: Long = 1_000,
+        val dir: String = ".",
+        val prefix: String = "",
+        val dirBlockSizeL1: Long = 1_000_000,
+        val dirBlockSizeL2: Long = 1_000,
     )
 
     data class Export(
-            val gs: ExportGS? = null
+        val gs: ExportGS? = null,
     ) {
         companion object {
             fun default(): Export {
@@ -165,18 +168,18 @@ data class RunConfig(
     }
 
     data class ExportGS(
-            val bucket: String,
-            val path: String
+        val bucket: String,
+        val path: String,
     )
 
     data class InputFiles(
-            val files: List<String>
+        val files: List<String>,
     )
 
     data class Notify(
-            val file: String? = null,
-            val directory: String? = null,
-            val pubsub: String? = null,
+        val file: String? = null,
+        val directory: String? = null,
+        val pubsub: String? = null,
     ) {
         companion object {
             fun default(): Notify {
@@ -186,7 +189,7 @@ data class RunConfig(
     }
 
     data class Auth(
-            val gcp: AuthGcp?
+        val gcp: AuthGcp?,
     ) {
         companion object {
             fun default(): Auth {
@@ -196,10 +199,10 @@ data class RunConfig(
     }
 
     data class AuthGcp(
-            val credentials: String
+        val credentials: String,
     )
 
     data class CompactionOptions(
-            val acceptForks: Boolean = true
+        val acceptForks: Boolean = true,
     )
 }

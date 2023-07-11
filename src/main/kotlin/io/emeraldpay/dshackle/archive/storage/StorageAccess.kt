@@ -1,10 +1,9 @@
 package io.emeraldpay.dshackle.archive.storage
 
-import java.io.InputStream
-import java.io.OutputStream
 import org.apache.avro.file.SeekableInput
 import reactor.core.publisher.Flux
 import reactor.core.publisher.Mono
+import java.io.OutputStream
 
 interface StorageAccess {
 
@@ -31,7 +30,7 @@ interface StorageAccess {
     fun listArchive(height: Long): Flux<String> {
         val firstLevel0Pos = height / getDirBlockSizeL1()
         return listArchiveLevel0(height)
-                .concatWith(nextLevel0(firstLevel0Pos.toInt() + 1))
+            .concatWith(nextLevel0(firstLevel0Pos.toInt() + 1))
     }
 
     /**
@@ -47,9 +46,10 @@ interface StorageAccess {
     fun nextLevel0(pos: Int): Flux<String> {
         val items = Mono.fromCallable {
             getDirBlockSizeL1() * pos
-        }.flatMapMany {
-            listArchiveLevel0(it)
         }
+            .flatMapMany {
+                listArchiveLevel0(it)
+            }
         return items.switchOnFirst { t, u ->
             if (t.hasValue()) {
                 // if we have got any file in the dir then also check the next level 0 dir for items

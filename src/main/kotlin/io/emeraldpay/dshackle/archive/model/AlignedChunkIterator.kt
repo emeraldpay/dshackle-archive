@@ -18,7 +18,8 @@ class AlignedChunkIterator(
         }
         val endBlock = startBlock + length - 1
         val result = ArrayList<Chunk>()
-        val fistPosition = startBlock.floorDiv(chunk).times(chunk)
+        val fistPosition = startBlock.floorDiv(chunk)
+            .times(chunk)
             .let {
                 if (it == startBlock) {
                     it

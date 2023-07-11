@@ -5,7 +5,7 @@ import io.emeraldpay.dshackle.archive.config.RunConfig
 import org.slf4j.LoggerFactory
 
 class RangeAccess(
-        private val runConfig: RunConfig,
+    private val runConfig: RunConfig,
 ) {
 
     companion object {

@@ -5,5 +5,4 @@ import reactor.core.publisher.Mono
 interface RunCommand {
 
     fun run(): Mono<Void>
-
 }

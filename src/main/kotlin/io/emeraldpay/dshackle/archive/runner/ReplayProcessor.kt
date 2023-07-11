@@ -5,9 +5,9 @@ import com.fasterxml.jackson.core.JsonParser
 import com.fasterxml.jackson.core.JsonToken
 import com.fasterxml.jackson.databind.util.ByteBufferBackedInputStream
 import io.emeraldpay.etherjar.domain.TransactionId
-import java.nio.ByteBuffer
 import org.slf4j.LoggerFactory
 import reactor.core.publisher.Mono
+import java.nio.ByteBuffer
 
 class ReplayProcessor {
 
@@ -19,17 +19,17 @@ class ReplayProcessor {
 
     fun start(resp: Mono<ByteBuffer>): ReplyValues {
         return ReplyValuesImpl(
-                resp
-                        .map { splitReplayList(it) }
-                        .doOnError { t -> log.warn("Failed to process replayTransactions", t) }
+            resp
+                .map { splitReplayList(it) }
+                .doOnError { t -> log.warn("Failed to process replayTransactions", t) },
         )
     }
 
     fun startAsync(resp: Mono<ByteBuffer>): Mono<out ReplyValues> {
         return resp
-                .map { splitReplayList(it) }
-                .map { ReplyValuesProvided(it) }
-                .doOnError { t -> log.warn("Failed to process replayTransactions", t) }
+            .map { splitReplayList(it) }
+            .map { ReplyValuesProvided(it) }
+            .doOnError { t -> log.warn("Failed to process replayTransactions", t) }
     }
 
     fun empty(): ReplyValues {
@@ -81,24 +81,25 @@ class ReplayProcessor {
     }
 
     class ReplyValuesImpl(
-            source: Mono<List<TxTrace>>
+        source: Mono<List<TxTrace>>,
     ) : ReplyValues {
 
         private val shared = source.share()
 
         override fun get(txid: TransactionId): Mono<TxTrace> {
-            return Mono.from(shared).flatMap {
-                val value = it.find { it.txid == txid }
-                if (value == null) {
-                    log.warn("No value for $txid")
+            return Mono.from(shared)
+                .flatMap {
+                    val value = it.find { it.txid == txid }
+                    if (value == null) {
+                        log.warn("No value for $txid")
+                    }
+                    Mono.justOrEmpty(value)
                 }
-                Mono.justOrEmpty(value)
-            }
         }
     }
 
     class ReplyValuesProvided(
-            private val source: List<TxTrace>
+        private val source: List<TxTrace>,
     ) : ReplyValues {
 
         override fun get(txid: TransactionId): Mono<TxTrace> {
@@ -109,5 +110,4 @@ class ReplayProcessor {
             return Mono.justOrEmpty(value)
         }
     }
-
 }

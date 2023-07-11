@@ -6,8 +6,8 @@ import io.emeraldpay.dshackle.archive.model.AlignedChunkIterator
 import io.emeraldpay.dshackle.archive.model.Chunk
 import org.slf4j.LoggerFactory
 import reactor.core.publisher.Flux
-import java.util.function.Function
 import reactor.core.publisher.Mono
+import java.util.function.Function
 
 open class RunFixLogic {
 
@@ -25,15 +25,15 @@ open class RunFixLogic {
     fun findBroken(wholeRange: Chunk): Function<Flux<Chunk>, Flux<Chunk>> {
         return Function { chunks ->
             chunks
-                    .reduce(ScanningTools.Report.empty(), ScanningTools.Report::withChunk)
-                    .map { findDifference(wholeRange, it.chunks) }
-                    .doOnNext {
-                        val total = it.sumOf(Chunk::length)
-                        log.info("Total blocks to fix: $total")
-                    }
-                    .flatMapMany {
-                        Flux.fromIterable(it)
-                    }
+                .reduce(ScanningTools.Report.empty(), ScanningTools.Report::withChunk)
+                .map { findDifference(wholeRange, it.chunks) }
+                .doOnNext {
+                    val total = it.sumOf(Chunk::length)
+                    log.info("Total blocks to fix: $total")
+                }
+                .flatMapMany {
+                    Flux.fromIterable(it)
+                }
         }
     }
 
@@ -43,7 +43,10 @@ open class RunFixLogic {
             all.forEach { expected ->
                 if (expected.intersects(c)) {
                     if (expected.includes(c)) {
-                        results.addAll(expected.splitBy(c).toList())
+                        results.addAll(
+                            expected.splitBy(c)
+                                .toList(),
+                        )
                     } else {
                         results.add(expected.cut(c))
                     }

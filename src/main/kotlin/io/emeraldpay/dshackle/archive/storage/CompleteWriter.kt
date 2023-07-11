@@ -9,7 +9,6 @@ import io.emeraldpay.dshackle.archive.runner.ProgressIndicator
 import org.apache.commons.lang3.StringUtils
 import org.slf4j.LoggerFactory
 import org.springframework.beans.factory.annotation.Autowired
-import org.springframework.beans.factory.annotation.Value
 import org.springframework.context.annotation.Profile
 import org.springframework.stereotype.Repository
 import reactor.core.publisher.Flux
@@ -21,11 +20,11 @@ import reactor.util.function.Tuples
 @Profile("!run-report")
 @Repository
 class CompleteWriter(
-        @Autowired private val blocksWriter: BlocksWriter,
-        @Autowired private val transactionsWriter: TransactionsWriter,
-        @Autowired private val configuredFilenameGenerator: ConfiguredFilenameGenerator,
-        @Autowired private val currentNotifier: CurrentNotifier,
-        @Autowired private val targetStorage: TargetStorage,
+    @Autowired private val blocksWriter: BlocksWriter,
+    @Autowired private val transactionsWriter: TransactionsWriter,
+    @Autowired private val configuredFilenameGenerator: ConfiguredFilenameGenerator,
+    @Autowired private val currentNotifier: CurrentNotifier,
+    @Autowired private val targetStorage: TargetStorage,
 ) {
 
     companion object {
@@ -36,133 +35,153 @@ class CompleteWriter(
         return Mono.fromCallable {
             blocksWriter.closeAll()
             transactionsWriter.closeAll()
-        }.then()
+        }
+            .then()
     }
 
     fun consume(dataSource: Flux<BlockDetails>, chunk: Chunk): Mono<Void> {
         val progress = ProgressIndicator(opLabel = "blocks")
-        //NOTE rewrites the files
+        // NOTE rewrites the files
         val blockFile = configuredFilenameGenerator.fileFor(FileType.BLOCKS, chunk)
         val blockWrt = blocksWriter.open(blockFile)
         val txFile = configuredFilenameGenerator.fileFor(FileType.TRANSACTIONS, chunk)
         val txWrt = transactionsWriter.open(txFile)
         val saving = dataSource
-                .doOnSubscribe {
-                    progress.start()
-                }
-                .flatMap({ block ->
+            .doOnSubscribe {
+                progress.start()
+            }
+            .flatMap(
+                { block ->
                     Mono.zip(
-                            Mono.fromCallable {
-                                block.transactions.forEach { tx ->
-                                    txWrt.append(block, tx)
-                                }
-                                1
-                            }.subscribeOn(Schedulers.boundedElastic()),
-                            Mono.fromCallable {
-                                blockWrt.append(block)
-                                1
-                            }.subscribeOn(Schedulers.boundedElastic())
-                    ).then(Mono.just(1))
-                }, 1)
-                .doOnNext {
-                    progress.onNext()
+                        Mono.fromCallable {
+                            block.transactions.forEach { tx ->
+                                txWrt.append(block, tx)
+                            }
+                            1
+                        }
+                            .subscribeOn(Schedulers.boundedElastic()),
+                        Mono.fromCallable {
+                            blockWrt.append(block)
+                            1
+                        }
+                            .subscribeOn(Schedulers.boundedElastic()),
+                    )
+                        .then(Mono.just(1))
+                },
+                1,
+            )
+            .doOnNext {
+                progress.onNext()
+            }
+            .doFinally {
+                txWrt.close()
+                blockWrt.close()
+            }
+            .doOnError { t ->
+                log.error("Failed to export", t)
+            }
+            .reduce { a, b ->
+                val total = a + b
+                if (total % 100 == 0) {
+                    log.debug("Processed $total blocks")
                 }
-                .doFinally {
-                    txWrt.close()
-                    blockWrt.close()
-                }
-                .doOnError { t ->
-                    log.error("Failed to export", t)
-                }
-                .reduce { a, b ->
-                    val total = a + b
-                    if (total % 100 == 0) {
-                        log.debug("Processed $total blocks")
-                    }
-                    total
-                }
-                .doOnNext { count ->
-                    log.info("$count blocks saved")
-                }
+                total
+            }
+            .doOnNext { count ->
+                log.info("$count blocks saved")
+            }
 
         val notifyBlock = currentNotifier.onCreated(
-                currentNotifier.createEvent(
-                        FileType.BLOCKS, chunk, blockFile
-                )
+            currentNotifier.createEvent(
+                FileType.BLOCKS,
+                chunk,
+                blockFile,
+            ),
         )
         val notifyTxes = currentNotifier.onCreated(
-                currentNotifier.createEvent(
-                        FileType.TRANSACTIONS, chunk, txFile
-                )
+            currentNotifier.createEvent(
+                FileType.TRANSACTIONS,
+                chunk,
+                txFile,
+            ),
         )
-        val notifyAll = Flux.merge(notifyBlock, notifyTxes).then()
+        val notifyAll = Flux.merge(notifyBlock, notifyTxes)
+            .then()
 
         return saving.then(notifyAll)
     }
 
-    fun consumeBlocks(dataSource: Flux<Block>) : Mono<Int> {
+    fun consumeBlocks(dataSource: Flux<Block>): Mono<Int> {
         val progress = ProgressIndicator(opLabel = "blocks")
         val startTime = System.currentTimeMillis()
         return dataSource
-                .doOnSubscribe {
-                    progress.start()
-                }
-                .flatMapSequential ({ block ->
+            .doOnSubscribe {
+                progress.start()
+            }
+            .flatMapSequential(
+                { block ->
                     Mono.fromCallable {
                         val blockFile = configuredFilenameGenerator.fileForAutoRange(FileType.BLOCKS, block.height)
-                        blocksWriter.open(blockFile).append(block)
+                        blocksWriter.open(blockFile)
+                            .append(block)
                         1
                     }
-                }, 4)
-                .doOnNext {
-                    progress.onNext()
+                },
+                4,
+            )
+            .doOnNext {
+                progress.onNext()
+            }
+            .reduce { a, b ->
+                val total = a + b
+                if (total % 10000 == 0) {
+                    log.debug("Processed $total blocks")
                 }
-                .reduce { a, b ->
-                    val total = a + b
-                    if (total % 10000 == 0) {
-                        log.debug("Processed $total blocks")
-                    }
-                    total
-                }
-                .doFinally {
-                    val time = System.currentTimeMillis() - startTime
-                    val minutes = time / 60_000
-                    val seconds = (time % 60_000) / 1000
-                    log.info("Archived in ${minutes}m:${StringUtils.leftPad(seconds.toString(), 2, "0")}s")
-                }
+                total
+            }
+            .doFinally {
+                val time = System.currentTimeMillis() - startTime
+                val minutes = time / 60_000
+                val seconds = (time % 60_000) / 1000
+                log.info("Archived in ${minutes}m:${StringUtils.leftPad(seconds.toString(), 2, "0")}s")
+            }
     }
 
-    fun consumeTransactions(dataSource: Flux<Transaction>) : Mono<Int> {
+    fun consumeTransactions(dataSource: Flux<Transaction>): Mono<Int> {
         val progress = ProgressIndicator(opLabel = "transactions")
         val startTime = System.currentTimeMillis()
         return dataSource
-                .doOnSubscribe {
-                    progress.start()
-                }
-                .flatMapSequential ({ tx ->
+            .doOnSubscribe {
+                progress.start()
+            }
+            .flatMapSequential(
+                { tx ->
                     Mono.fromCallable {
                         // note that it most likely appends to an existing file
                         val txesFile = configuredFilenameGenerator.fileForAutoRange(FileType.TRANSACTIONS, tx.height)
-                        transactionsWriter.open(txesFile).append(tx)
+                        transactionsWriter.open(txesFile)
+                            .append(tx)
                         1
                     }
-                }, 4)
-                .doOnNext {
-                    progress.onNext()
+                },
+                4,
+            )
+            .doOnNext {
+                progress.onNext()
+            }
+            .reduce { a, b ->
+                val total = a + b
+                if (total % 100000 == 0) {
+                    log.debug("Processed $total transactions")
                 }
-                .reduce { a, b ->
-                    val total = a + b
-                    if (total % 100000 == 0) {
-                        log.debug("Processed $total transactions")
-                    }
-                    total
-                }
-                .doFinally {
-                    val time = System.currentTimeMillis() - startTime
-                    val minutes = time / 60_000
-                    val seconds = (time % 60_000) / 1000
-                    log.info("Archived in ${minutes}m:${StringUtils.leftPad(seconds.toString(), 2, "0")}s")
-                }
+                total
+            }
+            .doFinally {
+                val time = System.currentTimeMillis() - startTime
+                val minutes = time / 60_000
+                val seconds = (time % 60_000) / 1000
+                log.info("Archived in ${minutes}m:${StringUtils.leftPad(seconds.toString(), 2, "0")}s")
+            }
     }
 
     fun streamConsumer(): java.util.function.Function<Flux<BlockDetails>, Flux<Long>> {
@@ -170,39 +189,44 @@ class CompleteWriter(
             val progress = ProgressIndicator()
             val startTime = System.currentTimeMillis()
             dataSource
-                    .doOnSubscribe {
-                        progress.start()
-                    }
-                    .flatMap({ block ->
+                .doOnSubscribe {
+                    progress.start()
+                }
+                .flatMap(
+                    { block ->
                         Mono.fromCallable {
-                                    val txesFile = configuredFilenameGenerator.fileForAutoRange(FileType.TRANSACTIONS, block.height)
-                                    transactionsWriter.open(txesFile).use { wrt ->
-                                        block.transactions.forEach { tx ->
-                                            wrt.append(block, tx)
-                                        }
+                            val txesFile = configuredFilenameGenerator.fileForAutoRange(FileType.TRANSACTIONS, block.height)
+                            transactionsWriter.open(txesFile)
+                                .use { wrt ->
+                                    block.transactions.forEach { tx ->
+                                        wrt.append(block, tx)
                                     }
-                                    val blockFile = configuredFilenameGenerator.fileForAutoRange(FileType.BLOCKS, block.height)
-                                    blocksWriter.open(blockFile).use { wrt ->
-                                        wrt.append(block)
-                                    }
-                                    Tuples.of(txesFile, blockFile)
                                 }
-                                .transform(withNotifications(block))
-                                .then(Mono.just(block.height))
-                                .onErrorResume { t ->
-                                    log.warn("Failed to process ${block.height}", t)
-                                    Mono.empty<Long>()
+                            val blockFile = configuredFilenameGenerator.fileForAutoRange(FileType.BLOCKS, block.height)
+                            blocksWriter.open(blockFile)
+                                .use { wrt ->
+                                    wrt.append(block)
                                 }
-                    }, 4)
-                    .doOnNext {
-                        progress.onNext()
-                    }
-                    .doFinally {
-                        val time = System.currentTimeMillis() - startTime
-                        val minutes = time / 60_000
-                        val seconds = (time % 60_000) / 1000
-                        log.info("Archived in ${minutes}m:${StringUtils.leftPad(seconds.toString(), 2, "0")}s")
-                    }
+                            Tuples.of(txesFile, blockFile)
+                        }
+                            .transform(withNotifications(block))
+                            .then(Mono.just(block.height))
+                            .onErrorResume { t ->
+                                log.warn("Failed to process ${block.height}", t)
+                                Mono.empty<Long>()
+                            }
+                    },
+                    4,
+                )
+                .doOnNext {
+                    progress.onNext()
+                }
+                .doFinally {
+                    val time = System.currentTimeMillis() - startTime
+                    val minutes = time / 60_000
+                    val seconds = (time % 60_000) / 1000
+                    log.info("Archived in ${minutes}m:${StringUtils.leftPad(seconds.toString(), 2, "0")}s")
+                }
         }
     }
 
@@ -214,18 +238,24 @@ class CompleteWriter(
         return java.util.function.Function { files ->
             files.flatMap {
                 val txnotify = currentNotifier.onCreated(
-                        currentNotifier.createEvent(
-                                FileType.TRANSACTIONS, block.height, block.height, targetStorage.current.getURI(it.t1)
-                        )
+                    currentNotifier.createEvent(
+                        FileType.TRANSACTIONS,
+                        block.height,
+                        block.height,
+                        targetStorage.current.getURI(it.t1),
+                    ),
                 )
                 val blocknotify = currentNotifier.onCreated(
-                        currentNotifier.createEvent(
-                                FileType.BLOCKS, block.height, block.height, targetStorage.current.getURI(it.t2)
-                        )
+                    currentNotifier.createEvent(
+                        FileType.BLOCKS,
+                        block.height,
+                        block.height,
+                        targetStorage.current.getURI(it.t2),
+                    ),
                 )
-                txnotify.then(blocknotify).then()
+                txnotify.then(blocknotify)
+                    .then()
             }
         }
     }
-
 }

@@ -11,12 +11,6 @@ import io.emeraldpay.dshackle.archive.runner.RunFix
 import io.emeraldpay.dshackle.archive.runner.RunReport
 import io.emeraldpay.dshackle.archive.runner.RunStream
 import io.emeraldpay.dshackle.archive.runner.RunVerify
-import java.lang.management.ManagementFactory
-import java.time.Duration
-import java.util.Locale
-import kotlin.concurrent.thread
-import kotlin.system.exitProcess
-import kotlin.time.toKotlinDuration
 import org.slf4j.LoggerFactory
 import org.springframework.boot.Banner
 import org.springframework.boot.SpringApplication
@@ -24,6 +18,12 @@ import org.springframework.boot.autoconfigure.SpringBootApplication
 import org.springframework.context.annotation.Import
 import reactor.core.publisher.Mono
 import reactor.tools.agent.ReactorDebugAgent
+import java.lang.management.ManagementFactory
+import java.time.Duration
+import java.util.Locale
+import kotlin.concurrent.thread
+import kotlin.system.exitProcess
+import kotlin.time.toKotlinDuration
 
 @SpringBootApplication(scanBasePackages = ["io.emeraldpay.dshackle.archive"])
 @Import(Config::class)
@@ -62,13 +62,26 @@ fun main(args: Array<String>) {
     app.setAdditionalProfiles(*profiles.toTypedArray())
     val ctx = app.run(*args)
     val runner: Mono<Void> = when (config.command) {
-        RunConfig.Command.ARCHIVE -> ctx.getBean(RunArchive::class.java).run()
-        RunConfig.Command.COPY -> ctx.getBean(RunCopy::class.java).run()
-        RunConfig.Command.STREAM -> ctx.getBean(RunStream::class.java).run()
-        RunConfig.Command.COMPACT -> ctx.getBean(RunCompaction::class.java).run()
-        RunConfig.Command.REPORT -> ctx.getBean(RunReport::class.java).run()
-        RunConfig.Command.FIX -> ctx.getBean(RunFix::class.java).run()
-        RunConfig.Command.VERIFY -> ctx.getBean(RunVerify::class.java).run()
+        RunConfig.Command.ARCHIVE -> ctx.getBean(RunArchive::class.java)
+            .run()
+
+        RunConfig.Command.COPY -> ctx.getBean(RunCopy::class.java)
+            .run()
+
+        RunConfig.Command.STREAM -> ctx.getBean(RunStream::class.java)
+            .run()
+
+        RunConfig.Command.COMPACT -> ctx.getBean(RunCompaction::class.java)
+            .run()
+
+        RunConfig.Command.REPORT -> ctx.getBean(RunReport::class.java)
+            .run()
+
+        RunConfig.Command.FIX -> ctx.getBean(RunFix::class.java)
+            .run()
+
+        RunConfig.Command.VERIFY -> ctx.getBean(RunVerify::class.java)
+            .run()
     }
     try {
         runner.block()
@@ -84,7 +97,11 @@ fun main(args: Array<String>) {
             // make sure it exits after the completion even if there are still running threads
             thread(isDaemon = true) {
                 val waitTime = Duration.ofSeconds(10)
-                log.warn("Wait for {} before calling exit", waitTime.toKotlinDuration().toString())
+                log.warn(
+                    "Wait for {} before calling exit",
+                    waitTime.toKotlinDuration()
+                        .toString(),
+                )
                 Thread.sleep(waitTime.toMillis())
                 log.warn("Calling exit")
                 exitProcess(0)

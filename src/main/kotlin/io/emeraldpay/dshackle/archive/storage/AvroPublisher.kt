@@ -1,23 +1,23 @@
 package io.emeraldpay.dshackle.archive.storage
 
-import java.util.concurrent.Executors
-import java.util.concurrent.atomic.AtomicBoolean
-import java.util.concurrent.atomic.AtomicLong
 import org.apache.avro.file.FileReader
 import org.reactivestreams.Publisher
 import org.reactivestreams.Subscriber
 import org.reactivestreams.Subscription
 import org.slf4j.LoggerFactory
+import java.util.concurrent.Executors
+import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicLong
 
 class AvroPublisher<T>(
-        private val dataFileReader: FileReader<T>
-): Publisher<T> {
+    private val dataFileReader: FileReader<T>,
+) : Publisher<T> {
 
     companion object {
         private val log = LoggerFactory.getLogger(AvroPublisher::class.java)
     }
 
-    /// use individual thread because otherwise it blocks while calling onNext
+    // / use individual thread because otherwise it blocks while calling onNext
     private val thread = Executors.newFixedThreadPool(1)
 
     private fun close() {
@@ -34,7 +34,6 @@ class AvroPublisher<T>(
         subscriber.onComplete()
         read.set(true)
     }
-
 
     override fun subscribe(s: Subscriber<in T>) {
         val read = AtomicBoolean(false)

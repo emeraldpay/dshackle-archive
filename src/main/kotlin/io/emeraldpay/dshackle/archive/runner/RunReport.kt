@@ -2,19 +2,19 @@ package io.emeraldpay.dshackle.archive.runner
 
 import io.emeraldpay.dshackle.archive.BlocksRange
 import io.emeraldpay.dshackle.archive.model.Chunk
-import java.util.function.Function
 import org.slf4j.LoggerFactory
 import org.springframework.beans.factory.annotation.Autowired
 import org.springframework.context.annotation.Profile
 import org.springframework.stereotype.Service
 import reactor.core.publisher.Mono
+import java.util.function.Function
 
 @Service
 @Profile("run-report")
 class RunReport(
-        @Autowired private val blocksRange: BlocksRange,
-        @Autowired private val scanningTools: ScanningTools,
-): RunCommand {
+    @Autowired private val blocksRange: BlocksRange,
+    @Autowired private val scanningTools: ScanningTools,
+) : RunCommand {
 
     companion object {
         private val log = LoggerFactory.getLogger(RunReport::class.java)
@@ -22,12 +22,12 @@ class RunReport(
 
     override fun run(): Mono<Void> {
         return getRange()
-                .doOnSubscribe { log.info("Checking archive files. It may take several minutes.") }
-                .flatMap { range ->
-                    scanningTools.getSummary(range)
-                            .transform(printReport(range))
-                }
-                .then()
+            .doOnSubscribe { log.info("Checking archive files. It may take several minutes.") }
+            .flatMap { range ->
+                scanningTools.getSummary(range)
+                    .transform(printReport(range))
+            }
+            .then()
     }
 
     fun getRange(): Mono<Chunk> {
@@ -50,9 +50,8 @@ class RunReport(
                 log.info("TRANSACTIONS:")
                 printBlocks(report.txes)
                 log.info("============================================")
-            }.then()
+            }
+                .then()
         }
     }
-
-
 }

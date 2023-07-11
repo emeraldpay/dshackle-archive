@@ -8,5 +8,4 @@ class RunConfigHolder {
         private val log = LoggerFactory.getLogger(RunConfigHolder::class.java)
         var value: RunConfig = RunConfig.default()
     }
-
 }
