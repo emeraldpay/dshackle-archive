@@ -10,6 +10,7 @@ import io.emeraldpay.dshackle.archive.model.Chunk
 import io.emeraldpay.dshackle.archive.storage.FilenameGenerator
 import io.emeraldpay.dshackle.archive.storage.StorageAccess
 import org.apache.avro.file.SeekableInput
+import org.apache.commons.lang3.StringUtils
 import org.reactivestreams.Publisher
 import org.reactivestreams.Subscriber
 import org.reactivestreams.Subscription
@@ -21,9 +22,13 @@ import reactor.core.publisher.Flux
 import reactor.core.publisher.Mono
 import reactor.core.scheduler.Schedulers
 import java.io.OutputStream
+import java.net.URI
 import java.nio.channels.Channels
+import java.nio.file.Path
+import java.nio.file.Paths
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicLong
+import kotlin.io.path.name
 
 @Service
 @Profile("with-gcp")
@@ -89,6 +94,13 @@ open class GSStorageAccess(
         return "gs://${googleStorage.bucket}/${googleStorage.getBucketPath(file)}"
     }
 
+    override fun exists(path: String): Boolean {
+        val blobId = BlobId.of(googleStorage.bucket, googleStorage.getBucketPath(path))
+        val blobInfo = BlobInfo.newBuilder(blobId)
+            .build()
+        return googleStorage.storage.get(blobInfo.blobId) != null
+    }
+
     override fun createWriter(path: String): OutputStream {
         val blobId = BlobId.of(googleStorage.bucket, googleStorage.getBucketPath(path))
         val blobInfo = BlobInfo.newBuilder(blobId).build()
@@ -104,6 +116,60 @@ open class GSStorageAccess(
         val channel = googleStorage.storage.reader(blobId)
             ?: throw IllegalStateException("Blob ${blobId.toGsUtilUri()} cannot be created")
         return SeekableChannelInput(blob.size, channel)
+    }
+
+    override fun inputSources(patterns: List<String>, range: Chunk): StorageAccess.InputSources {
+        var transactions = Flux.empty<Path>()
+        var blocks = Flux.empty<Path>()
+        for (pattern in patterns) {
+            if (StringUtils.containsAny(pattern, "?*")) {
+                throw IllegalArgumentException(
+                    "Patterns are not supported, input sources should contain prefixes only",
+                )
+            }
+            val blobPrefix = BlobId.fromGsUtilUri(pattern)
+            if (blobPrefix.bucket != googleStorage.bucket) {
+                throw IllegalArgumentException(
+                    "Different source and target buckets are not currently supported (${blobPrefix.bucket} != ${googleStorage.bucket})",
+                )
+            }
+            val blobs: Iterable<Blob> = googleStorage.storage
+                .list(blobPrefix.bucket, Storage.BlobListOption.prefix(blobPrefix.name))
+                .iterateAll()
+            val blobFlux = Flux.fromIterable(blobs)
+                .map { blob -> blobLink(blob) }
+                .filter { file ->
+                    val chunk = filenameGenerator.parseRange(file.name)
+                    if (chunk == null) {
+                        log.debug("Skip no chunk ${file.name}")
+                    }
+                    val accept = chunk != null && range.intersects(chunk)
+                    if (!accept) {
+                        log.trace("Skip diff chunk ${file.name}")
+                    }
+                    accept
+                }
+                .share()
+            transactions = transactions.concatWith(
+                blobFlux.filter {
+                    it.name.endsWith(".txes.avro") || it.name.endsWith(".transactions.avro")
+                },
+            )
+            blocks = blocks.concatWith(
+                blobFlux.filter {
+                    it.name.endsWith(".block.avro") || it.name.endsWith(".blocks.avro")
+                },
+            )
+        }
+        return StorageAccess.InputSources(transactions, blocks)
+    }
+
+    private fun blobLink(blob: Blob): Path {
+        if (blob.isDirectory) {
+            throw IllegalStateException("storage.list shouldn't list directories")
+        }
+        val uri = blob.blobId.toGsUtilUri()
+        return Paths.get(URI.create(uri))
     }
 
     data class ListQuery(

@@ -64,7 +64,8 @@ class FilesStorageAccessSpec extends Specification {
                 .collectList().block(Duration.ofSeconds(1))
         then:
         act.collect {dir.relativize(it).toString() }.toSorted() == [
-                "subdir/test1.txt", "subdir/test2.txt"
+                dir.fileSystem.getPath("subdir", "test1.txt").toString(),
+                dir.fileSystem.getPath("subdir", "test2.txt").toString(),
         ]
     }
 
@@ -87,10 +88,12 @@ class FilesStorageAccessSpec extends Specification {
         def act = Flux.from(publisher)
                 .collectList().block(Duration.ofSeconds(1))
         then:
-        act.collect {dir.relativize(it).toString() }.toSorted() == [
-                "test5.txt",
-                "subdir1/test1.txt", "subdir1/test2.txt",
-                "subdir2/test3.txt", "subdir2/test4.txt"
+        act.collect {dir.relativize(it) }.toSorted() == [
+                dir.fileSystem.getPath("test5.txt"),
+                dir.fileSystem.getPath("subdir1", "test1.txt"),
+                dir.fileSystem.getPath("subdir1", "test2.txt"),
+                dir.fileSystem.getPath("subdir2", "test3.txt"),
+                dir.fileSystem.getPath("subdir2", "test4.txt"),
         ].toSorted()
     }
 
@@ -111,8 +114,12 @@ class FilesStorageAccessSpec extends Specification {
                 }
                 .collectList().block(Duration.ofSeconds(1))
         then:
-        act.collect {dir.relativize(it).toString() }.toSorted() == [
-                "subdir/test10.txt", "subdir/test11.txt", "subdir/test12.txt", "subdir/test13.txt", "subdir/test14.txt"
+        act.collect {dir.relativize(it) }.toSorted() == [
+                dir.fileSystem.getPath("subdir", "test10.txt"),
+                dir.fileSystem.getPath("subdir", "test11.txt"),
+                dir.fileSystem.getPath("subdir", "test12.txt"),
+                dir.fileSystem.getPath("subdir", "test13.txt"),
+                dir.fileSystem.getPath("subdir", "test14.txt"),
         ]
     }
 }

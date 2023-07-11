@@ -18,6 +18,7 @@ data class RunConfig(
     val export: Export = Export.default(),
     val notify: Notify = Notify.default(),
     val auth: Auth = Auth.default(),
+    val deduplicate: Boolean = false,
     val compaction: CompactionOptions = CompactionOptions(),
 ) {
     companion object {
@@ -201,5 +202,6 @@ data class RunConfig(
 
     data class CompactionOptions(
         val acceptForks: Boolean = true,
+        val compactRanges: Boolean = false,
     )
 }

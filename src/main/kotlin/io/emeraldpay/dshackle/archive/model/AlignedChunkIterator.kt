@@ -36,7 +36,7 @@ class AlignedChunkIterator(
         while (true) {
             val currentLength = min(chunk, endBlock - currentStart + 1)
             result.add(Chunk(currentStart, currentLength))
-            if (currentStart + currentLength >= endBlock) {
+            if (currentStart + currentLength - 1 >= endBlock) {
                 return result
             }
             currentStart += currentLength

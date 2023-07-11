@@ -1,6 +1,7 @@
 package io.emeraldpay.dshackle.archive.storage.fs
 
 import io.emeraldpay.dshackle.archive.config.RunConfig
+import io.emeraldpay.dshackle.archive.model.Chunk
 import io.emeraldpay.dshackle.archive.storage.FilenameGenerator
 import io.emeraldpay.dshackle.archive.storage.StorageAccess
 import org.apache.avro.file.SeekableFileInput
@@ -27,6 +28,7 @@ import java.util.concurrent.atomic.AtomicLong
 import java.util.concurrent.locks.ReentrantLock
 import kotlin.concurrent.withLock
 import kotlin.io.path.exists
+import kotlin.io.path.name
 
 @Service
 class FilesStorageAccess(
@@ -89,7 +91,11 @@ class FilesStorageAccess(
     }
 
     override fun getURI(file: String): String {
-        return File(file).absolutePath
+        return File(file).toURI().toString()
+    }
+
+    override fun exists(path: String): Boolean {
+        return File(path).exists()
     }
 
     override fun createWriter(path: String): OutputStream {
@@ -100,6 +106,43 @@ class FilesStorageAccess(
     override fun createReader(path: String): SeekableInput {
         val fullPath = dir.resolve(path)
         return SeekableFileInput(fullPath.toFile())
+    }
+
+    override fun inputSources(patterns: List<String>, range: Chunk): StorageAccess.InputSources {
+        val transactions = mutableListOf<Path>()
+        val blocks = mutableListOf<Path>()
+        patterns.forEach { pattern ->
+            File(pattern).walk()
+                .filter { file ->
+                    val chunk = filenameGenerator.parseRange(file.name)
+                    if (chunk == null) {
+                        log.debug("Skip no chunk ${file.name}")
+                    }
+                    val accept = chunk != null && range.intersects(chunk)
+                    if (!accept) {
+                        log.trace("Skip diff chunk ${file.name}")
+                    }
+                    accept
+                }
+                .sortedBy { file ->
+                    val chunk = filenameGenerator.parseRange(file.name)
+                    chunk!!.startBlock
+                }
+                .map { it.toPath() }
+                .forEach {
+                    if (it.name.contains("transactions") || it.name.contains("txes")) {
+                        transactions.add(it)
+                    } else if (it.name.contains("blocks") || it.name.contains("block")) {
+                        blocks.add(it)
+                    } else {
+                        log.warn("Unknown type of file: $it")
+                    }
+                }
+        }
+        return StorageAccess.InputSources(
+            transactions = Flux.fromIterable(transactions),
+            blocks = Flux.fromIterable(blocks),
+        )
     }
 
     class FilesPublisher(

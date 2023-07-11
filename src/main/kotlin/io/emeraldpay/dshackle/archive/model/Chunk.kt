@@ -9,6 +9,8 @@ data class Chunk(val startBlock: Long, val length: Long) {
     }
 
     init {
+        // if startBlock == 0 and length == 0, end block would be -1
+        // TODO: To avoid potential issues let length be not less than 1
         check(length >= 0) {
             "Chunk Length cannot be a negative number"
         }
@@ -38,11 +40,21 @@ data class Chunk(val startBlock: Long, val length: Long) {
         return crossLeft || crossRight || includes || inside
     }
 
+    fun intersection(o: Chunk): Chunk {
+        val start = maxOf(startBlock, o.startBlock)
+        val end = minOf(endBlock, o.endBlock)
+        return between(start, end)
+    }
+
     fun includes(o: Chunk): Boolean {
         val oEnd = o.endBlock
         val end = endBlock
 
         return startBlock <= o.startBlock && end >= oEnd
+    }
+
+    fun includes(block: Long): Boolean {
+        return block in startBlock..endBlock
     }
 
     fun findContinuity(all: Iterable<Chunk>): Chunk? {

@@ -2,6 +2,7 @@ package io.emeraldpay.dshackle.archive.storage
 
 import org.apache.avro.file.DataFileWriter
 import org.slf4j.LoggerFactory
+import java.nio.channels.ClosedChannelException
 
 abstract class BaseAvroWriter<T>(
     val dataFileWriter: DataFileWriter<T>,
@@ -30,7 +31,11 @@ abstract class BaseAvroWriter<T>(
     }
 
     override fun close() {
-        dataFileWriter.close()
-        currentStorage.remove(path)
+        try {
+            dataFileWriter.close()
+            currentStorage.remove(path)
+        } catch (e: ClosedChannelException) {
+            throw IllegalStateException("Failed to close $path", e)
+        }
     }
 }

@@ -1,9 +1,11 @@
 package io.emeraldpay.dshackle.archive.storage
 
+import io.emeraldpay.dshackle.archive.model.Chunk
 import org.apache.avro.file.SeekableInput
 import reactor.core.publisher.Flux
 import reactor.core.publisher.Mono
 import java.io.OutputStream
+import java.nio.file.Path
 
 interface StorageAccess {
 
@@ -14,6 +16,8 @@ interface StorageAccess {
      * Get a _full_ URI to the file under current storage, to access by an external service.
      */
     fun getURI(file: String): String
+
+    fun exists(path: String): Boolean
 
     /**
      * Creates a new writer to put data to the storage at path
@@ -59,4 +63,11 @@ interface StorageAccess {
             }
         }
     }
+
+    fun inputSources(patterns: List<String>, range: Chunk): InputSources
+
+    data class InputSources(
+        val transactions: Flux<Path>,
+        val blocks: Flux<Path>,
+    )
 }
