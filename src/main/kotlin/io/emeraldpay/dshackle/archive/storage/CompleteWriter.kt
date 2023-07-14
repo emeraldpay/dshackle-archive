@@ -162,6 +162,9 @@ class CompleteWriter(
                 writer.close()
                 logArchivedTime(startTime, chunkFile)
             }
+            .doOnError {
+                log.error("Failed to write block chunk {}, {}", chunk, chunkFile)
+            }
     }
 
     private fun logBlockProgress(a: Int, b: Int): Int {
@@ -227,6 +230,9 @@ class CompleteWriter(
             .doOnSuccess {
                 writer.close()
                 logArchivedTime(startTime, chunkFile)
+            }
+            .doOnError {
+                log.error("Failed to write transaction chunk {}, {}", chunk, chunkFile)
             }
     }
 

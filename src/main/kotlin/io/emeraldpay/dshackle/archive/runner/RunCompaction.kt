@@ -19,11 +19,11 @@ import org.springframework.beans.factory.annotation.Autowired
 import org.springframework.context.annotation.Profile
 import org.springframework.stereotype.Service
 import reactor.core.publisher.Flux
-import reactor.core.publisher.GroupedFlux
 import reactor.core.publisher.Mono
 import reactor.core.scheduler.Schedulers
 import reactor.util.function.Tuples
 import java.net.URI
+import java.nio.file.Files
 import java.nio.file.Path
 import java.nio.file.Paths
 import java.util.concurrent.ConcurrentHashMap
@@ -32,7 +32,6 @@ import java.util.concurrent.locks.ReentrantLock
 import java.util.function.Function
 import kotlin.concurrent.withLock
 import kotlin.io.path.name
-import kotlin.io.path.pathString
 import kotlin.system.exitProcess
 
 @Service
@@ -84,6 +83,7 @@ class RunCompaction(
         }
 
         val sources = sourceStorage.getInputFiles()
+        log.info("Input files ready")
 
         return Flux.merge(
             processBlocks(sources.blocks).subscribeOn(Schedulers.boundedElastic()),
@@ -95,28 +95,48 @@ class RunCompaction(
 
     fun processBlocks(files: Flux<Path>): Mono<Void> {
         return ProcessHelper(FileType.BLOCKS)
-            .processFiles(files, blocksReader::open) { chunk, entries ->
-                completeWriter
-                    .consumeBlocksChunk(
-                        chunk,
-                        entries.transform(filterBlocks)
-                            .filter { chunk.includes(it.height) },
-                    )
-                    .then()
-            }
+            .processFiles(
+                files,
+                { path ->
+                    val input = sourceStorage.current.createReader(path)
+                    blocksReader.open(input)
+                },
+                { chunk, entries ->
+                    completeWriter
+                        .consumeBlocksChunk(
+                            chunk,
+                            entries.transform(filterBlocks)
+                                .filter { chunk.includes(it.height) }
+                                .doOnError {
+                                    log.error("Failed to read blocks chunk {}", chunk)
+                                },
+                        )
+                        .then()
+                },
+            )
     }
 
     fun processTransactions(files: Flux<Path>): Mono<Void> {
         return ProcessHelper(FileType.TRANSACTIONS)
-            .processFiles(files, transactionsReader::open) { chunk, entries ->
-                completeWriter
-                    .consumeTransactionsChunk(
-                        chunk,
-                        entries.transform(filterTxes)
-                            .filter { chunk.includes(it.height) },
-                    )
-                    .then()
-            }
+            .processFiles(
+                files,
+                { path ->
+                    val input = sourceStorage.current.createReader(path)
+                    transactionsReader.open(input)
+                },
+                { chunk, entries ->
+                    completeWriter
+                        .consumeTransactionsChunk(
+                            chunk,
+                            entries.transform(filterTxes)
+                                .filter { chunk.includes(it.height) }
+                                .doOnError {
+                                    log.error("Failed to read transaction chunk {}", chunk)
+                                },
+                        )
+                        .then()
+                },
+            )
     }
 
     data class ChunkedPath(
@@ -197,7 +217,7 @@ class RunCompaction(
     }
 
     /** Group source files into flux of files per chunk */
-    fun groupByChunk(files: Flux<Path>): Flux<GroupedFlux<Chunk, Path>> {
+    fun groupByChunk(files: Flux<Path>): Mono<List<ChunkedPaths>> {
         val chunks = blocksRange.getChunks()
         val wholeChunk = blocksRange.wholeChunk()
         return files
@@ -214,10 +234,13 @@ class RunCompaction(
                 val fileChunk = filenameGenerator.parseRange(it.fileName.name)!!
                 Flux.fromIterable(
                     chunks.filter { it.intersects(fileChunk) }
-                        .map { chunk -> Tuples.of(chunk, it) },
+                        .map { chunk -> ChunkedPath(chunk, it) },
                 )
             }
-            .groupBy({ it.t1 }, { it.t2 })
+            .collectList()
+            .map { list ->
+                list.groupBy({ it.chunk }, { it.path }).map { ChunkedPaths(it.key, it.value) }
+            }
     }
 
     class FileReferenceCounter {
@@ -275,22 +298,21 @@ class RunCompaction(
             val wholeChunk = blocksRange.wholeChunk()
 
             return groups
+                .flatMapIterable { it }
                 .flatMap { group ->
-                    group.collectList()
-                        .flatMapMany { list ->
-                            val groupChunk = group.key()
-                            Flux.fromIterable(
-                                rechunkByActualBlocks(
-                                    initialChunk = groupChunk,
-                                    list = list,
-                                    isFirst = groupChunk.startBlock == wholeChunk.startBlock,
-                                    isLast = groupChunk.endBlock == wholeChunk.endBlock,
-                                ),
-                            )
-                        }
+                    val groupChunk = group.chunk
+                    Flux.fromIterable(
+                        rechunkByActualBlocks(
+                            initialChunk = groupChunk,
+                            list = group.paths,
+                            isFirst = groupChunk.startBlock == wholeChunk.startBlock,
+                            isLast = groupChunk.endBlock == wholeChunk.endBlock,
+                        ),
+                    )
                 }
                 .collectList()
                 .doOnNext { all ->
+                    log.info("${all.size} file chunks ready. Start processing")
                     // put all chunks into the reference counter before processing
                     all.forEach { group ->
                         val chunk = group.chunk
@@ -354,7 +376,13 @@ class RunCompaction(
                         .flatMap { paths ->
                             if (!runConfig.dryRun) {
                                 log.info("Deleting files: ${paths.joinToString(", ")}")
-                                sourceStorage.current.deleteArchives(paths.map { it.pathString })
+                                Mono
+                                    .fromCallable {
+                                        paths.forEach {
+                                            Files.deleteIfExists(it)
+                                        }
+                                    }
+                                    .subscribeOn(Schedulers.boundedElastic())
                             } else {
                                 log.info("DRY RUN! Deleting files: ${paths.joinToString(", ")}")
                                 Mono.empty()

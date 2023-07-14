@@ -50,7 +50,8 @@ class RunCompactionSpec extends Specification {
 
         when:
         def act = runCompaction.groupByChunk(Flux.fromIterable(files))
-            .flatMap { it.collectList() }
+            .flatMapIterable { it}
+            .map { it.paths }
             .collectList()
             .block()
 

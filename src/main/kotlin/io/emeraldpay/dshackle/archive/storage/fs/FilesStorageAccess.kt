@@ -105,6 +105,10 @@ class FilesStorageAccess(
 
     override fun createReader(path: String): SeekableInput {
         val fullPath = dir.resolve(path)
+        return createReader(fullPath)
+    }
+
+    override fun createReader(fullPath: Path): SeekableInput {
         return SeekableFileInput(fullPath.toFile())
     }
 

@@ -29,6 +29,7 @@ import java.nio.file.Paths
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicLong
 import kotlin.io.path.name
+import kotlin.io.path.pathString
 
 @Service
 @Profile("with-gcp")
@@ -110,9 +111,18 @@ open class GSStorageAccess(
         return Channels.newOutputStream(channel)
     }
 
+    override fun createReader(fullPath: Path): SeekableInput {
+        val blobId = BlobId.of(googleStorage.bucket, fullPath.pathString.removePrefix("/"))
+        return createReader(blobId)
+    }
+
     override fun createReader(path: String): SeekableInput {
         val blobId = BlobId.of(googleStorage.bucket, googleStorage.getBucketPath(path))
-        val blob = googleStorage.storage.get(blobId)
+        return createReader(blobId)
+    }
+
+    private fun createReader(blobId: BlobId): SeekableChannelInput {
+        val blob = googleStorage.storage.get(blobId) ?: throw IllegalStateException("Blob ${blobId.toGsUtilUri()} not found")
         val channel = googleStorage.storage.reader(blobId)
             ?: throw IllegalStateException("Blob ${blobId.toGsUtilUri()} cannot be created")
         return SeekableChannelInput(blob.size, channel)

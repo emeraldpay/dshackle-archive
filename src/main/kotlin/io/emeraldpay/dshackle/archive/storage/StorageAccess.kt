@@ -28,6 +28,7 @@ interface StorageAccess {
      * Read an existing file in the archive
      */
     fun createReader(path: String): SeekableInput
+    fun createReader(fullPath: Path): SeekableInput
 
     fun getDirBlockSizeL1(): Long
 
