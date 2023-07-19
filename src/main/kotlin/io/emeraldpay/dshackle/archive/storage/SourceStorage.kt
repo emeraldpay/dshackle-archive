@@ -33,7 +33,8 @@ open class SourceStorage(
             allStorageAccess.first()
         } else {
             // when we do a COPY from one source to another
-            val sourceIsGs = runConfig.inputFiles?.files?.all { it.startsWith("gs://") } == true
+            val sourceIsGs = runConfig.inputFiles == null ||
+                runConfig.inputFiles.files.all { it.startsWith("gs://") }
             if (sourceIsGs) {
                 allStorageAccess.find {
                     it is GSStorageAccess
