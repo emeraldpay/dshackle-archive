@@ -54,7 +54,7 @@ open class GSStorageAccess(
         // it stops processing stream files when last block is reached and starts processing ranges form given height
         val query = listOf(
             ListQuery(
-                prefix = path + filenameGenerator.getLevel0(height) + "/", // + filenameGenerator.getLevel1(height), // + "/",
+                prefix = path + filenameGenerator.getLevel0(height) + "/",
                 rangeStart = googleStorage.bucketPath + "/" + filenameGenerator.getIndividualFilename(FileType.BLOCKS.asTypeSingle(), height),
                 rangeEnd = path + filenameGenerator.getLevel0(height) + "/" + filenameGenerator.maxLevelValue(), // stop at the max level value, before range-* starts
             ),
@@ -63,14 +63,11 @@ open class GSStorageAccess(
                 googleStorage.bucketPath + "/" + filenameGenerator.getRangeFilename(FileType.BLOCKS.asTypeSingle(), Chunk(height, 0)),
             ),
         )
-        log.info("Query lists for for: $query")
+        log.debug("Query lists for for: {}", query)
         return Flux.fromIterable(query)
             .flatMap { query(it) }
             .map {
                 blockchainDir + it.blobId.name.substring(this.path.length)
-            }
-            .doOnNext {
-                log.info("File: $it")
             }
     }
 

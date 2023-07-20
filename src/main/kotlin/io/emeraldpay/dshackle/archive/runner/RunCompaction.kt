@@ -83,7 +83,6 @@ class RunCompaction(
         }
 
         val sources = sourceStorage.getInputFiles()
-        log.info("Input files ready")
 
         return Flux.merge(
             processBlocks(sources.blocks).subscribeOn(Schedulers.boundedElastic()),
@@ -312,7 +311,7 @@ class RunCompaction(
                 }
                 .collectList()
                 .doOnNext { all ->
-                    log.info("${all.size} file chunks ready. Start processing")
+                    log.info("${all.size} file chunks ready. Start processing ${fileType.name} files.")
                     // put all chunks into the reference counter before processing
                     all.forEach { group ->
                         val chunk = group.chunk
@@ -349,7 +348,7 @@ class RunCompaction(
                 }
             }
             val writeFlux = if (targetStorage.current.exists(chunkFile)) {
-                log.info("Chunk file $chunkFile already exists, skipping")
+                log.debug("Chunk file $chunkFile already exists, skipping")
                 // remove reference to prevent target file deleting
                 fileReferenceCounter.removeAndCheckIfEmpty(Paths.get(chunkFileUri), chunk)
                 consumedFlux.then()
