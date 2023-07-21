@@ -28,20 +28,33 @@ class BlocksWriter(
 
     private val currentWriters = CurrentStorage(100)
 
-    fun open(chunk: Chunk): BlocksFileAccess {
+    fun openShared(chunk: Chunk): BlocksFileAccess {
         val file = configuredFilenameGenerator.fileFor(FileType.BLOCKS, chunk)
-        return open(file)
+        return openShared(file)
     }
 
-    fun open(file: String): BlocksFileAccess {
+    fun exists(file: String): Boolean {
+        return targetStorage.current.exists(file)
+    }
+
+    fun openShared(file: String): BlocksFileAccess {
         return currentWriters.get(file) {
-            log.info("Save blocks to $file")
-            val dataFileWriter: DataFileWriter<Block>
-            val datumWriter = SpecificDatumWriter<Block>(Block::class.java)
-            dataFileWriter = DataFileWriter<Block>(datumWriter)
-            dataFileWriter.setCodec(CodecFactory.snappyCodec())
-            val outputStream = targetStorage.current.createWriter(file)
-            LocalFileAccess(dataFileWriter.create(Block.getClassSchema(), outputStream), runConfig, file, currentWriters, targetStorage.current)
+            openExclusively(file)
+        }
+    }
+
+    fun openExclusively(file: String): BlocksFileAccess {
+        log.info("Save blocks to $file")
+        val dataFileWriter: DataFileWriter<Block>
+        val datumWriter = SpecificDatumWriter<Block>(Block::class.java)
+        dataFileWriter = DataFileWriter<Block>(datumWriter)
+        dataFileWriter.setCodec(CodecFactory.snappyCodec())
+        val outputStream = targetStorage.current.createWriter(file)
+        val fileAccess = LocalFileAccess(dataFileWriter.create(Block.getClassSchema(), outputStream), runConfig, file, currentWriters, targetStorage.current)
+        return if (runConfig.deduplicate) {
+            DeduplicatedFileAccess(fileAccess)
+        } else {
+            fileAccess
         }
     }
 
@@ -98,6 +111,29 @@ class BlocksWriter(
                 drop()
                 throw t
             }
+        }
+    }
+
+    class DeduplicatedFileAccess(
+        private val delegate: BlocksFileAccess,
+    ) : BlocksFileAccess {
+        private val written = HashSet<String>()
+
+        override fun append(block: BlockDetails) {
+            // don't deduplicate here, it is done in append(Datum) which is called by this method
+            delegate.append(block)
+        }
+
+        override fun append(block: Block) {
+            if (written.contains(block.blockId)) {
+                return
+            }
+            delegate.append(block)
+            written.add(block.blockId)
+        }
+
+        override fun close() {
+            delegate.close()
         }
     }
 }

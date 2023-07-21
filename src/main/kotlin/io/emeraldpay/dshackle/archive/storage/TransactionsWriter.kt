@@ -28,23 +28,36 @@ class TransactionsWriter(
 
     private val currentWriters = CurrentStorage(100)
 
-    fun open(chunk: Chunk): TxFileAccess {
+    fun openShared(chunk: Chunk): TxFileAccess {
         val file = configuredFilenameGenerator.fileFor(FileType.TRANSACTIONS, chunk)
-        return open(file)
+        return openShared(file)
     }
 
-    fun open(file: String): TxFileAccess {
+    fun exists(file: String): Boolean {
+        return targetStorage.current.exists(file)
+    }
+
+    fun openShared(file: String): TxFileAccess {
         return currentWriters.get(file) {
-            log.info("Save transactions to $file")
+            openExclusively(file)
+        }
+    }
 
-            val datumWriter = FastSpecificDatumWriter<Transaction>(Transaction.getClassSchema())
-            val dataFileWriter: DataFileWriter<Transaction> = DataFileWriter<Transaction>(datumWriter)
-            dataFileWriter.setCodec(CodecFactory.snappyCodec())
-            dataFileWriter.setSyncInterval(1 * 1024 * 1024) // flush every megabyte
+    fun openExclusively(file: String): TxFileAccess {
+        log.info("Save transactions to $file")
 
-            val outputStream = targetStorage.current.createWriter(file)
+        val datumWriter = FastSpecificDatumWriter<Transaction>(Transaction.getClassSchema())
+        val dataFileWriter: DataFileWriter<Transaction> = DataFileWriter<Transaction>(datumWriter)
+        dataFileWriter.setCodec(CodecFactory.snappyCodec())
+        dataFileWriter.setSyncInterval(1 * 1024 * 1024) // flush every megabyte
 
-            LocalFileAccess(dataFileWriter.create(Transaction.getClassSchema(), outputStream), runConfig, file, currentWriters, targetStorage.current)
+        val outputStream = targetStorage.current.createWriter(file)
+
+        val fileAccess = LocalFileAccess(dataFileWriter.create(Transaction.getClassSchema(), outputStream), runConfig, file, currentWriters, targetStorage.current)
+        return if (runConfig.deduplicate) {
+            DeduplicatedFileAccess(fileAccess)
+        } else {
+            fileAccess
         }
     }
 
@@ -57,7 +70,7 @@ class TransactionsWriter(
         fun append(datum: Transaction)
     }
 
-    class LocalFileAccess(
+    open class LocalFileAccess(
         dataFileWriter: DataFileWriter<Transaction>,
         private val runConfig: RunConfig,
         path: String,
@@ -102,6 +115,30 @@ class TransactionsWriter(
                 drop()
                 throw t
             }
+        }
+    }
+
+    class DeduplicatedFileAccess(
+        private val delegate: TxFileAccess,
+    ) : TxFileAccess {
+
+        private val written = HashSet<String>()
+
+        override fun append(block: BlockDetails, tx: TransactionDetails) {
+            // don't deduplicate here, it is done in append(Datum) which is called by this method
+            delegate.append(block, tx)
+        }
+
+        override fun append(datum: Transaction) {
+            if (written.contains(datum.txid)) {
+                return
+            }
+            delegate.append(datum)
+            written.add(datum.txid)
+        }
+
+        override fun close() {
+            delegate.close()
         }
     }
 }

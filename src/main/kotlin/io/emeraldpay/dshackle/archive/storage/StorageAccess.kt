@@ -1,9 +1,11 @@
 package io.emeraldpay.dshackle.archive.storage
 
+import io.emeraldpay.dshackle.archive.model.Chunk
 import org.apache.avro.file.SeekableInput
 import reactor.core.publisher.Flux
 import reactor.core.publisher.Mono
 import java.io.OutputStream
+import java.nio.file.Path
 
 interface StorageAccess {
 
@@ -15,6 +17,8 @@ interface StorageAccess {
      */
     fun getURI(file: String): String
 
+    fun exists(path: String): Boolean
+
     /**
      * Creates a new writer to put data to the storage at path
      */
@@ -24,6 +28,7 @@ interface StorageAccess {
      * Read an existing file in the archive
      */
     fun createReader(path: String): SeekableInput
+    fun createReader(fullPath: Path): SeekableInput
 
     fun getDirBlockSizeL1(): Long
 
@@ -59,4 +64,11 @@ interface StorageAccess {
             }
         }
     }
+
+    fun inputSources(patterns: List<String>, range: Chunk): InputSources
+
+    data class InputSources(
+        val transactions: Flux<Path>,
+        val blocks: Flux<Path>,
+    )
 }

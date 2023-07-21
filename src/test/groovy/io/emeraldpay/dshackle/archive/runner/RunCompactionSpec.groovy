@@ -6,9 +6,11 @@ import io.emeraldpay.dshackle.archive.avro.Transaction
 import io.emeraldpay.dshackle.archive.config.RunConfig
 import io.emeraldpay.dshackle.archive.model.Chunk
 import io.emeraldpay.dshackle.archive.storage.CompleteWriter
+import io.emeraldpay.dshackle.archive.storage.ConfiguredFilenameGenerator
 import io.emeraldpay.dshackle.archive.storage.FilenameGenerator
 import io.emeraldpay.dshackle.archive.storage.SourceStorage
 import io.emeraldpay.dshackle.archive.storage.BlocksReader
+import io.emeraldpay.dshackle.archive.storage.TargetStorage
 import io.emeraldpay.dshackle.archive.storage.TransactionsReader
 import reactor.core.publisher.Flux
 import reactor.core.publisher.Mono
@@ -35,7 +37,8 @@ class RunCompactionSpec extends Specification {
         def runCompaction = new RunCompaction(
                 Stub(CompleteWriter), RunConfig.default(),
                 range, filenameGenerator,
-                Stub(SourceStorage), Stub(TransactionsReader), Stub(BlocksReader),
+                Stub(ConfiguredFilenameGenerator), Stub(SourceStorage), Stub(TargetStorage),
+                Stub(TransactionsReader), Stub(BlocksReader),
                 null
         )
 
@@ -47,7 +50,8 @@ class RunCompactionSpec extends Specification {
 
         when:
         def act = runCompaction.groupByChunk(Flux.fromIterable(files))
-            .flatMap { it.collectList() }
+            .flatMapIterable { it}
+            .map { it.paths }
             .collectList()
             .block()
 

@@ -103,6 +103,7 @@ dependencies {
     }
 
     implementation platform('com.google.cloud:libraries-bom:26.4.0')
+    implementation "com.google.cloud:google-cloud-nio"
     implementation 'com.google.cloud:google-cloud-storage'
     implementation 'com.google.cloud:google-cloud-pubsub'
 

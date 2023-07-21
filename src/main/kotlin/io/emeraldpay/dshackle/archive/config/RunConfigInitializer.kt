@@ -128,6 +128,16 @@ class RunConfigInitializer {
             options.addOption(it)
         }
 
+        Option(null, "compact.ranges", false, "Process range files also in stream compaction").let {
+            it.isRequired = false
+            options.addOption(it)
+        }
+
+        Option(null, "deduplicate", false, "Deduplicate transactions and blocks (could increase memory footprint)").let {
+            it.isRequired = false
+            options.addOption(it)
+        }
+
         val parser: CommandLineParser = DefaultParser()
         val formatter = HelpFormatter()
         val cmd: CommandLine = try {
@@ -297,9 +307,23 @@ class RunConfigInitializer {
                 it
             }
         }.let {
+            if (cmd.hasOption("deduplicate")) {
+                it.copy(deduplicate = true)
+            } else {
+                it
+            }
+        }.let {
             if (cmd.hasOption("compact.forks")) {
                 it.copy(
                     compaction = it.compaction.copy(acceptForks = false),
+                )
+            } else {
+                it
+            }
+        }.let {
+            if (cmd.hasOption("compact.ranges")) {
+                it.copy(
+                    compaction = it.compaction.copy(compactRanges = true),
                 )
             } else {
                 it

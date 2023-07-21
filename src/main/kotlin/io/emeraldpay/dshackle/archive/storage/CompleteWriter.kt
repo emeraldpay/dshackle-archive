@@ -3,6 +3,7 @@ package io.emeraldpay.dshackle.archive.storage
 import io.emeraldpay.dshackle.archive.FileType
 import io.emeraldpay.dshackle.archive.avro.Block
 import io.emeraldpay.dshackle.archive.avro.Transaction
+import io.emeraldpay.dshackle.archive.config.RunConfig
 import io.emeraldpay.dshackle.archive.model.Chunk
 import io.emeraldpay.dshackle.archive.notify.CurrentNotifier
 import io.emeraldpay.dshackle.archive.runner.ProgressIndicator
@@ -25,6 +26,7 @@ class CompleteWriter(
     @Autowired private val configuredFilenameGenerator: ConfiguredFilenameGenerator,
     @Autowired private val currentNotifier: CurrentNotifier,
     @Autowired private val targetStorage: TargetStorage,
+    @Autowired private val runConfig: RunConfig,
 ) {
 
     companion object {
@@ -42,9 +44,9 @@ class CompleteWriter(
         val progress = ProgressIndicator(opLabel = "blocks")
         // NOTE rewrites the files
         val blockFile = configuredFilenameGenerator.fileFor(FileType.BLOCKS, chunk)
-        val blockWrt = blocksWriter.open(blockFile)
+        val blockWrt = blocksWriter.openShared(blockFile)
         val txFile = configuredFilenameGenerator.fileFor(FileType.TRANSACTIONS, chunk)
-        val txWrt = transactionsWriter.open(txFile)
+        val txWrt = transactionsWriter.openShared(txFile)
         val saving = dataSource
             .doOnSubscribe {
                 progress.start()
@@ -117,28 +119,60 @@ class CompleteWriter(
                 { block ->
                     Mono.fromCallable {
                         val blockFile = configuredFilenameGenerator.fileForAutoRange(FileType.BLOCKS, block.height)
-                        blocksWriter.open(blockFile).append(block)
+                        blocksWriter.openShared(blockFile).append(block)
                         1
                     }
                 },
                 4,
             )
-            .doOnNext {
-                progress.onNext()
+            .doOnNext { progress.onNext() }
+            .reduce(::logBlockProgress)
+            .doFinally { logArchivedTime(startTime) }
+    }
+
+    fun consumeBlocksChunk(chunk: Chunk, blocks: Flux<Block>): Mono<Int> {
+        val progress = ProgressIndicator(opLabel = "blocks")
+        val startTime = System.currentTimeMillis()
+        val chunkFile = configuredFilenameGenerator.fileFor(FileType.BLOCKS, chunk)
+        if (blocksWriter.exists(chunkFile)) {
+            log.info("Chunk file $chunkFile already exists, skipping")
+            return Mono.just(0)
+        }
+        if (runConfig.dryRun) {
+            log.info("DRY RUN! Save chunk $chunk blocks to $chunkFile")
+            return Mono.just(0)
+        }
+        log.info("Save chunk $chunk blocks to $chunkFile")
+        val writer = blocksWriter.openExclusively(chunkFile)
+        return blocks
+            .doOnSubscribe { progress.start() }
+            .flatMapSequential(
+                { block ->
+                    Mono.fromCallable {
+                        // blocking call
+                        writer.append(block)
+                        1
+                    }
+                },
+                4,
+            )
+            .doOnNext { progress.onNext() }
+            .reduce(::logBlockProgress)
+            .doOnSuccess {
+                writer.close()
+                logArchivedTime(startTime, chunkFile)
             }
-            .reduce { a, b ->
-                val total = a + b
-                if (total % 10000 == 0) {
-                    log.debug("Processed $total blocks")
-                }
-                total
+            .doOnError {
+                log.error("Failed to write block chunk {}, {}", chunk, chunkFile)
             }
-            .doFinally {
-                val time = System.currentTimeMillis() - startTime
-                val minutes = time / 60_000
-                val seconds = (time % 60_000) / 1000
-                log.info("Archived in ${minutes}m:${StringUtils.leftPad(seconds.toString(), 2, "0")}s")
-            }
+    }
+
+    private fun logBlockProgress(a: Int, b: Int): Int {
+        val total = a + b
+        if (total % 10000 == 0) {
+            log.debug("Processed $total blocks")
+        }
+        return total
     }
 
     fun consumeTransactions(dataSource: Flux<Transaction>): Mono<Int> {
@@ -153,28 +187,61 @@ class CompleteWriter(
                     Mono.fromCallable {
                         // note that it most likely appends to an existing file
                         val txesFile = configuredFilenameGenerator.fileForAutoRange(FileType.TRANSACTIONS, tx.height)
-                        transactionsWriter.open(txesFile).append(tx)
+                        transactionsWriter.openShared(txesFile).append(tx)
                         1
                     }
                 },
                 4,
             )
-            .doOnNext {
-                progress.onNext()
+            .doOnNext { progress.onNext() }
+            .reduce(::logTransactionProgress)
+            .doFinally { logArchivedTime(startTime) }
+    }
+
+    fun consumeTransactionsChunk(chunk: Chunk, dataSource: Flux<Transaction>): Mono<Int> {
+        val progress = ProgressIndicator(opLabel = "transactions")
+        val startTime = System.currentTimeMillis()
+        val chunkFile = configuredFilenameGenerator.fileFor(FileType.TRANSACTIONS, chunk)
+        if (transactionsWriter.exists(chunkFile)) {
+            log.info("Chunk file $chunkFile already exists, skipping")
+            return Mono.just(0)
+        }
+        if (runConfig.dryRun) {
+            log.info("DRY RUN! Save chunk $chunk transactions to $chunkFile")
+            return Mono.just(0)
+        }
+        log.info("Save chunk $chunk transactions to $chunkFile")
+
+        val writer = transactionsWriter.openExclusively(chunkFile)
+        return dataSource
+            .doOnSubscribe { progress.start() }
+            .flatMapSequential(
+                { tx ->
+                    Mono.fromCallable {
+                        // note that it most likely appends to an existing file
+                        writer.append(tx)
+                        1
+                    }
+                },
+                4,
+            )
+            .doOnNext { progress.onNext() }
+            .reduce(::logTransactionProgress)
+            .doOnSuccess {
+                writer.close()
+                logArchivedTime(startTime, chunkFile)
             }
-            .reduce { a, b ->
-                val total = a + b
-                if (total % 100000 == 0) {
-                    log.debug("Processed $total transactions")
-                }
-                total
+            .doOnError {
+                log.error("Failed to write transaction chunk {}, {}", chunk, chunkFile)
             }
-            .doFinally {
-                val time = System.currentTimeMillis() - startTime
-                val minutes = time / 60_000
-                val seconds = (time % 60_000) / 1000
-                log.info("Archived in ${minutes}m:${StringUtils.leftPad(seconds.toString(), 2, "0")}s")
-            }
+    }
+
+    private fun logTransactionProgress(a: Int, b: Int): Int {
+        val total = a + b
+        if (total % 100000 == 0) {
+            log.debug("Processed $total transactions")
+        }
+        return total
     }
 
     fun streamConsumer(): java.util.function.Function<Flux<BlockDetails>, Flux<Long>> {
@@ -189,13 +256,13 @@ class CompleteWriter(
                     { block ->
                         Mono.fromCallable {
                             val txesFile = configuredFilenameGenerator.fileForAutoRange(FileType.TRANSACTIONS, block.height)
-                            transactionsWriter.open(txesFile).use { wrt ->
+                            transactionsWriter.openShared(txesFile).use { wrt ->
                                 block.transactions.forEach { tx ->
                                     wrt.append(block, tx)
                                 }
                             }
                             val blockFile = configuredFilenameGenerator.fileForAutoRange(FileType.BLOCKS, block.height)
-                            blocksWriter.open(blockFile).use { wrt ->
+                            blocksWriter.openShared(blockFile).use { wrt ->
                                 wrt.append(block)
                             }
                             Tuples.of(txesFile, blockFile)
@@ -209,21 +276,21 @@ class CompleteWriter(
                     },
                     4,
                 )
-                .doOnNext {
-                    progress.onNext()
-                }
-                .doFinally {
-                    val time = System.currentTimeMillis() - startTime
-                    val minutes = time / 60_000
-                    val seconds = (time % 60_000) / 1000
-                    log.info("Archived in ${minutes}m:${StringUtils.leftPad(seconds.toString(), 2, "0")}s")
-                }
+                .doOnNext { progress.onNext() }
+                .doFinally { logArchivedTime(startTime) }
         }
     }
 
+    private fun logArchivedTime(startTime: Long, file: String? = null) {
+        val time = System.currentTimeMillis() - startTime
+        val minutes = time / 60_000
+        val seconds = (time % 60_000) / 1000
+        log.info("Archived ${file?.plus(" ")}in ${minutes}m:${StringUtils.leftPad(seconds.toString(), 2, "0")}s")
+    }
+
     /**
-     * Runs the created file through current Notifier.
-     * Expects a pair of <Path to Transactions> and <Path to Blocks> as input
+     * Runs the created file through current Notifier. Expects a pair of <Path to Transactions> and
+     * <Path to Blocks> as input
      */
     fun withNotifications(block: BlockDetails): java.util.function.Function<Mono<Tuple2<String, String>>, Mono<Void>> {
         return java.util.function.Function { files ->

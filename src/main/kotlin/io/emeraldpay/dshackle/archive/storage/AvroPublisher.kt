@@ -31,8 +31,8 @@ class AvroPublisher<T>(
 
     private fun doComplete(subscriber: Subscriber<in T>, read: AtomicBoolean) {
         close()
-        subscriber.onComplete()
         read.set(true)
+        subscriber.onComplete()
     }
 
     override fun subscribe(s: Subscriber<in T>) {
@@ -53,6 +53,10 @@ class AvroPublisher<T>(
     }
 
     fun readAll(limit: AtomicLong, subscriber: Subscriber<in T>, read: AtomicBoolean) {
+        if (read.get()) {
+            // subscribers can request more elements trying to drain when subscription is already closed and thread is not available
+            return
+        }
         thread.execute {
             while (limit.get() > 0 && !read.get()) {
                 limit.decrementAndGet()
