@@ -35,8 +35,8 @@ group = 'io.emeraldpay.dshackle.archiver'
 version = '0.1.0'
 
 java {
-    sourceCompatibility = JavaVersion.VERSION_13
-    targetCompatibility = JavaVersion.VERSION_13
+    sourceCompatibility = JavaVersion.VERSION_17
+    targetCompatibility = JavaVersion.VERSION_17
 }
 
 repositories {
@@ -113,7 +113,7 @@ dependencies {
     implementation "org.slf4j:slf4j-api:$slf4jVersion"
     implementation "org.slf4j:jul-to-slf4j:$slf4jVersion"
     implementation "org.slf4j:jcl-over-slf4j:$slf4jVersion"
-    implementation "org.apache.logging.log4j:log4j-slf4j-impl:2.19.0"
+    implementation "org.apache.logging.log4j:log4j-slf4j2-impl:2.20.0"
 
     testImplementation "org.codehaus.groovy:groovy:$groovyVersion"
     testImplementation 'org.spockframework:spock-core:' + spockVersion
@@ -129,7 +129,7 @@ dependencies {
 
 tasks.withType(org.jetbrains.kotlin.gradle.tasks.KotlinCompile).all {
     kotlinOptions {
-        jvmTarget = '13'
+        jvmTarget = '17'
     }
 }
 
@@ -154,7 +154,7 @@ application {
 
 jib {
     from {
-        image = "openjdk:13"
+        image = "azul/zulu-openjdk-debian:17"
     }
     to {
         // execute with -Platest=true
