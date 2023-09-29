@@ -3,6 +3,7 @@ package io.emeraldpay.dshackle.archive.config
 import com.fasterxml.jackson.annotation.JsonValue
 import io.emeraldpay.api.Chain
 import io.emeraldpay.dshackle.archive.avro.BlockchainType
+import java.net.URI
 import java.time.Duration
 import java.util.Locale
 
@@ -48,7 +49,11 @@ data class RunConfig(
     }
 
     fun useGCP(): Boolean {
-        return export.gs != null
+        return export.bucket?.isGCP ?: false
+    }
+
+    fun useS3(): Boolean {
+        return export.bucket?.isS3 ?: false
     }
 
     fun withRange(range: Range): RunConfig {
@@ -156,7 +161,7 @@ data class RunConfig(
     )
 
     data class Export(
-        val gs: ExportGS? = null,
+        val bucket: ExportBucket? = null,
     ) {
         companion object {
             fun default(): Export {
@@ -165,9 +170,62 @@ data class RunConfig(
         }
     }
 
-    data class ExportGS(
-        val bucket: String,
-        val path: String,
+    data class ExportBucket(
+        val uri: String,
+        // specific to AWS
+        val s3: S3Options? = null,
+    ) {
+
+        val isS3: Boolean
+            get() = uri.startsWith("s3://")
+
+        val isGCP: Boolean
+            get() = uri.startsWith("gs://")
+
+        val bucket: String
+        val path: String
+
+        init {
+            val p = Regex("^(s3|gs)://([^/\\\\.:]+)(\\.[^/]+)?(:\\d+)?(/(.+?)/?)?\$")
+            val m = p.matchEntire(uri)
+            if (m != null) {
+                bucket = m.groupValues[2]
+                path = m.groupValues[5] ?: ""
+            } else {
+                throw IllegalArgumentException("Invalid storage URI: $uri")
+            }
+        }
+
+        fun ensureS3(): ExportBucket {
+            return if (isS3) {
+                if (s3 != null) {
+                    this
+                } else {
+                    this.copy(s3 = S3Options())
+                }
+            } else {
+                this
+            }
+        }
+    }
+
+    data class S3Options(
+        val region: String = "global",
+        /**
+         * There are two types of accessing S3: virtual host style and path style. First is BUCKET.HOST/PATH, and the second is HOST/BUCKET/PATH.
+         * Non-AWS providers usually don't support the virtual hosts and should be accessed by HOST only, i.e. the path style.
+         *
+         * @link https://docs.aws.amazon.com/AmazonS3/latest/userguide/VirtualHosting.html
+         */
+        val pathStyleAccess: Boolean = false,
+        /**
+         * An HTTP endpoint host name to use if it's not an AWS endpoint
+         */
+        val endpoint: URI? = null,
+        /**
+         * Set to true for a custom signed certificates on the server side, otherwise it will fail on TLS validation
+         */
+        val trustAnyTLS: Boolean = false
     )
 
     data class InputFiles(
@@ -187,17 +245,23 @@ data class RunConfig(
     }
 
     data class Auth(
-        val gcp: AuthGcp?,
+        val gcp: AuthGcp? = null,
+        val aws: AuthAws? = null,
     ) {
         companion object {
             fun default(): Auth {
-                return Auth(null)
+                return Auth()
             }
         }
     }
 
     data class AuthGcp(
         val credentials: String,
+    )
+
+    data class AuthAws(
+        val accessKey: String,
+        val secretKey: String,
     )
 
     data class CompactionOptions(

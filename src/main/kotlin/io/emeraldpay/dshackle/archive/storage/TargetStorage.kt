@@ -3,6 +3,7 @@ package io.emeraldpay.dshackle.archive.storage
 import io.emeraldpay.dshackle.archive.config.RunConfig
 import io.emeraldpay.dshackle.archive.storage.fs.FilesStorageAccess
 import io.emeraldpay.dshackle.archive.storage.gcp.GSStorageAccess
+import io.emeraldpay.dshackle.archive.storage.s3.S3StorageAccess
 import org.slf4j.LoggerFactory
 import org.springframework.beans.factory.annotation.Autowired
 import org.springframework.beans.factory.annotation.Qualifier
@@ -27,6 +28,10 @@ class TargetStorage(
         val instance = if (runConfig.useGCP()) {
             allStorageAccess.find {
                 it is GSStorageAccess
+            }
+        } else if (runConfig.useS3()) {
+            allStorageAccess.find {
+                it is S3StorageAccess
             }
         } else {
             allStorageAccess.find {

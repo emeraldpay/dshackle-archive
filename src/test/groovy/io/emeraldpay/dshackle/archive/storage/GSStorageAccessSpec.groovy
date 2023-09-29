@@ -35,16 +35,16 @@ class GSStorageAccessSpec extends Specification {
 
         then:
         1 * storage.query(
-                new GSStorageAccess.ListQuery("/dir/002000000/", "/dir/002000000/002000000/002000123.block.v0.avro", "/dir/002000000/999999999")
+                new ListQuery("/dir/002000000/", "/dir/002000000/002000000/002000123.block.v0.avro", "/dir/002000000/999999999")
         ) >> Flux.fromIterable([BlobInfo.newBuilder("bucket", "/dir/2M/0.txt").build(), BlobInfo.newBuilder("bucket", "/dir/2M/1.txt").build()])
         1 * storage.query(
-                new GSStorageAccess.ListQuery("/dir/002000000/", "/dir/002000000/range-002000123_002000122.block.v0.avro", null)
+                new ListQuery("/dir/002000000/", "/dir/002000000/range-002000123_002000122.block.v0.avro", null)
         ) >> Flux.empty()
         1 * storage.query(
-                new GSStorageAccess.ListQuery("/dir/003000000/", "/dir/003000000/003000000/003000000.block.v0.avro", "/dir/003000000/999999999")
+                new ListQuery("/dir/003000000/", "/dir/003000000/003000000/003000000.block.v0.avro", "/dir/003000000/999999999")
         ) >> Flux.fromIterable([BlobInfo.newBuilder("bucket", "/dir/3M/0.txt").build(), BlobInfo.newBuilder("bucket", "/dir/3M/1.txt").build()])
         1 * storage.query(
-                new GSStorageAccess.ListQuery("/dir/003000000/", "/dir/003000000/range-003000000_002999999.block.v0.avro", null)
+                new ListQuery("/dir/003000000/", "/dir/003000000/range-003000000_002999999.block.v0.avro", null)
         ) >> Flux.fromIterable([BlobInfo.newBuilder("bucket", "/dir/3M/range-1-2.txt").build()])
         results == ["dir/2M/0.txt", "dir/2M/1.txt", "dir/3M/0.txt", "dir/3M/1.txt", "dir/3M/range-1-2.txt"]
     }

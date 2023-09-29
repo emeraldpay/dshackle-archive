@@ -107,6 +107,9 @@ dependencies {
     implementation 'com.google.cloud:google-cloud-storage'
     implementation 'com.google.cloud:google-cloud-pubsub'
 
+    implementation 'software.amazon.awssdk:s3:2.20.153'
+    implementation "software.amazon.awssdk:url-connection-client:2.20.153"
+
     implementation "org.jetbrains.kotlin:kotlin-stdlib-jdk8"
     implementation "org.jetbrains.kotlin:kotlin-reflect"
 
@@ -125,6 +128,7 @@ dependencies {
     }
     testImplementation "org.testcontainers:testcontainers:1.16.3"
     testImplementation "org.testcontainers:gcloud:1.16.3"
+    testImplementation "com.adobe.testing:s3mock-testcontainers:3.1.0"
 }
 
 tasks.withType(org.jetbrains.kotlin.gradle.tasks.KotlinCompile).all {

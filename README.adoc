@@ -38,7 +38,16 @@ NOTE: It uses https://github.com/emeraldpay/dshackle[Dshackle] protocol to conne
 ----
 usage: dshackle-archive [options] <command>
 Copy blockchain data into files for further analysis
+    --auth.aws.accessKey <arg>   AWS / S3 Access Key
+    --auth.aws.secretKey <arg>   AWS / S3 Secret Key
     --auth.gcp <arg>             Path to GCP Authentication JSON
+    --aws.endpoint <arg>         AWS / S3 endpoint url instead of the
+                                 default one
+    --aws.region <arg>           AWS / S3 region ID to use for requests
+    --aws.s3.pathStyle           Enable S3 Path Style access (default is
+                                 false)
+    --aws.trustTls               Trust any TLS certificate for AWS / S3
+                                 (default is false)
  -b,--blockchain <arg>           Blockchain
     --back                       Apply the blocks range (--range option)
                                  back from to the current blockchain
@@ -47,12 +56,16 @@ Copy blockchain data into files for further analysis
  -c,--connection <arg>           Connection (host:port)
     --compact.forks              Should accept all blocks including forks
                                  in stream compaction
+    --compact.ranges             Process range files also in stream
+                                 compaction
     --connection.notls           Disable TLS
     --connection.timeout <arg>   Timeout (in seconds) to get data from
                                  blockchain before retrying. Default: 60
                                  seconds
     --continue                   Continue from the last file if set
  -d,--dir <arg>                  Target directory
+    --deduplicate                Deduplicate transactions and blocks
+                                 (could increase memory footprint)
     --dirBlocks <arg>            How many blocks keep per subdirectory
     --dryRun                     Do not modify the storage
  -h,--help                       Show Help

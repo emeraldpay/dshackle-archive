@@ -9,6 +9,7 @@ import org.apache.commons.cli.Option
 import org.apache.commons.cli.Options
 import org.apache.commons.cli.ParseException
 import org.slf4j.LoggerFactory
+import java.net.URI
 import java.nio.file.Files
 import java.time.Duration
 import java.util.Locale
@@ -109,6 +110,31 @@ class RunConfigInitializer {
         }
 
         Option(null, "auth.gcp", true, "Path to GCP Authentication JSON").also {
+            it.isRequired = false
+            options.addOption(it)
+        }
+
+        Option(null, "auth.aws.accessKey", true, "AWS / S3 Access Key").also {
+            it.isRequired = false
+            options.addOption(it)
+        }
+        Option(null, "auth.aws.secretKey", true, "AWS / S3 Secret Key").also {
+            it.isRequired = false
+            options.addOption(it)
+        }
+        Option(null, "aws.endpoint", true, "AWS / S3 endpoint url instead of the default one").also {
+            it.isRequired = false
+            options.addOption(it)
+        }
+        Option(null, "aws.region", true, "AWS / S3 region ID to use for requests").also {
+            it.isRequired = false
+            options.addOption(it)
+        }
+        Option(null, "aws.s3.pathStyle", false, "Enable S3 Path Style access (default is false)").also {
+            it.isRequired = false
+            options.addOption(it)
+        }
+        Option(null, "aws.trustTls", false, "Trust any TLS certificate for AWS / S3 (default is false)").also {
             it.isRequired = false
             options.addOption(it)
         }
@@ -228,11 +254,35 @@ class RunConfigInitializer {
             }
         }
 
-        var exportGS: RunConfig.ExportGS? = null
-        if (isGSPath(files.dir)) {
-            exportGS = extractGSConfig(files.dir)
+        var exportBucket: RunConfig.ExportBucket? = null
+        if (isBucket(files.dir)) {
+            exportBucket = RunConfig.ExportBucket(uri = files.dir)
+
+            if (exportBucket.isS3) {
+                if (cmd.hasOption("aws.endpoint")) {
+                    exportBucket = exportBucket.ensureS3().let {
+                        it.copy(s3 = it.s3!!.copy(endpoint = URI(cmd.getOptionValue("aws.endpoint"))))
+                    }
+                }
+                if (cmd.hasOption("aws.region")) {
+                    exportBucket = exportBucket.ensureS3().let {
+                        it.copy(s3 = it.s3!!.copy(region = cmd.getOptionValue("aws.region")))
+                    }
+                }
+                if (cmd.hasOption("aws.s3.pathStyle")) {
+                    exportBucket = exportBucket.ensureS3().let {
+                        it.copy(s3 = it.s3!!.copy(pathStyleAccess = true))
+                    }
+                }
+                if (cmd.hasOption("aws.trustTls")) {
+                    exportBucket = exportBucket.ensureS3().let {
+                        it.copy(s3 = it.s3!!.copy(trustAnyTLS = true))
+                    }
+                }
+            }
+
             files = files.copy(
-                Files.createTempDirectory("emerald-dshackle-archive").toString(),
+                dir = Files.createTempDirectory("emerald-dshackle-archive").toString(),
             )
         }
 
@@ -240,6 +290,14 @@ class RunConfigInitializer {
             cmd.getOptionValue("auth.gcp")?.let { path ->
                 auth.copy(gcp = RunConfig.AuthGcp(path))
             } ?: auth
+        }.let { auth ->
+            val awsAccessKey = cmd.getOptionValue("auth.aws.accessKey")
+            val awsSecretKey = cmd.getOptionValue("auth.aws.secretKey")
+            if (awsAccessKey != null && awsSecretKey != null) {
+                auth.copy(aws = RunConfig.AuthAws(awsAccessKey, awsSecretKey))
+            } else {
+                auth
+            }
         }
 
         val archiveOptions = cmd.getOptionValue("include")?.let {
@@ -295,8 +353,8 @@ class RunConfigInitializer {
                 config
             }
         }.let {
-            if (exportGS != null) {
-                it.copy(export = RunConfig.Export(exportGS))
+            if (exportBucket != null) {
+                it.copy(export = RunConfig.Export(exportBucket))
             } else {
                 it
             }
@@ -331,21 +389,8 @@ class RunConfigInitializer {
         }
     }
 
-    fun isGSPath(path: String): Boolean {
-        return path.startsWith("gs://")
-    }
-
-    fun extractGSConfig(path: String): RunConfig.ExportGS {
-        val p = Pattern.compile("^gs://([^/]+)(/(.+?)/?)?\$")
-        val m = p.matcher(path)
-        if (!m.matches()) {
-            log.warn("Invalid Google Storage path: $path")
-            throw IllegalStateException()
-        }
-        return RunConfig.ExportGS(
-            m.group(1),
-            m.group(3) ?: "",
-        )
+    fun isBucket(path: String): Boolean {
+        return path.startsWith("gs://") || path.startsWith("s3://")
     }
 
     fun printHelp(formatter: HelpFormatter, options: Options) {

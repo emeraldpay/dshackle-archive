@@ -21,7 +21,7 @@ class GoogleStorage(
         private val log = LoggerFactory.getLogger(GoogleStorage::class.java)
     }
 
-    private val export: RunConfig.ExportGS = runConfig.export.gs!!
+    private val export: RunConfig.ExportBucket = runConfig.export.bucket!!
     val bucket = export.bucket
     val bucketPath = export.path.let { if (it.endsWith("/")) it.substring(0, it.length - 2) else it }
 

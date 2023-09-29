@@ -54,7 +54,9 @@ fun main(args: Array<String>) {
     if (config.useGCP()) {
         profiles.add("with-gcp")
     }
-
+    if (config.useS3()) {
+        profiles.add("with-s3")
+    }
     if (config.connection != null) {
         profiles.add("with-blockchain")
     }
