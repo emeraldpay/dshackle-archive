@@ -123,17 +123,24 @@ open class S3StorageAccess(
     override fun createWriter(path: String): OutputStream {
         // S3 client needs an InputStream, so here are the Pipes
         val output = PipedOutputStream()
-        val pipe = PipedInputStream()
+        val pipe = PipedInputStream(4096)
         output.connect(pipe)
         // because after making a request it locks the input stream there is no way to continue with writing to it,
         // so we need to run it in a separate thread
         threads.execute {
-            val request = PutObjectRequest.builder()
-                .bucket(s3Config.bucket)
-                .key(s3Config.getBucketPath(path))
-                .build()
-            val body = RequestBody.fromContentProvider({ pipe }, "application/avro")
-            s3Config.storage.putObject(request, body)
+            try {
+                val request = PutObjectRequest.builder()
+                    .bucket(s3Config.bucket)
+                    .key(s3Config.getBucketPath(path))
+                    .build()
+                val body = RequestBody.fromContentProvider({ pipe }, "application/avro")
+                s3Config.storage.putObject(request, body)
+            } catch (t: Throwable) {
+                log.warn("Failed to write to S3", t)
+            } finally {
+                output.close()
+                pipe.close()
+            }
         }
         return output
     }
