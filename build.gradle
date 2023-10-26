@@ -110,6 +110,9 @@ dependencies {
     implementation 'software.amazon.awssdk:s3:2.20.153'
     implementation "software.amazon.awssdk:url-connection-client:2.20.153"
 
+    implementation "org.apache.pulsar:pulsar-client-reactive-adapter:0.4.0"
+    implementation "org.apache.pulsar:pulsar-client-reactive-producer-cache-caffeine:0.4.0"
+
     implementation "org.jetbrains.kotlin:kotlin-stdlib-jdk8"
     implementation "org.jetbrains.kotlin:kotlin-reflect"
 
@@ -126,9 +129,11 @@ dependencies {
     testImplementation("org.springframework.boot:spring-boot-starter-test:" + springBootVersion){
         exclude module: 'spring-boot-starter-logging'
     }
-    testImplementation "org.testcontainers:testcontainers:1.16.3"
-    testImplementation "org.testcontainers:gcloud:1.16.3"
+    testImplementation "org.testcontainers:testcontainers:1.19.1"
+    testImplementation "org.testcontainers:gcloud:1.19.1"
+    testImplementation "org.testcontainers:pulsar:1.19.1"
     testImplementation "com.adobe.testing:s3mock-testcontainers:3.1.0"
+
 }
 
 tasks.withType(org.jetbrains.kotlin.gradle.tasks.KotlinCompile).all {
@@ -142,7 +147,11 @@ ktlint {
 }
 
 test {
-    jvmArgs( '-ea', "-Dspring.profiles.active=test", "-Dlogging.level.io.emeraldpay=DEBUG")
+    jvmArgs(
+            '-ea', "-Dspring.profiles.active=test", "-Dlogging.level.io.emeraldpay=DEBUG",
+            // see https://github.com/apache/pulsar/issues/20282
+            "--add-opens=java.base/sun.net=ALL-UNNAMED"
+    )
     testLogging.showStandardStreams = false
     testLogging.exceptionFormat = 'full'
     useJUnitPlatform()
@@ -182,6 +191,8 @@ jib {
     container {
         jvmFlags = [
                 '-Xms512m',
+                // see https://github.com/apache/pulsar/issues/20282
+                "--add-opens=java.base/sun.net=ALL-UNNAMED"
         ]
         mainClass = 'io.emeraldpay.dshackle.archive.AppKt'
         ports = []

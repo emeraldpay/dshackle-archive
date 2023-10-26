@@ -22,8 +22,8 @@ Features:
 - Produces data in *Avro format*, where one file could be a _range_ of blocks or a _separate_ file per each block
 - Archival can be scaled by using multiple blockchain nodes by using https://github.com/emeraldpay/dshackle[Dshackle Load Balancer].
 - Runs in batch archive mode, when _historical data_ is archived; or in a _streaming mode_ when only fresh data is added to the archive
-- Archive to a Filesystem or Google Storage
-- Produces Notification via Google PubSub or as a JSON
+- Archive to a Filesystem, Google Storage or S3
+- Produces Notification via Google PubSub or Apache Pulsar
 
 The general idea it to use Dshackle Archive to copy data from a blockchain to a plain files, keeping the data structures as is, and then use traditional Big Data tools (Spark, Beam, etc.) to analyse data in a scalable way.
 
@@ -38,53 +38,59 @@ NOTE: It uses https://github.com/emeraldpay/dshackle[Dshackle] protocol to conne
 ----
 usage: dshackle-archive [options] <command>
 Copy blockchain data into files for further analysis
-    --auth.aws.accessKey <arg>   AWS / S3 Access Key
-    --auth.aws.secretKey <arg>   AWS / S3 Secret Key
-    --auth.gcp <arg>             Path to GCP Authentication JSON
-    --aws.endpoint <arg>         AWS / S3 endpoint url instead of the
-                                 default one
-    --aws.region <arg>           AWS / S3 region ID to use for requests
-    --aws.s3.pathStyle           Enable S3 Path Style access (default is
-                                 false)
-    --aws.trustTls               Trust any TLS certificate for AWS / S3
-                                 (default is false)
- -b,--blockchain <arg>           Blockchain
-    --back                       Apply the blocks range (--range option)
-                                 back from to the current blockchain
-                                 height, i.e. process N..M not starting
-                                 not from zero by from the current height
- -c,--connection <arg>           Connection (host:port)
-    --compact.forks              Should accept all blocks including forks
-                                 in stream compaction
-    --compact.ranges             Process range files also in stream
-                                 compaction
-    --connection.notls           Disable TLS
-    --connection.timeout <arg>   Timeout (in seconds) to get data from
-                                 blockchain before retrying. Default: 60
-                                 seconds
-    --continue                   Continue from the last file if set
- -d,--dir <arg>                  Target directory
-    --deduplicate                Deduplicate transactions and blocks
-                                 (could increase memory footprint)
-    --dirBlocks <arg>            How many blocks keep per subdirectory
-    --dryRun                     Do not modify the storage
- -h,--help                       Show Help
- -i,--inputs <arg>               Input File(s). Accepts a glob pattern for
-                                 filename
-    --include <arg>              Include optional details in JSON (trace,
-                                 stateDiff)
-    --notify.dir <arg>           Write notifications as JSON line to the
-                                 specified dir in a file
-                                 <dshackle-archive-%STARTTIME.jsonl>
-    --notify.pubsub <arg>        Send notifications as JSON to the
-                                 specified Google Pubsub topic
-    --parallel <arg>             How many blocks to request in parallel.
-                                 Range: 1..512. Default: 8
-    --prefix <arg>               File prefix
- -r,--range <arg>                Blocks Range (N...M)
-    --rangeChunk <arg>           Range chunk size (default 1000)
-    --tail <arg>                 Last T block to ensure are archived in
-                                 streaming mode
+    --auth.aws.accessKey <arg>    AWS / S3 Access Key
+    --auth.aws.secretKey <arg>    AWS / S3 Secret Key
+    --auth.gcp <arg>              Path to GCP Authentication JSON
+    --aws.endpoint <arg>          AWS / S3 endpoint url instead of the
+                                  default one
+    --aws.region <arg>            AWS / S3 region ID to use for requests
+    --aws.s3.pathStyle            Enable S3 Path Style access (default is
+                                  false)
+    --aws.trustTls                Trust any TLS certificate for AWS / S3
+                                  (default is false)
+ -b,--blockchain <arg>            Blockchain
+    --back                        Apply the blocks range (--range option)
+                                  back from to the current blockchain
+                                  height, i.e. process N..M not starting
+                                  not from zero by from the current height
+ -c,--connection <arg>            Connection (host:port)
+    --compact.forks               Should accept all blocks including forks
+                                  in stream compaction
+    --compact.ranges              Process range files also in stream
+                                  compaction
+    --connection.notls            Disable TLS
+    --connection.timeout <arg>    Timeout (in seconds) to get data from
+                                  blockchain before retrying. Default: 60
+                                  seconds
+    --continue                    Continue from the last file if set
+ -d,--dir <arg>                   Target directory
+    --deduplicate                 Deduplicate transactions and blocks
+                                  (could increase memory footprint)
+    --dirBlocks <arg>             How many blocks keep per subdirectory
+    --dryRun                      Do not modify the storage
+ -h,--help                        Show Help
+ -i,--inputs <arg>                Input File(s). Accepts a glob pattern
+                                  for filename
+    --include <arg>               Include optional details in JSON (trace,
+                                  stateDiff)
+    --notify.dir <arg>            Write notifications as JSON line to the
+                                  specified dir in a file
+                                  <dshackle-archive-%STARTTIME.jsonl>
+    --notify.pubsub <arg>         Send notifications as JSON to the
+                                  specified Google Pubsub topic
+    --notify.pulsar.topic <arg>   Send notifications as JSON to the Pulsar
+                                  to the specified topic
+                                  (notify.pulsar.url must be specified)
+    --notify.pulsar.url <arg>     Send notifications as JSON to the Pulsar
+                                  with specified URL (notify.pulsar.topic
+                                  must be specified)
+    --parallel <arg>              How many blocks to request in parallel.
+                                  Range: 1..512. Default: 8
+    --prefix <arg>                File prefix
+ -r,--range <arg>                 Blocks Range (N...M)
+    --rangeChunk <arg>            Range chunk size (default 1000)
+    --tail <arg>                  Last T block to ensure are archived in
+                                  streaming mode
 Available commands:
  archive - the main operation, copies data from a blockchain to archive
  stream  - append fresh blocks one by one to the archive
@@ -120,6 +126,7 @@ To notify an external system, there are two options:
 
 - `--notify.dir` - write notifications as JSON line to the specified dir in a file `<dshackle-archive-%STARTTIME.jsonl>`
 - `--notify.pubsub` - send notifications as JSON to the specified Google Pubsub topic
+- `--notify.pulsar.url` + `--notify.pulsar.topic` - send notifications as JSON to the specified Apache Pulsar topic
 
 See <<notification-format>>.
 
@@ -171,8 +178,8 @@ And the whole archive (w/o expensive JSON such as `stateDiff` and `trace`):
 
 === Project Roadmap
 
-- [ ] support AWS S3 as a storage
-- [ ] support Pulsar as a notification system
+- [x] support AWS S3 as a storage
+- [x] support Pulsar as a notification system
 - [ ] support Kafka as a notification system
 - [ ] archive to Cassandra
 

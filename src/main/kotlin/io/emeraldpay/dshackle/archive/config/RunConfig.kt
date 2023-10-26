@@ -236,6 +236,7 @@ data class RunConfig(
         val file: String? = null,
         val directory: String? = null,
         val pubsub: String? = null,
+        val pulsar: PulsarNotify? = null,
     ) {
         companion object {
             fun default(): Notify {
@@ -243,6 +244,11 @@ data class RunConfig(
             }
         }
     }
+
+    data class PulsarNotify(
+        val url: String,
+        val topic: String,
+    )
 
     data class Auth(
         val gcp: AuthGcp? = null,

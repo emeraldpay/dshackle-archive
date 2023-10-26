@@ -60,6 +60,11 @@ class CurrentNotifier(
             notifiers.add(notifier)
             lifecycle.add(notifier)
         }
+        if (config.pulsar != null) {
+            val notifier = PulsarNotifier(config.pulsar.url, config.pulsar.topic, objectMapper)
+            notifiers.add(notifier)
+            lifecycle.add(notifier)
+        }
 
         delegate = if (notifiers.size == 1) {
             notifiers.first()

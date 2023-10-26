@@ -149,6 +149,15 @@ class RunConfigInitializer {
             options.addOption(it)
         }
 
+        Option(null, "notify.pulsar.url", true, "Send notifications as JSON to the Pulsar with specified URL (notify.pulsar.topic must be specified)").also {
+            it.isRequired = false
+            options.addOption(it)
+        }
+        Option(null, "notify.pulsar.topic", true, "Send notifications as JSON to the Pulsar to the specified topic (notify.pulsar.url must be specified)").also {
+            it.isRequired = false
+            options.addOption(it)
+        }
+
         Option(null, "compact.forks", false, "Should accept all blocks including forks in stream compaction").let {
             it.isRequired = false
             options.addOption(it)
@@ -339,6 +348,9 @@ class RunConfigInitializer {
         }
         if (cmd.hasOption("notify.pubsub")) {
             notify = notify.copy(pubsub = cmd.getOptionValue("notify.pubsub"))
+        }
+        if (cmd.hasOption("notify.pulsar.url") && cmd.hasOption("notify.pulsar.topic")) {
+            notify = notify.copy(pulsar = RunConfig.PulsarNotify(cmd.getOptionValue("notify.pulsar.url"), cmd.getOptionValue("notify.pulsar.topic")))
         }
 
         return RunConfig(command, blockchain, connection, archiveOptions, range, files, notify = notify, auth = auth).let { config ->
