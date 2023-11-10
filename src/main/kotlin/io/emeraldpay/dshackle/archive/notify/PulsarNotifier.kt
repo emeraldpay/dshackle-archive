@@ -1,6 +1,5 @@
 package io.emeraldpay.dshackle.archive.notify
 
-
 import com.fasterxml.jackson.databind.ObjectMapper
 import org.apache.pulsar.client.api.PulsarClient
 import org.apache.pulsar.client.api.Schema
@@ -11,7 +10,6 @@ import org.slf4j.LoggerFactory
 import org.springframework.context.Lifecycle
 import reactor.core.publisher.Mono
 import java.util.concurrent.atomic.AtomicReference
-
 
 class PulsarNotifier(
     // ex: "pulsar://xxxx:6650"

@@ -1,16 +1,14 @@
 package io.emeraldpay.dshackle.archive.storage.s3
 
-
 import org.apache.avro.file.SeekableInput
 import org.slf4j.LoggerFactory
 import software.amazon.awssdk.core.ResponseInputStream
 import software.amazon.awssdk.services.s3.model.GetObjectResponse
-import software.amazon.awssdk.services.s3.model.S3Object
 import java.io.InputStream
 
 class SeekableS3Object(
     obj: ResponseInputStream<GetObjectResponse>,
-): SeekableInput {
+) : SeekableInput {
 
     companion object {
         private val log = LoggerFactory.getLogger(SeekableS3Object::class.java)
@@ -51,5 +49,4 @@ class SeekableS3Object(
             }
         }
     }
-
 }

@@ -1,6 +1,5 @@
 package io.emeraldpay.dshackle.archive.storage.s3
 
-
 import io.emeraldpay.dshackle.archive.config.AwsAuthProvider
 import io.emeraldpay.dshackle.archive.config.RunConfig
 import org.slf4j.LoggerFactory
@@ -18,7 +17,6 @@ import software.amazon.awssdk.services.s3.S3Configuration
 import software.amazon.awssdk.utils.AttributeMap
 import javax.annotation.PostConstruct
 
-
 class S3Config(
     export: RunConfig.ExportBucket,
     private val credentials: AwsCredentials,
@@ -29,7 +27,7 @@ class S3Config(
     class S3ConfigBean(
         @Autowired private val runConfig: RunConfig,
         @Autowired private val awsAuthProvider: AwsAuthProvider,
-    ): FactoryBean<S3Config> {
+    ) : FactoryBean<S3Config> {
         override fun getObject(): S3Config {
             return S3Config(runConfig.export.bucket!!, awsAuthProvider.credentials).also { it.prepare() }
         }
@@ -59,7 +57,7 @@ class S3Config(
                 S3Configuration
                     .builder()
                     .pathStyleAccessEnabled(s3opts.pathStyleAccess)
-                    .build()
+                    .build(),
             )
             .let {
                 if (s3opts.endpoint != null) {
@@ -79,8 +77,8 @@ class S3Config(
                                     it
                                 }
                             }
-                            .build()
-                    )
+                            .build(),
+                    ),
             )
             .build()
 

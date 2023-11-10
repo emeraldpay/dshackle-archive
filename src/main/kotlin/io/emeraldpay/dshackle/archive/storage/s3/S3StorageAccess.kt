@@ -1,8 +1,5 @@
 package io.emeraldpay.dshackle.archive.storage.s3
 
-
-import software.amazon.awssdk.services.s3.model.ListObjectsV2Request
-import software.amazon.awssdk.services.s3.model.S3Object
 import io.emeraldpay.dshackle.archive.FileType
 import io.emeraldpay.dshackle.archive.model.Chunk
 import io.emeraldpay.dshackle.archive.storage.FilenameGenerator
@@ -22,9 +19,11 @@ import software.amazon.awssdk.services.s3.model.Delete
 import software.amazon.awssdk.services.s3.model.DeleteObjectsRequest
 import software.amazon.awssdk.services.s3.model.GetObjectRequest
 import software.amazon.awssdk.services.s3.model.HeadObjectRequest
+import software.amazon.awssdk.services.s3.model.ListObjectsV2Request
 import software.amazon.awssdk.services.s3.model.ObjectIdentifier
 import software.amazon.awssdk.services.s3.model.PutObjectRequest
 import software.amazon.awssdk.services.s3.model.S3Exception
+import software.amazon.awssdk.services.s3.model.S3Object
 import java.io.OutputStream
 import java.io.PipedInputStream
 import java.io.PipedOutputStream
@@ -39,7 +38,7 @@ import kotlin.io.path.pathString
 open class S3StorageAccess(
     @Autowired private val filenameGenerator: FilenameGenerator,
     @Autowired private val s3Config: S3Config,
-): StorageAccess {
+) : StorageAccess {
 
     companion object {
         private val log = LoggerFactory.getLogger(S3StorageAccess::class.java)
@@ -74,14 +73,15 @@ open class S3StorageAccess(
     fun query(query: ListQuery): Flux<S3Object> =
         Flux.from(S3Publisher(s3Config.storage, s3Config.bucket, query.prefix, query.rangeStart, query.rangeEnd))
 
-
     override fun deleteArchives(files: List<String>): Mono<Void> {
         return Mono.fromCallable {
             val request = DeleteObjectsRequest.builder()
                 .bucket(s3Config.bucket)
-                .delete(Delete.builder().objects(
-                    files.map { ObjectIdentifier.builder().key(it).build() }
-                ).build())
+                .delete(
+                    Delete.builder().objects(
+                        files.map { ObjectIdentifier.builder().key(it).build() },
+                    ).build(),
+                )
                 .build()
             s3Config.storage.deleteObjects(request)
         }.subscribeOn(Schedulers.boundedElastic()).then()
@@ -166,9 +166,11 @@ open class S3StorageAccess(
         val allFiles = Flux.fromIterable(patterns)
             .flatMap {
                 if (StringUtils.containsAny(it, "?*")) {
-                    Mono.error(IllegalArgumentException(
-                        "Patterns are not supported, input sources should contain prefixes only: $patterns",
-                    ))
+                    Mono.error(
+                        IllegalArgumentException(
+                            "Patterns are not supported, input sources should contain prefixes only: $patterns",
+                        ),
+                    )
                 } else {
                     Mono.just(it)
                 }
@@ -206,7 +208,7 @@ open class S3StorageAccess(
         val bucket = getBucket(uri)
         if (bucket != s3Config.bucket) {
             throw IllegalArgumentException(
-                "Different source and target buckets are not currently supported (${bucket} != ${s3Config.bucket})",
+                "Different source and target buckets are not currently supported ($bucket != ${s3Config.bucket})",
             )
         }
         val request = ListObjectsV2Request.builder()
@@ -222,11 +224,10 @@ open class S3StorageAccess(
             Flux.fromIterable(resp.contents()).concatWith(
                 Mono.fromCallable {
                     drain(request.toBuilder().continuationToken(resp.continuationToken()).build())
-                }.flatMapMany { it }
+                }.flatMapMany { it },
             )
         } else {
             Flux.fromIterable(resp.contents())
         }
     }
-
 }

@@ -173,5 +173,4 @@ open class GSStorageAccess(
         val uri = blob.blobId.toGsUtilUri()
         return Paths.get(URI.create(uri))
     }
-
 }

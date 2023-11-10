@@ -1,6 +1,5 @@
 package io.emeraldpay.dshackle.archive.storage.s3
 
-
 import org.reactivestreams.Publisher
 import org.reactivestreams.Subscriber
 import org.reactivestreams.Subscription
@@ -18,7 +17,7 @@ class S3Publisher(
     private val path: String,
     private val rangeStart: String?,
     private val rangeEnd: String?,
-) : Publisher<S3Object>  {
+) : Publisher<S3Object> {
 
     companion object {
         private val log = LoggerFactory.getLogger(S3Publisher::class.java)
@@ -101,5 +100,4 @@ class S3Publisher(
             }
         }
     }
-
 }

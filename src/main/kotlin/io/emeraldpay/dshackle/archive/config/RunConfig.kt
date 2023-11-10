@@ -225,7 +225,7 @@ data class RunConfig(
         /**
          * Set to true for a custom signed certificates on the server side, otherwise it will fail on TLS validation
          */
-        val trustAnyTLS: Boolean = false
+        val trustAnyTLS: Boolean = false,
     )
 
     data class InputFiles(
