@@ -216,30 +216,41 @@ class RunCompaction(
     }
 
     /** Group source files into flux of files per chunk */
-    fun groupByChunk(files: Flux<Path>): Mono<List<ChunkedPaths>> {
+    fun groupByChunk(files: Flux<Path>): Flux<ChunkedPaths> {
         val chunks = blocksRange.getChunks()
         val wholeChunk = blocksRange.wholeChunk()
+        var current: ChunkedPaths? = null
         return files
             .filter {
                 val isSingle = filenameGenerator.isSingle(it.fileName.name)
                 if (isSingle || runConfig.compaction.compactRanges) {
-                    val currentChunk = filenameGenerator.parseRange(it.fileName.name)
-                    currentChunk != null && wholeChunk.intersects(currentChunk)
+                    val fileChunk = filenameGenerator.parseRange(it.fileName.name)
+                    fileChunk != null && wholeChunk.intersects(fileChunk)
                 } else {
                     false
                 }
             }
-            .flatMap {
-                val fileChunk = filenameGenerator.parseRange(it.fileName.name)!!
-                Flux.fromIterable(
-                    chunks.filter { it.intersects(fileChunk) }
-                        .map { chunk -> ChunkedPath(chunk, it) },
-                )
+            .handle { next, sink ->
+                // files come as sorted by name, so we know when the next chunk started
+                //
+                val fileChunk = filenameGenerator.parseRange(next.fileName.name)!!
+                val chunk = chunks.find { it.intersects(fileChunk) } ?: return@handle
+                current = if (current == null) {
+                    ChunkedPaths(chunk, listOf(next))
+                } else {
+                    if (current!!.chunk.intersects(chunk)) {
+                        // add to the current chunk and continue
+                        ChunkedPaths(chunk, current!!.paths + listOf(next))
+                    } else {
+                        // a new chunk started, emit current
+                        sink.next(current!!)
+                        ChunkedPaths(chunk, listOf(next))
+                    }
+                }
             }
-            .collectList()
-            .map { list ->
-                list.groupBy({ it.chunk }, { it.path }).map { ChunkedPaths(it.key, it.value) }
-            }
+            .concatWith(
+                Mono.fromCallable { current }.flatMapMany { Mono.justOrEmpty(it) },
+            )
     }
 
     class FileReferenceCounter {
@@ -297,7 +308,6 @@ class RunCompaction(
             val wholeChunk = blocksRange.wholeChunk()
 
             return groups
-                .flatMapIterable { it }
                 .flatMap { group ->
                     val groupChunk = group.chunk
                     Flux.fromIterable(
@@ -309,16 +319,9 @@ class RunCompaction(
                         ),
                     )
                 }
-                .collectList()
-                .doOnNext { all ->
-                    log.info("${all.size} file chunks ready. Start processing ${fileType.name} files.")
-                    // put all chunks into the reference counter before processing
-                    all.forEach { group ->
-                        val chunk = group.chunk
-                        fileReferenceCounter.push(chunk, group.paths)
-                    }
+                .doOnNext { group ->
+                    fileReferenceCounter.push(group.chunk, group.paths)
                 }
-                .flatMapMany { Flux.fromIterable(it) }
                 .flatMap {
                     processChunk(
                         it.chunk,
