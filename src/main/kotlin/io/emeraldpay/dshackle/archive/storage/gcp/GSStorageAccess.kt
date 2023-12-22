@@ -1,6 +1,5 @@
 package io.emeraldpay.dshackle.archive.storage.gcp
 
-import com.google.cloud.storage.Blob
 import com.google.cloud.storage.BlobId
 import com.google.cloud.storage.BlobInfo
 import com.google.cloud.storage.Storage
@@ -121,52 +120,62 @@ open class GSStorageAccess(
     }
 
     override fun inputSources(patterns: List<String>, range: Chunk): StorageAccess.InputSources {
-        var transactions = Flux.empty<Path>()
-        var blocks = Flux.empty<Path>()
-        for (pattern in patterns) {
-            if (StringUtils.containsAny(pattern, "?*")) {
-                throw IllegalArgumentException(
-                    "Patterns are not supported, input sources should contain prefixes only",
-                )
-            }
-            val blobPrefix = BlobId.fromGsUtilUri(pattern)
-            if (blobPrefix.bucket != googleStorage.bucket) {
-                throw IllegalArgumentException(
-                    "Different source and target buckets are not currently supported (${blobPrefix.bucket} != ${googleStorage.bucket})",
-                )
-            }
-            val blobs: Iterable<Blob> = googleStorage.storage
-                .list(blobPrefix.bucket, Storage.BlobListOption.prefix(blobPrefix.name))
-                .iterateAll()
-            val blobFlux = Flux.fromIterable(blobs)
-                .map { blob -> blobLink(blob) }
-                .filter { file ->
-                    val chunk = filenameGenerator.parseRange(file.name)
-                    if (chunk == null) {
-                        log.debug("Skip no chunk ${file.name}")
-                    }
-                    val accept = chunk != null && range.intersects(chunk)
-                    if (!accept) {
-                        log.trace("Skip diff chunk ${file.name}")
-                    }
-                    accept
+        val allFiles = Flux.fromIterable(patterns)
+            .handle { pattern, sink ->
+                if (StringUtils.containsAny(pattern, "?*")) {
+                    sink.error(
+                        IllegalArgumentException(
+                            "Patterns are not supported, input sources should contain prefixes only: $patterns",
+                        ),
+                    )
+                } else {
+                    sink.next(pattern)
                 }
-                .share()
-            transactions = transactions.concatWith(
-                blobFlux.filter {
-                    it.name.endsWith(".txes.avro") || it.name.endsWith(".transactions.avro")
-                },
-            )
-            blocks = blocks.concatWith(
-                blobFlux.filter {
-                    it.name.endsWith(".block.avro") || it.name.endsWith(".blocks.avro")
-                },
-            )
-        }
+            }
+            .flatMap(::listFiles, 1)
+            .map { blob -> blobLink(blob) }
+            .handle { file, sink ->
+                val chunk = filenameGenerator.parseRange(file.name)
+                if (chunk == null) {
+                    log.debug("Skip no chunk ${file.name}")
+                } else if (!range.intersects(chunk)) {
+                    log.trace("Skip diff chunk ${file.name}")
+                } else {
+                    sink.next(file)
+                }
+            }
+            .share()
+
+        val transactions = allFiles
+            .filter {
+                it.name.endsWith(".txes.avro") || it.name.endsWith(".transactions.avro")
+            }
+        val blocks = allFiles
+            .filter {
+                it.name.endsWith(".block.avro") || it.name.endsWith(".blocks.avro")
+            }
+
         return StorageAccess.InputSources(transactions, blocks)
     }
 
-    private fun blobLink(blob: Blob): Path {
+    fun listFiles(pattern: String): Flux<BlobInfo> {
+        val blobPrefix = BlobId.fromGsUtilUri(pattern)
+        if (blobPrefix.bucket != googleStorage.bucket) {
+            throw IllegalArgumentException(
+                "Different source and target buckets are not currently supported (${blobPrefix.bucket} != ${googleStorage.bucket})",
+            )
+        }
+        val publisher = BlobsPublisher(
+            googleStorage.storage,
+            bucket = blobPrefix.bucket,
+            path = blobPrefix.name,
+            rangeStart = null,
+            rangeEnd = null,
+        )
+        return Flux.from(publisher)
+    }
+
+    private fun blobLink(blob: BlobInfo): Path {
         if (blob.isDirectory) {
             throw IllegalStateException("storage.list shouldn't list directories")
         }
