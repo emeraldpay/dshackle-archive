@@ -37,7 +37,7 @@ open class GSStorageAccess(
     }
 
     private val blockchainDir = filenameGenerator.parentDir
-    private val path = googleStorage.bucketPath + "/" + blockchainDir
+    private val path = googleStorage.bucketPath.forBlockchain(blockchainDir)
 
     override fun getDirBlockSizeL1(): Long {
         return filenameGenerator.dirBlockSizeL1
@@ -48,20 +48,20 @@ open class GSStorageAccess(
         // it stops processing stream files when last block is reached and starts processing ranges form given height
         val query = listOf(
             ListQuery(
-                prefix = path + filenameGenerator.getLevel0(height) + "/",
-                rangeStart = googleStorage.bucketPath + "/" + filenameGenerator.getIndividualFilename(FileType.BLOCKS.asTypeSingle(), height),
-                rangeEnd = path + filenameGenerator.getLevel0(height) + "/" + filenameGenerator.maxLevelValue(), // stop at the max level value, before range-* starts
+                prefix = path.fullPathFor(filenameGenerator.getLevel0(height) + "/"),
+                rangeStart = googleStorage.bucketPath.fullPathFor(filenameGenerator.getIndividualFilename(FileType.BLOCKS.asTypeSingle(), height)),
+                rangeEnd = path.fullPathFor(filenameGenerator.getLevel0(height) + "/" + filenameGenerator.maxLevelValue()), // stop at the max level value, before range-* starts
             ),
             ListQuery(
-                path + filenameGenerator.getLevel0(height) + "/",
-                googleStorage.bucketPath + "/" + filenameGenerator.getRangeFilename(FileType.BLOCKS.asTypeSingle(), Chunk(height, 0)),
+                path.fullPathFor(filenameGenerator.getLevel0(height) + "/"),
+                googleStorage.bucketPath.fullPathFor(filenameGenerator.getRangeFilename(FileType.BLOCKS.asTypeSingle(), Chunk(height, 0))),
             ),
         )
         log.debug("Query lists for for: {}", query)
         return Flux.fromIterable(query)
             .flatMap { query(it) }
             .map {
-                blockchainDir + it.blobId.name.substring(this.path.length)
+                blockchainDir + it.blobId.name.substring(this.path.fullPathFor("").length)
             }
     }
 
@@ -71,7 +71,7 @@ open class GSStorageAccess(
     override fun deleteArchives(files: List<String>): Mono<Void> {
         return Flux.fromIterable(files)
             .map {
-                BlobId.of(googleStorage.bucket, googleStorage.getBucketPath(it))
+                BlobId.of(googleStorage.bucket, googleStorage.bucketPath.fullPathFor(it))
             }
             .collectList()
             .flatMap {
@@ -83,18 +83,18 @@ open class GSStorageAccess(
     }
 
     override fun getURI(file: String): String {
-        return "gs://${googleStorage.bucket}/${googleStorage.getBucketPath(file)}"
+        return "gs://${googleStorage.bucket}/${googleStorage.bucketPath.fullPathFor(file)}"
     }
 
     override fun exists(path: String): Boolean {
-        val blobId = BlobId.of(googleStorage.bucket, googleStorage.getBucketPath(path))
+        val blobId = BlobId.of(googleStorage.bucket, googleStorage.bucketPath.fullPathFor(path))
         val blobInfo = BlobInfo.newBuilder(blobId)
             .build()
         return googleStorage.storage.get(blobInfo.blobId) != null
     }
 
     override fun createWriter(path: String): OutputStream {
-        val blobId = BlobId.of(googleStorage.bucket, googleStorage.getBucketPath(path))
+        val blobId = BlobId.of(googleStorage.bucket, googleStorage.bucketPath.fullPathFor(path))
         val blobInfo = BlobInfo.newBuilder(blobId).build()
         val channel = googleStorage.storage.writer(blobInfo, Storage.BlobWriteOption.disableGzipContent())
             ?: throw IllegalStateException("Blob ${blobId.toGsUtilUri()} cannot be created")
@@ -108,7 +108,7 @@ open class GSStorageAccess(
     }
 
     override fun createReader(path: String): SeekableInput {
-        val blobId = BlobId.of(googleStorage.bucket, googleStorage.getBucketPath(path))
+        val blobId = BlobId.of(googleStorage.bucket, googleStorage.bucketPath.fullPathFor(path))
         return createReader(blobId)
     }
 

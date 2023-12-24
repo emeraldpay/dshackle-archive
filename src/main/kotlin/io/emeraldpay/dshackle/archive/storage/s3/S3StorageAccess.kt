@@ -46,27 +46,27 @@ open class S3StorageAccess(
 
     private val threads = Executors.newCachedThreadPool()
     private val blockchainDir = filenameGenerator.parentDir
-    private val path = s3Config.bucketPath + "/" + blockchainDir
+    private val path = s3Config.bucketPath.forBlockchain(blockchainDir)
 
     override fun listArchiveLevel0(height: Long): Flux<String> {
         // use separate filters for Stream files and Ranges,
         // it stops processing stream files when last block is reached and starts processing ranges form given height
         val query = listOf(
             ListQuery(
-                prefix = path + filenameGenerator.getLevel0(height) + "/",
-                rangeStart = s3Config.bucketPath + "/" + filenameGenerator.getIndividualFilename(FileType.BLOCKS.asTypeSingle(), height),
-                rangeEnd = path + filenameGenerator.getLevel0(height) + "/" + filenameGenerator.maxLevelValue(), // stop at the max level value, before range-* starts
+                prefix = path.fullPathFor(filenameGenerator.getLevel0(height) + "/"),
+                rangeStart = s3Config.bucketPath.fullPathFor(filenameGenerator.getIndividualFilename(FileType.BLOCKS.asTypeSingle(), height)),
+                rangeEnd = path.fullPathFor(filenameGenerator.getLevel0(height) + "/" + filenameGenerator.maxLevelValue()), // stop at the max level value, before range-* starts
             ),
             ListQuery(
-                path + filenameGenerator.getLevel0(height) + "/",
-                s3Config.bucketPath + "/" + filenameGenerator.getRangeFilename(FileType.BLOCKS.asTypeSingle(), Chunk(height, 0)),
+                path.fullPathFor(filenameGenerator.getLevel0(height) + "/"),
+                s3Config.bucketPath.fullPathFor(filenameGenerator.getRangeFilename(FileType.BLOCKS.asTypeSingle(), Chunk(height, 0))),
             ),
         )
         log.debug("Query lists for for: {}", query)
         return Flux.fromIterable(query)
             .flatMap { query(it) }
             .map {
-                blockchainDir + it.key().substring(this.path.length)
+                blockchainDir + it.key().substring(this.path.fullPathFor("").length)
             }
     }
 
@@ -88,7 +88,7 @@ open class S3StorageAccess(
     }
 
     override fun getURI(file: String): String {
-        return "s3://${s3Config.bucket}/${s3Config.getBucketPath(file)}"
+        return "s3://${s3Config.bucket}/${s3Config.bucketPath.fullPathFor(file)}"
     }
 
     fun getBucket(uri: URI): String {
@@ -108,7 +108,7 @@ open class S3StorageAccess(
         try {
             val request = HeadObjectRequest.builder()
                 .bucket(s3Config.bucket)
-                .key(s3Config.getBucketPath(path))
+                .key(s3Config.bucketPath.fullPathFor(path))
                 .build()
             val response = s3Config.storage.headObject(request)
             return response != null
@@ -131,7 +131,7 @@ open class S3StorageAccess(
             try {
                 val request = PutObjectRequest.builder()
                     .bucket(s3Config.bucket)
-                    .key(s3Config.getBucketPath(path))
+                    .key(s3Config.bucketPath.fullPathFor(path))
                     .build()
                 val body = RequestBody.fromContentProvider({ pipe }, "application/avro")
                 s3Config.storage.putObject(request, body)
@@ -148,7 +148,7 @@ open class S3StorageAccess(
     override fun createReader(path: String): SeekableInput {
         val request = GetObjectRequest.builder()
             .bucket(s3Config.bucket)
-            .key(s3Config.getBucketPath(path))
+            .key(s3Config.bucketPath.fullPathFor(path))
             .build()
         val obj = s3Config.storage.getObject(request)
         return SeekableS3Object(obj)
