@@ -46,7 +46,8 @@ class S3Config(
     val bucket = export.bucket
     val bucketPath = BucketPath(
         export.path
-            .let { if (it.endsWith("/")) it.substring(0, it.length - 2) else it },
+            .let { if (it.endsWith("/")) it.substring(0, it.length - 2) else it }
+            .trimStart('/'),
     )
 
     lateinit var storage: S3Client

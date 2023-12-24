@@ -25,7 +25,9 @@ class GoogleStorage(
     private val export: RunConfig.ExportBucket = runConfig.export.bucket!!
     val bucket = export.bucket
     val bucketPath = BucketPath(
-        export.path.let { if (it.endsWith("/")) it.substring(0, it.length - 2) else it },
+        export.path
+            .let { if (it.endsWith("/")) it.substring(0, it.length - 2) else it }
+            .trimStart('/'),
     )
 
     lateinit var storage: Storage
