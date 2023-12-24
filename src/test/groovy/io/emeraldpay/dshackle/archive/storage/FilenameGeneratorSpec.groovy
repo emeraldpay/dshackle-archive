@@ -54,4 +54,9 @@ class FilenameGeneratorSpec extends Specification {
         "012000000/012001000/012000005.block.avro"           | 12000005 | 1
         "012000000/012001000/012000012.block.v20220102.avro" | 12000012 | 1
     }
+
+    def "Removed duplicate slashes"() {
+        setup:
+        FilenameGenerator generator = new FilenameGenerator("", "test/", 1_000_000, 1_000)
+    }
 }

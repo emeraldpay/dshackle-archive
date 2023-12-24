@@ -2,6 +2,7 @@ package io.emeraldpay.dshackle.archive.storage.s3
 
 import io.emeraldpay.dshackle.archive.config.AwsAuthProvider
 import io.emeraldpay.dshackle.archive.config.RunConfig
+import io.emeraldpay.dshackle.archive.storage.BucketPath
 import org.slf4j.LoggerFactory
 import org.springframework.beans.factory.FactoryBean
 import org.springframework.beans.factory.annotation.Autowired
@@ -43,7 +44,10 @@ class S3Config(
 
     private val s3opts = export.s3!!
     val bucket = export.bucket
-    val bucketPath = export.path.let { if (it.endsWith("/")) it.substring(0, it.length - 2) else it }.trimStart('/')
+    val bucketPath = BucketPath(
+        export.path
+            .let { if (it.endsWith("/")) it.substring(0, it.length - 2) else it },
+    )
 
     lateinit var storage: S3Client
 
@@ -83,12 +87,5 @@ class S3Config(
             .build()
 
         log.info("Upload archives to S3 bucket `$bucket` into `$bucketPath`")
-    }
-
-    fun getBucketPath(path: String): String {
-        return listOf(
-            bucketPath,
-            path,
-        ).filter { it.isNotEmpty() }.joinToString("/")
     }
 }
