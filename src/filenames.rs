@@ -1,7 +1,6 @@
 use std::str::FromStr;
 use lazy_static::lazy_static;
 use regex::Regex;
-use typed_path::Utf8NativePathBuf;
 use crate::datakind::DataKind;
 use crate::range::Range;
 
@@ -12,13 +11,20 @@ lazy_static! {
 
 #[derive(Debug, Clone)]
 pub struct Filenames {
-    parent: Utf8NativePathBuf,
+    parent: String,
     padding: usize,
     dir_block_size_l1: u64,
     dir_block_size_l2: u64,
 }
 
 impl Filenames {
+
+    pub fn with_dir(dir: String) -> Self {
+        Filenames {
+            parent: dir,
+            ..Filenames::default()
+        }
+    }
 
     pub fn parse(filename: String) -> Option<(DataKind, Range)> {
         if let Some(cap) = RE_SINGLE.captures(filename.as_str()) {
@@ -60,13 +66,25 @@ impl Filenames {
         }
     }
 
-    pub fn path(&self, kind: &DataKind, range: &Range) -> String {
+    pub fn relative_path(&self, kind: &DataKind, range: &Range) -> String {
         let start_height = range.start();
-        Utf8NativePathBuf::new()
-            .join(self.level_1(start_height))
-            .join(self.level_2(start_height))
-            .join(self.filename(kind, range))
-            .to_string()
+        format!("{}/{}/{}",
+            self.level_1(start_height),
+            self.level_2(start_height),
+            self.filename(kind, range)
+        )
+    }
+
+    pub fn full_path(&self, relative: String) -> String {
+        if self.parent.is_empty() {
+            relative
+        } else {
+            format!("{}/{}", self.parent, relative)
+        }
+    }
+
+    pub fn path(&self, kind: &DataKind, range: &Range) -> String {
+        self.full_path(self.relative_path(kind, range))
     }
 
     pub fn levels(&self, height: u64) -> Level {
@@ -95,7 +113,7 @@ impl Filenames {
 impl Default for Filenames {
     fn default() -> Self {
         Filenames {
-            parent: Utf8NativePathBuf::from("."),
+            parent: "".to_string(),
             padding: 9,
             dir_block_size_l1: 1_000_000,
             dir_block_size_l2: 1_000,
@@ -120,10 +138,9 @@ impl <'a> Level<'a> {
     }
 
     pub fn dir(&self) -> String {
-        Utf8NativePathBuf::new()
-            .join(self.filenames.level_1(self.height))
-            .join(self.filenames.level_2(self.height))
-            .to_string()
+        self.filenames.full_path(
+            format!("{}/{}", self.filenames.level_1(self.height), self.filenames.level_2(self.height))
+        )
     }
 
 }

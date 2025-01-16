@@ -84,6 +84,7 @@ impl StreamCommand {
         tracing::info!("Check if blocks are fully archived: {}..{}", blocks.start(), blocks.end());
         let mut existing = self.target.list(blocks.clone())?;
         let mut archived = HashMap::new();
+        let shutdown = self.shutdown.clone();
         while let Some(file) = existing.recv().await {
             let range = file.range;
             let kind = file.kind;
@@ -115,7 +116,13 @@ impl StreamCommand {
             for height in heights_next {
                 jobs.push(self.copy_block(Height { height: *height, hash: None }));
             }
-            join_all(jobs).await;
+            tokio::select! {
+                _ = shutdown.signalled() => {
+                    tracing::info!("Shutdown signal received");
+                    return Ok(());
+                }
+                _ = join_all(jobs) => {}
+            }
         }
 
         tracing::info!("Previous blocks are archived");
