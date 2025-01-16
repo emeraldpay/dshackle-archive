@@ -13,13 +13,13 @@ use anyhow::{anyhow, Context, Result};
 use tokio::sync::mpsc::Receiver;
 
 pub struct FsStorage {
-    dir: PathBuf,
+    parent_dir: PathBuf,
     filenames: Filenames,
 }
 
 impl FsStorage {
     pub fn new(dir: PathBuf, filenames: Filenames) -> Self {
-        Self { dir, filenames }
+        Self { parent_dir: dir, filenames }
     }
 }
 
@@ -27,14 +27,14 @@ impl FsStorage {
 impl TargetStorage for FsStorage {
     // type Target = FsFile;
     async fn create(&self, kind: DataKind, range: &Range) -> Result<Box<dyn TargetFile + Sync + Send>> {
-        let filename = self.dir.join(self.filenames.path(&kind, range));
+        let filename = self.parent_dir.join(self.filenames.path(&kind, range));
         Ok(Box::new(FsFile::new(filename.clone(), kind).context(format!("Path: {:?}", &filename))?))
     }
 
     fn list(&self, range: Range) -> Result<Receiver<FileReference>> {
         let (tx, rx) = tokio::sync::mpsc::channel(2);
         let filenames = self.filenames.clone();
-        let parent_dir = self.dir.clone();
+        let parent_dir = self.parent_dir.clone();
 
         tokio::spawn(async move {
             let mut level = filenames.levels(range.start());
@@ -84,17 +84,16 @@ impl TargetStorage for FsStorage {
                             tracing::debug!("Not an archive: {}", filename);
                             continue
                         }
-                        let (kind, range) = is_archive.unwrap();
-                        if kind != kind || !range.contains(level.height) {
-                            continue
-                        }
-                        let r = FileReference {
-                            range,
-                            kind,
-                            path: path.to_string_lossy().to_string(),
-                        };
-                        if tx.send(r).await.is_err() {
-                            return
+                        let (kind, file_range) = is_archive.unwrap();
+                        if file_range.intersect(&range) {
+                            let r = FileReference {
+                                range: file_range,
+                                kind,
+                                path: path.to_string_lossy().to_string(),
+                            };
+                            if tx.send(r).await.is_err() {
+                                return
+                            }
                         }
                     }
                 }

@@ -61,7 +61,7 @@ async fn main_inner() -> Result<()> {
 
     let command: Box<dyn CommandExecutor> = match args.command {
         Command::Stream => {
-            let target: Box<dyn TargetStorage> = Box::new(storage::from_args(&args).unwrap());
+            let target: Box<dyn TargetStorage> = storage::from_args(&args).unwrap();
             let command = StreamCommand::new(&args, shutdown, target, archiver).await?;
             Box::new(command)
         }

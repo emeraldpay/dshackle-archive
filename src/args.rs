@@ -129,7 +129,7 @@ pub struct Aws {
     #[arg(long = "aws.region", required = false)]
     pub region: Option<String>,
 
-    /// Enable S3 Path Style access (default is false)
+    /// Enable S3 Path Style access (default is false). Use this flag for a no-AWS service
     #[arg(long = "aws.s3.pathStyle")]
     pub path_style: bool,
 

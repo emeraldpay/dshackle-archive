@@ -54,6 +54,30 @@ impl Range {
             Range::Multiple(start, end) => *start <= height && height <= *end,
         }
     }
+
+    pub fn intersect(&self, other: &Self) -> bool {
+        match self {
+            Range::Single(h) => {
+                other.contains(*h)
+            }
+            Range::Multiple(start, end) => {
+                match other {
+                    Range::Single(h) => {
+                        *start <= *h && *h <= *end
+                    }
+                    Range::Multiple(other_start, other_end) => {
+                        if *start < *other_start {
+                            *end >= *other_start
+                        } else if *start < *other_end {
+                            true
+                        } else {
+                            false
+                        }
+                    }
+                }
+            }
+        }
+    }
 }
 
 #[cfg(test)]
@@ -121,5 +145,32 @@ mod tests {
         assert!(!multiple.contains(8));
         assert!(!multiple.contains(2));
         assert!(!multiple.contains(0));
+    }
+
+    #[test]
+    fn test_intersection() {
+        let base = Range::new(20_000, 21_000);
+
+        assert!(base.intersect(&Range::new(0, 100_000)));
+        assert!(base.intersect(&Range::new(0, 21_000)));
+        assert!(base.intersect(&Range::new(0, 20_500)));
+        assert!(base.intersect(&Range::new(0, 20_001)));
+        assert!(base.intersect(&Range::new(10_000, 21_000)));
+        assert!(base.intersect(&Range::new(20_000, 21_000)));
+        assert!(base.intersect(&Range::new(20_000, 25_000)));
+        assert!(base.intersect(&Range::new(20_500, 21_000)));
+        assert!(base.intersect(&Range::new(20_500, 20_510)));
+        assert!(base.intersect(&Range::new(20_500, 21_500)));
+        assert!(base.intersect(&Range::new(20_999, 21_099)));
+        assert!(base.intersect(&Range::new(20_999, 21_000)));
+    }
+
+    #[test]
+    fn test_no_intersection() {
+        let base = Range::new(20_000, 21_000);
+
+        assert!(!base.intersect(&Range::new(0, 10_000)));
+        assert!(!base.intersect(&Range::new(21_001, 30_000)));
+        assert!(!base.intersect(&Range::new(25_000, 30_000)));
     }
 }
