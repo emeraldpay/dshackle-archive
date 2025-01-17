@@ -73,6 +73,10 @@ impl EthereumData {
 
 #[async_trait]
 impl BlockchainData for EthereumData {
+    fn blockchain_id(&self) -> String {
+        self.blockchain_id.clone()
+    }
+
     async fn fetch_block(&self, height: &BlockReference) -> Result<(Record, Block<TxHash>, Vec<TransactionId>)> {
         let raw_block = match height {
             BlockReference::Hash(hash) => self.get_block(&hash).await?,
@@ -85,7 +89,7 @@ impl BlockchainData for EthereumData {
 
         let mut record = Record::new(&BLOCK_SCHEMA).unwrap();
         record.put("blockchainType", "ETHEREUM");
-        record.put("blockchainId", self.blockchain_id.clone());
+        record.put("blockchainId", self.blockchain_id());
         record.put("archiveTimestamp", Utc::now().timestamp_millis());
         record.put("height", parsed_block.header.number as i64);
         record.put("blockId", format!("0x{:x}", &parsed_block.header.hash));
@@ -123,7 +127,7 @@ impl BlockchainData for EthereumData {
 
         let mut record = Record::new(&TX_SCHEMA).unwrap();
         record.put("blockchainType", "ETHEREUM");
-        record.put("blockchainId", self.blockchain_id.clone());
+        record.put("blockchainId", self.blockchain_id());
         record.put("archiveTimestamp", Utc::now().timestamp_millis());
         record.put("height", block.header.number as i64);
         record.put("blockId", format!("0x{:x}", &block.header.hash));

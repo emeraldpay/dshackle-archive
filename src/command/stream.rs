@@ -17,8 +17,11 @@ use crate::{
     storage::TargetStorage
 };
 use anyhow::{anyhow, Result};
+use chrono::Utc;
 use futures_util::future::join_all;
 use shutdown::Shutdown;
+use tokio::sync::mpsc::Sender;
+use crate::notify::{Notification, Notifier, RunMode};
 
 ///
 /// Provides `stream` command.
@@ -31,23 +34,28 @@ pub struct StreamCommand {
     archiver: Arc<Box<dyn BlockchainData>>,
     shutdown: Shutdown,
     continue_blocks: Option<u64>,
+    notifications: Sender<Notification>,
 }
 
 impl StreamCommand {
-    pub async fn new(config: &Args,
+    pub async fn new<N: Notifier + ?Sized>(config: &Args,
                      shutdown: Shutdown,
                      target: Box<dyn TargetStorage>,
-                     archiver: Box<dyn BlockchainData>) -> Result<Self, Error> {
+                     archiver: Box<dyn BlockchainData>,
+                     notifier: &N,
+    ) -> Result<Self, Error> {
         let blockchain = Blockchain::new(&config.connection, config.as_dshackle_chain()?).await?;
         let continue_blocks = if config.continue_last {
             Some(100)
         } else {
             None
         };
+        let notifications = notifier.start();
         Ok(Self {
             blockchain: Arc::new(blockchain), target: Arc::new(target), archiver: Arc::new(archiver),
             continue_blocks,
-            shutdown
+            shutdown,
+            notifications,
         })
     }
 
@@ -58,24 +66,49 @@ impl StreamCommand {
         let block_file = self.target.create(DataKind::Blocks, &range)
             .await
             .map_err(|e| anyhow!("Unable to create file: {}", e))?;
+        let block_file_url = block_file.get_url();
         let block_ref = if let Some(hash) = &height.hash {
             BlockReference::Hash(BlockHash::from_str(hash)?)
         } else {
             BlockReference::Height(height.height)
         };
         let (record, block, txes) = archiver.fetch_block(&block_ref).await?;
-        match block_file.append(record).await {
+        let _ = match block_file.append(record).await {
             Ok(_) => block_file.close().await?,
             Err(e) => return Err(e)
-        }
+        };
+        let notification_block = Notification {
+            // common fields
+            version: Notification::version(),
+            ts: Utc::now(),
+            blockchain: self.archiver.blockchain_id(),
+            run: RunMode::Stream,
+            height_start: height.height,
+            height_end: height.height,
+
+            // specific fields
+            file_type: DataKind::Blocks,
+            location: block_file_url,
+        };
+        let _ = self.notifications.send(notification_block.clone()).await;
+
         let tx_file = self.target.create(DataKind::Transactions, &range)
             .await
             .map_err(|e| anyhow!("Unable to create file: {}", e))?;
+        let tx_file_url = tx_file.get_url();
         for tx_index in 0..block.transactions.len() {
             let data = archiver.fetch_tx(&block, tx_index).await?;
             let _ = tx_file.append(data).await?;
         }
-        tx_file.close().await?;
+        let _ = tx_file.close().await?;
+        let notification_tx = Notification {
+            file_type: DataKind::Transactions,
+            location: tx_file_url,
+
+            ..notification_block
+        };
+        let _ = self.notifications.send(notification_tx).await;
+
         tracing::info!("Block {} is archived", height.height);
         Ok(())
     }

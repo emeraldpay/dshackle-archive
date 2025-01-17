@@ -93,6 +93,10 @@ impl Default for Connection {
 #[derive(Parser, Debug, Clone)]
 pub struct Notify {
 
+    /// Write notifications as JSON line to the specified dir in a file <dshackle-archive-%STARTTIME.jsonl>
+    #[arg(long = "notify.dir", required = false)]
+    pub notify_dir: Option<String>,
+
     /// Send notifications as JSON to the Pulsar to the specified topic (notify.pulsar.url must be specified)
     #[arg(long = "notify.pulsar.topic", required = false)]
     pub pulsar_topic: Option<String>,
@@ -107,6 +111,7 @@ impl Default for Notify {
         Self {
             pulsar_topic: None,
             pulsar_url: None,
+            notify_dir: None,
         }
     }
 }
