@@ -1,8 +1,10 @@
 use std::str::FromStr;
 use apache_avro::Schema;
+use serde::{Deserialize, Serialize};
 use crate::avros;
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
 pub enum DataKind {
     Blocks,
     Transactions,

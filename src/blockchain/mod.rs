@@ -36,6 +36,9 @@ impl From<u64> for BlockReference {
 
 #[async_trait]
 pub trait BlockchainData: Send + Sync {
+
+    fn blockchain_id(&self) -> String;
+
     async fn fetch_block(&self, height: &BlockReference) -> Result<(Record, Block<TxHash>, Vec<TransactionId>)>;
 
     async fn fetch_tx(&self, block: &Block<TxHash>, index: usize) -> Result<Record>;

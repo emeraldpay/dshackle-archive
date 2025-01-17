@@ -7,9 +7,10 @@ use crate::filenames::Filenames;
 use crate::range::Range;
 use crate::storage::fs::FsStorage;
 use anyhow::{anyhow, Result};
-use object_store::aws::AmazonS3Builder;
+use object_store::aws::{AmazonS3Builder};
 use object_store::ClientOptions;
 use tokio::sync::mpsc::Receiver;
+use url::Url;
 use crate::storage::objects::ObjectsStorage;
 
 mod fs;
@@ -57,11 +58,17 @@ pub fn from_args(value: &Args) -> Result<Box<dyn TargetStorage>> {
         builder = builder
             .with_virtual_hosted_style_request(!aws.path_style);
 
+        let bucket = {
+            // AWS builder doesn't give access to the bucket name, so this is copied from its source code
+            let parsed = Url::parse(value.dir.clone().unwrap().as_str())?;
+            parsed.host_str().unwrap().to_string()
+        };
 
         let os = builder.build()
             .map_err(|e| anyhow!("Invalid S3 connection options: {}", e))?;
 
-        Box::new(ObjectsStorage::new(os, filenames))
+
+        Box::new(ObjectsStorage::new(os, bucket, filenames))
     } else {
         tracing::info!("Using Filesystem storage");
         if value.dir.is_none() {
@@ -83,6 +90,8 @@ pub trait TargetStorage: Send + Sync {
 
 #[async_trait]
 pub trait TargetFile {
+    fn get_url(&self) -> String;
+
     async fn append(&self, data: Record<'_>) -> Result<()>;
 
     ///

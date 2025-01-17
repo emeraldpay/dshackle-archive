@@ -25,7 +25,7 @@ impl FsStorage {
 
 #[async_trait]
 impl TargetStorage for FsStorage {
-    // type Target = FsFile;
+
     async fn create(&self, kind: DataKind, range: &Range) -> Result<Box<dyn TargetFile + Sync + Send>> {
         let filename = self.parent_dir.join(self.filenames.path(&kind, range));
         Ok(Box::new(FsFile::new(filename.clone(), kind).context(format!("Path: {:?}", &filename))?))
@@ -122,6 +122,11 @@ impl FsFile<'_> {
 
 #[async_trait]
 impl TargetFile for FsFile<'_> {
+
+    fn get_url(&self) -> String {
+        format!("file://{}", self.path.canonicalize().unwrap_or(self.path.clone()).to_str().unwrap_or("invalid"))
+    }
+
     async fn append(&self, data: Record<'_>) -> Result<()> {
         match &self.writer {
             None => Err(anyhow!("Writer is already closed")),

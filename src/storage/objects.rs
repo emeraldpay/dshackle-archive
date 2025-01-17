@@ -22,12 +22,13 @@ use crate::storage::{FileReference, TargetFile, TargetStorage};
 
 pub struct ObjectsStorage<S: ObjectStore> {
     os: Arc<S>,
+    bucket: String,
     filenames: Filenames,
 }
 
 impl<S: ObjectStore>  ObjectsStorage<S>{
-    pub fn new(os: S, filenames: Filenames) -> Self {
-        Self { os: Arc::new(os), filenames }
+    pub fn new(os: S, bucket: String, filenames: Filenames) -> Self {
+        Self { os: Arc::new(os), bucket, filenames }
     }
 }
 
@@ -35,7 +36,7 @@ impl<S: ObjectStore>  ObjectsStorage<S>{
 impl<S: ObjectStore> TargetStorage for ObjectsStorage<S> {
     async fn create(&self, kind: DataKind, range: &Range) -> anyhow::Result<Box<dyn TargetFile + Send + Sync>> {
         let filename = Path::from(self.filenames.path(&kind, range));
-        Ok(Box::new(ObjectsFile::new(self.os.clone(), kind, filename)))
+        Ok(Box::new(ObjectsFile::new(self.os.clone(), kind, self.bucket.clone(), filename)))
     }
 
     fn list(&self, range: Range) -> anyhow::Result<Receiver<FileReference>> {
@@ -98,10 +99,18 @@ struct ObjectsFile<'a> {
     pipe: ObjectWriterPipe,
     writer: Mutex<Writer<'a, ObjectWriterPipe>>,
     closed: oneshot::Receiver<()>,
+
+    bucket: String,
+    path: Path,
 }
 
 #[async_trait]
 impl TargetFile for ObjectsFile<'_> {
+
+    fn get_url(&self) -> String {
+        format!("s3://{}/{}", self.bucket, self.path.to_string())
+    }
+
     async fn append(&self, data: Record<'_>) -> anyhow::Result<()> {
         let mut writer = self.writer.lock().unwrap();
         writer.append(data).map_err(|e| anyhow!("IO Error: {:?}", e))?;
@@ -116,9 +125,9 @@ impl TargetFile for ObjectsFile<'_> {
 }
 
 impl ObjectsFile<'_> {
-    fn new(storage: Arc<dyn ObjectStore>, kind: DataKind, path: Path) -> Self {
-        tracing::debug!("Create object: {:?}", path.to_string());
-        let buf = BufWriter::new(storage, path);
+    fn new(storage: Arc<dyn ObjectStore>, kind: DataKind, bucket: String, path: Path) -> Self {
+        tracing::debug!("Create object: s3://{}/{}", bucket, path.to_string());
+        let buf = BufWriter::new(storage, path.clone());
         let (closed_tx, closed_rx) = oneshot::channel();
         let pipe = Self::pipe_start(buf, closed_tx);
         let writer = Writer::with_codec(kind.schema(), pipe.clone(), Codec::Snappy);
@@ -126,6 +135,8 @@ impl ObjectsFile<'_> {
             pipe,
             writer: Mutex::new(writer),
             closed: closed_rx,
+            bucket,
+            path,
         }
     }
 
@@ -203,7 +214,7 @@ mod tests {
     #[tokio::test]
     pub async fn can_write() {
         let mem = Arc::new(InMemory::new());
-        let file = Box::new(ObjectsFile::new(mem.clone(), DataKind::Blocks, Path::from("test.avro")));
+        let file = Box::new(ObjectsFile::new(mem.clone(), DataKind::Blocks, "test".to_string(), Path::from("test.avro")));
 
         let mut record = Record::new(&BLOCK_SCHEMA).unwrap();
         record.put("blockchainType", "ETHEREUM");

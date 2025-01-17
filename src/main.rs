@@ -24,6 +24,7 @@ pub mod range;
 pub mod datakind;
 pub mod filenames;
 pub mod avros;
+pub mod notify;
 
 fn init_tracing() {
     let filter = Targets::new()
@@ -59,10 +60,12 @@ async fn main_inner() -> Result<()> {
         _ => return Err(anyhow!("Unsupported blockchain: {}", args.blockchain)),
     };
 
+    let notifier = notify::create_notifier(&args);
+
     let command: Box<dyn CommandExecutor> = match args.command {
         Command::Stream => {
             let target: Box<dyn TargetStorage> = storage::from_args(&args).unwrap();
-            let command = StreamCommand::new(&args, shutdown, target, archiver).await?;
+            let command = StreamCommand::new(&args, shutdown, target, archiver, notifier.as_ref()).await?;
             Box::new(command)
         }
     };
