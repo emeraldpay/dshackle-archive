@@ -60,7 +60,7 @@ async fn main_inner() -> Result<()> {
         _ => return Err(anyhow!("Unsupported blockchain: {}", args.blockchain)),
     };
 
-    let notifier = notify::create_notifier(&args);
+    let notifier = notify::create_notifier(&args).await?;
 
     let command: Box<dyn CommandExecutor> = match args.command {
         Command::Stream => {

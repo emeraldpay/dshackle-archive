@@ -35,3 +35,7 @@ regex = "1.11"
 object_store = { version = "0.11", features = ["aws"] }
 bytes = "1.9"
 url = "2.5"
+
+
+[dev-dependencies]
+testcontainers = "0.23"

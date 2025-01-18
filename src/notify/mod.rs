@@ -6,6 +6,7 @@ use serde::{Deserialize, Serialize};
 use crate::datakind::DataKind;
 use tokio::sync::mpsc::{Sender};
 use crate::args::Args;
+use anyhow::Result;
 
 /// Notification represents the metadata for an archive event.
 #[derive(Clone, Serialize, Deserialize, Debug)]
@@ -51,12 +52,21 @@ pub trait Notifier {
     fn start(&self) -> Sender<Notification>;
 }
 
-pub fn create_notifier(args: &Args) -> Box<dyn Notifier> {
+pub async fn create_notifier(args: &Args) -> Result<Box<dyn Notifier>> {
     if let Some(notify) = &args.notify {
         if let Some(dir) = &notify.notify_dir {
-            tracing::info!("Save update to file in directory: {:?}", dir);
-            return Box::new(fs::FsNotifier::new(dir));
+            tracing::info!("Save updates to file in directory: {:?}", dir);
+            return Ok(Box::new(fs::FsNotifier::new(dir)));
+        }
+        if let Some(pulsar_url) = &notify.pulsar_url {
+            if notify.pulsar_topic.is_none() {
+                tracing::warn!("Pulsar topic is not set. Notifications will not be sent.");
+                return Ok(Box::new(empty::EmptyNotifier::default()));
+            }
+            let topic = notify.pulsar_topic.clone().unwrap();
+            tracing::info!("Send updates to Pulsar at {} topic {}", &pulsar_url, topic);
+            return Ok(Box::new(pulsar::PulsarNotifier::new(pulsar_url.clone(), topic).await?));
         }
     }
-    Box::new(empty::EmptyNotifier::default())
+    Ok(Box::new(empty::EmptyNotifier::default()))
 }
