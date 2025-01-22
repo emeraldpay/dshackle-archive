@@ -30,6 +30,12 @@ pub fn from_args(value: &Args) -> Result<Box<dyn TargetStorage>> {
             "".to_string()
         };
 
+        let parent_dir = if parent_dir.ends_with('/') {
+            value.get_chain_name()?
+        } else {
+            format!("{}/{}", parent_dir, value.get_chain_name()?)
+        };
+
         let filenames = Filenames::with_dir(parent_dir);
 
         if value.dir.is_none() {

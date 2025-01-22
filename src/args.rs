@@ -1,7 +1,6 @@
 use clap::Parser;
 use std::fmt::Display;
 use std::str::FromStr;
-use anyhow::anyhow;
 use emerald_api::proto::common::ChainRef;
 use serde::Deserialize;
 use crate::errors::ConfigError;
@@ -53,10 +52,20 @@ impl Default for Args {
 }
 
 impl Args {
+
+    pub fn get_chain(&self) -> Result<ChainRef, ConfigError> {
+        ChainRef::from_str(&self.blockchain)
+            .map_err(|_| ConfigError::UnsupportedBlockchain(self.blockchain.clone()))
+    }
+
     pub fn as_dshackle_chain(&self) -> Result<i32, ConfigError> {
-        let chain_ref = ChainRef::from_str(&self.blockchain)
-            .map_err(|_| ConfigError::UnsupportedBlockchain(self.blockchain.clone()))?;
+        let chain_ref = self.get_chain()?;
         Ok(chain_ref as i32)
+    }
+
+    pub fn get_chain_name(&self) -> Result<String, ConfigError> {
+        let chain_ref = self.get_chain()?.as_str_name();
+        Ok(chain_ref.replace("CHAIN_", "").to_lowercase())
     }
 }
 
@@ -169,5 +178,14 @@ mod tests {
             ..Args::default()
         };
         assert_eq!(args.as_dshackle_chain().unwrap(), 100);
+    }
+
+    #[test]
+    fn test_chain_name() {
+        let args = Args {
+            blockchain: "testnet-sepolia".to_string(),
+            ..Args::default()
+        };
+        assert_eq!(args.get_chain_name().unwrap(), "sepolia");
     }
 }
