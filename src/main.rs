@@ -3,6 +3,7 @@ extern crate enum_display_derive;
 extern crate serde;
 
 use std::marker::PhantomData;
+use std::str::FromStr;
 use crate::args::{Args};
 use clap::Parser;
 use tracing_subscriber::filter::Targets;
@@ -12,6 +13,7 @@ use crate::command::stream::StreamCommand;
 use crate::blockchain::{BitcoinType, BlockchainTypes, EthereumType};
 use blockchain::connection::Blockchain;
 use anyhow::{anyhow, Result};
+use emerald_api::proto::common::ChainRef;
 use crate::command::CommandExecutor;
 use crate::notify::Notifier;
 use crate::storage::TargetStorage;
@@ -51,10 +53,12 @@ async fn main_inner() -> Result<()> {
     let args = Args::parse();
     tracing::info!("Run: {}", args.command);
 
-    match args.blockchain.to_lowercase().as_str() {
-        "ethereum" => run(Builder::<EthereumType>::new(), &args).await?,
-        "bitcoin" => run(Builder::<BitcoinType>::new(), &args).await?,
-        _ => return Err(anyhow!("Unsupported blockchain: {}", args.blockchain)),
+    let chain_ref = ChainRef::from_str(&args.blockchain)
+        .map_err(|_| anyhow!("Unsupported blockchain: {}", args.blockchain))?;
+    match chain_ref {
+        ChainRef::ChainEthereum | ChainRef::ChainEthereumClassic | ChainRef::ChainSepolia => run(Builder::<EthereumType>::new(), &args).await?,
+        ChainRef::ChainBitcoin | ChainRef::ChainTestnetBitcoin => run(Builder::<BitcoinType>::new(), &args).await?,
+        _ => return Err(anyhow!("Unsupported blockchain: {} / {:?}", args.blockchain, chain_ref)),
     };
 
     tracing::info!("Done: {}", args.command);
