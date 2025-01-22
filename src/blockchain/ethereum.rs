@@ -3,15 +3,14 @@ use apache_avro::types::{Record, Value};
 use async_trait::async_trait;
 use crate::avros::{BLOCK_SCHEMA, TX_SCHEMA};
 use crate::errors::{BlockchainError};
-use crate::blockchain::connection::{Blockchain, TransactionId};
+use crate::blockchain::connection::{Blockchain};
 use chrono::Utc;
 use alloy::{
     primitives::{TxHash, BlockHash},
     rpc::types::{Transaction as TransactionJson, Block as BlockJson, Block, TransactionTrait}
 };
-use crate::blockchain::{BlockchainData, to_zero_hex, to_zero_number, BlockReference};
+use crate::blockchain::{BlockReference, BlockchainData, EthereumType};
 use anyhow::{Result, anyhow};
-
 
 pub struct EthereumData {
     blockchain: Arc<Blockchain>,
@@ -34,31 +33,31 @@ impl EthereumData {
     }
 
     async fn get_block(&self, hash: &BlockHash) -> Result<Vec<u8>> {
-        let params = format!("[\"{}\", false]", to_zero_hex(hash)).as_bytes().to_vec();
+        let params = format!("[\"0x{:x}\", false]", hash).as_bytes().to_vec();
         let data = self.blockchain.native_call("eth_getBlockByHash", params).await?;
         Ok(data)
     }
 
     async fn get_uncle(&self, hash: &BlockHash, i: usize) -> Result<Vec<u8>> {
-        let params = format!("[\"{}\", \"{}\"]", to_zero_hex(hash), to_zero_number(i)).as_bytes().to_vec();
+        let params = format!("[\"0x{:x}\", \"0x{:x}\"]", hash, i).as_bytes().to_vec();
         let data = self.blockchain.native_call("eth_getUncleByBlockHashAndIndex", params).await?;
         Ok(data)
     }
 
     async fn get_tx(&self, hash: &TxHash) -> Result<Vec<u8>> {
-        let params = format!("[\"{}\"]", to_zero_hex(hash)).as_bytes().to_vec();
+        let params = format!("[\"0x{:x}\"]", hash).as_bytes().to_vec();
         let data = self.blockchain.native_call("eth_getTransactionByHash", params).await?;
         Ok(data)
     }
 
     async fn get_tx_receipt(&self, hash: &TxHash) -> Result<Vec<u8>> {
-        let params = format!("[\"{}\"]", to_zero_hex(hash)).as_bytes().to_vec();
+        let params = format!("[\"0x{:x}\"]", hash).as_bytes().to_vec();
         let data = self.blockchain.native_call("eth_getTransactionReceipt", params).await?;
         Ok(data)
     }
 
     async fn get_tx_raw(&self, hash: &TxHash) -> Result<Vec<u8>> {
-        let params = format!("[\"{}\"]", to_zero_hex(hash)).as_bytes().to_vec();
+        let params = format!("[\"0x{:x}\"]", hash).as_bytes().to_vec();
         let data_as_json = self.blockchain.native_call("eth_getRawTransactionByHash", params).await?;
         if data_as_json == b"null" {
             return Err(anyhow!("Transaction not found: 0x{:x}", hash));
@@ -72,12 +71,13 @@ impl EthereumData {
 }
 
 #[async_trait]
-impl BlockchainData for EthereumData {
+impl BlockchainData<EthereumType> for EthereumData {
+
     fn blockchain_id(&self) -> String {
         self.blockchain_id.clone()
     }
 
-    async fn fetch_block(&self, height: &BlockReference) -> Result<(Record, Block<TxHash>, Vec<TransactionId>)> {
+    async fn fetch_block(&self, height: &BlockReference<BlockHash>) -> Result<(Record, Block<TxHash>, Vec<TxHash>)> {
         let raw_block = match height {
             BlockReference::Hash(hash) => self.get_block(&hash).await?,
             BlockReference::Height(height) => self.get_block_at(*height).await?,
@@ -93,7 +93,7 @@ impl BlockchainData for EthereumData {
         record.put("archiveTimestamp", Utc::now().timestamp_millis());
         record.put("height", parsed_block.header.number as i64);
         record.put("blockId", format!("0x{:x}", &parsed_block.header.hash));
-        record.put("parentId", to_zero_hex(&parsed_block.header.parent_hash));
+        record.put("parentId", format!("0x{:x}", &parsed_block.header.parent_hash));
         record.put("timestamp", (parsed_block.header.timestamp * 1000) as i64);
         record.put("json", raw_block);
         record.put("unclesCount", parsed_block.uncles.len() as i32);
@@ -105,7 +105,7 @@ impl BlockchainData for EthereumData {
         }
 
         for transaction in parsed_block.transactions.txns() {
-            transactions.push(format!("0x{:x}", transaction));
+            transactions.push(transaction.clone());
         }
 
         Ok((record, parsed_block, transactions))
