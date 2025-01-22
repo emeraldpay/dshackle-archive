@@ -1,7 +1,7 @@
 use std::collections::HashMap;
+use std::marker::PhantomData;
 use std::str::FromStr;
 use std::sync::Arc;
-use alloy::primitives::BlockHash;
 use async_trait::async_trait;
 use crate::{
     range::Range,
@@ -21,6 +21,7 @@ use chrono::Utc;
 use futures_util::future::join_all;
 use shutdown::Shutdown;
 use tokio::sync::mpsc::Sender;
+use crate::blockchain::BlockchainTypes;
 use crate::notify::{Notification, Notifier, RunMode};
 
 ///
@@ -28,21 +29,22 @@ use crate::notify::{Notification, Notifier, RunMode};
 /// It appends fresh blocks one by one to the archive
 ///
 #[derive(Clone)]
-pub struct StreamCommand {
+pub struct StreamCommand<B: BlockchainTypes> {
+    b: PhantomData<B>,
     blockchain: Arc<Blockchain>,
     target: Arc<Box<dyn TargetStorage>>,
-    archiver: Arc<Box<dyn BlockchainData>>,
+    archiver: Arc<B::DataProvider>,
     shutdown: Shutdown,
     continue_blocks: Option<u64>,
     notifications: Sender<Notification>,
 }
 
-impl StreamCommand {
-    pub async fn new<N: Notifier + ?Sized>(config: &Args,
+impl<B: BlockchainTypes> StreamCommand<B> {
+    pub async fn new(config: &Args,
                      shutdown: Shutdown,
                      target: Box<dyn TargetStorage>,
-                     archiver: Box<dyn BlockchainData>,
-                     notifier: &N,
+                     archiver: B::DataProvider,
+                     notifier: Box<dyn Notifier>,
     ) -> Result<Self, Error> {
         let blockchain = Blockchain::new(&config.connection, config.as_dshackle_chain()?).await?;
         let continue_blocks = if config.continue_last {
@@ -52,6 +54,7 @@ impl StreamCommand {
         };
         let notifications = notifier.start();
         Ok(Self {
+            b: PhantomData,
             blockchain: Arc::new(blockchain), target: Arc::new(target), archiver: Arc::new(archiver),
             continue_blocks,
             shutdown,
@@ -68,9 +71,11 @@ impl StreamCommand {
             .map_err(|e| anyhow!("Unable to create file: {}", e))?;
         let block_file_url = block_file.get_url();
         let block_ref = if let Some(hash) = &height.hash {
-            BlockReference::Hash(BlockHash::from_str(hash)?)
+            BlockReference::Hash(
+                B::BlockHash::from_str(hash).map_err(|_| anyhow!("Not a valid hash"))?
+            )
         } else {
-            BlockReference::Height(height.height)
+            BlockReference::height(height.height)
         };
         let (record, block, txes) = archiver.fetch_block(&block_ref).await?;
         let _ = match block_file.append(record).await {
@@ -96,7 +101,7 @@ impl StreamCommand {
             .await
             .map_err(|e| anyhow!("Unable to create file: {}", e))?;
         let tx_file_url = tx_file.get_url();
-        for tx_index in 0..block.transactions.len() {
+        for tx_index in 0..txes.len() {
             let data = archiver.fetch_tx(&block, tx_index).await?;
             let _ = tx_file.append(data).await?;
         }
@@ -164,7 +169,7 @@ impl StreamCommand {
 }
 
 #[async_trait]
-impl CommandExecutor for StreamCommand {
+impl<B: BlockchainTypes> CommandExecutor for StreamCommand<B> {
 
     async fn execute(&self) -> Result<()> {
         let mut heights = self.blockchain.subscribe_blocks().await?;
