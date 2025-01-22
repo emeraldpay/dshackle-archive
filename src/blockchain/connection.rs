@@ -1,11 +1,24 @@
 use std::str::FromStr;
-use emerald_api::proto::blockchain::blockchain_client::BlockchainClient;
-use emerald_api::proto::blockchain::{Chain, NativeCallItem, NativeCallRequest};
-use ginepro::{LoadBalancedChannel, LoadBalancedChannelBuilder};
+use std::sync::Arc;
+use emerald_api::{
+    blockchain,
+    proto::{
+        common::Chain,
+        blockchain::{
+            blockchain_client::BlockchainClient,
+            NativeCallItem,
+            NativeCallRequest
+        }
+    },
+    conn::EmeraldConn,
+    creds::{AuthService, Credentials}
+};
+use ginepro::{LoadBalancedChannelBuilder};
 use tokio::sync::{mpsc, Semaphore};
 use crate::args;
 use crate::errors::{BlockchainError};
 use futures_util::stream::StreamExt;
+use tonic::transport::Channel;
 
 pub struct Blockchain {
     parallel: Semaphore,
@@ -15,7 +28,7 @@ pub struct Blockchain {
 
 #[derive(Clone)]
 struct DshackleConn {
-    channel: LoadBalancedChannel,
+    emerald_conn: Arc<EmeraldConn>,
 }
 
 impl Blockchain {
@@ -120,8 +133,10 @@ impl DshackleConn {
             .await
             .map_err(|_| BlockchainError::NoConnection)?;
 
+        let emerald_conn = EmeraldConn::new(Channel::from(channel), Credentials::unauthenticated());
+
         Ok(DshackleConn {
-            channel,
+            emerald_conn: Arc::new(emerald_conn),
         })
     }
 
@@ -132,8 +147,8 @@ impl DshackleConn {
         Ok((parts.0.to_string(), port))
     }
 
-    fn client(&self) -> BlockchainClient<LoadBalancedChannel> {
-        BlockchainClient::new(self.channel.clone())
+    fn client(&self) -> BlockchainClient<AuthService<Channel>> {
+        blockchain::connect(&self.emerald_conn)
     }
 
 }
