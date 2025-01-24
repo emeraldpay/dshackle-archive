@@ -4,19 +4,26 @@ extern crate serde;
 
 use std::marker::PhantomData;
 use std::str::FromStr;
-use crate::args::{Args};
 use clap::Parser;
 use tracing_subscriber::filter::Targets;
 use tracing_subscriber::Layer;
 use tracing_subscriber::layer::SubscriberExt;
-use crate::command::stream::StreamCommand;
-use crate::blockchain::{BitcoinType, BlockchainTypes, EthereumType};
+use crate::{
+    blockchain::{BitcoinType, BlockchainTypes, EthereumType},
+    command::{
+        stream::StreamCommand,
+        CommandExecutor
+    },
+    args::{Args},
+    notify::Notifier,
+    storage::TargetStorage
+};
 use blockchain::connection::Blockchain;
 use anyhow::{anyhow, Result};
-use emerald_api::proto::common::ChainRef;
-use crate::command::CommandExecutor;
-use crate::notify::Notifier;
-use crate::storage::TargetStorage;
+use emerald_api::{
+    proto::common::ChainRef,
+    common::blockchain_ref::BlockchainType
+};
 
 pub mod args;
 pub mod command;
@@ -55,10 +62,11 @@ async fn main_inner() -> Result<()> {
 
     let chain_ref = ChainRef::from_str(&args.blockchain)
         .map_err(|_| anyhow!("Unsupported blockchain: {}", args.blockchain))?;
-    match chain_ref {
-        ChainRef::ChainEthereum | ChainRef::ChainEthereumClassic | ChainRef::ChainSepolia => run(Builder::<EthereumType>::new(), &args).await?,
-        ChainRef::ChainBitcoin | ChainRef::ChainTestnetBitcoin => run(Builder::<BitcoinType>::new(), &args).await?,
-        _ => return Err(anyhow!("Unsupported blockchain: {} / {:?}", args.blockchain, chain_ref)),
+    let chain_type = BlockchainType::try_from(chain_ref)
+        .map_err(|_| anyhow!("Unsupported blockchain: {}", args.blockchain))?;
+    match chain_type {
+        BlockchainType::Ethereum => run(Builder::<EthereumType>::new(), &args).await?,
+        BlockchainType::Bitcoin => run(Builder::<BitcoinType>::new(), &args).await?,
     };
 
     tracing::info!("Done: {}", args.command);
@@ -67,10 +75,13 @@ async fn main_inner() -> Result<()> {
 
 async fn run<B: BlockchainTypes>(builder: Builder<B>, args: &Args) -> Result<()> {
     let target: Box<dyn TargetStorage> = storage::from_args(&args).unwrap();
-    let blockchain = Blockchain::new(&args.connection, args.as_dshackle_chain()?).await?;
+    let blockchain = Blockchain::new(&args.connection, args.as_dshackle_blockchain()?).await?;
+    let chain_ref = ChainRef::from_str(&args.blockchain)
+        .map_err(|_| anyhow!("Unsupported blockchain: {}", args.blockchain))?;
+
     builder.with_target(target)
         .with_notifier(notify::create_notifier(&args).await?)
-        .with_data(blockchain, args.blockchain.clone())
+        .with_data(blockchain, chain_ref.code())
         .stream(args)
         .await
         .execute()
