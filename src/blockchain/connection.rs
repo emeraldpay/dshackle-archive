@@ -1,5 +1,4 @@
 use std::str::FromStr;
-use std::sync::Arc;
 use emerald_api::{
     blockchain,
     proto::{
@@ -28,7 +27,7 @@ pub struct Blockchain {
 
 #[derive(Clone)]
 struct DshackleConn {
-    emerald_conn: Arc<EmeraldConn>,
+    emerald_conn: EmeraldConn,
 }
 
 impl Blockchain {
@@ -136,7 +135,7 @@ impl DshackleConn {
         let emerald_conn = EmeraldConn::new(Channel::from(channel), Credentials::unauthenticated());
 
         Ok(DshackleConn {
-            emerald_conn: Arc::new(emerald_conn),
+            emerald_conn,
         })
     }
 

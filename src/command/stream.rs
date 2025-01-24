@@ -46,7 +46,7 @@ impl<B: BlockchainTypes> StreamCommand<B> {
                      archiver: B::DataProvider,
                      notifier: Box<dyn Notifier>,
     ) -> Result<Self, Error> {
-        let blockchain = Blockchain::new(&config.connection, config.as_dshackle_chain()?).await?;
+        let blockchain = Blockchain::new(&config.connection, config.as_dshackle_blockchain()?).await?;
         let continue_blocks = if config.continue_last {
             Some(100)
         } else {

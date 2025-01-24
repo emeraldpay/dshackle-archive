@@ -30,10 +30,12 @@ pub fn from_args(value: &Args) -> Result<Box<dyn TargetStorage>> {
             "".to_string()
         };
 
+        // inside the archive we create a subdirectory for each blockchain
+        let blockchain_dir = value.get_blockchain()?.code().to_lowercase();
         let parent_dir = if parent_dir.ends_with('/') {
-            value.get_chain_name()?
+            blockchain_dir
         } else {
-            format!("{}/{}", parent_dir, value.get_chain_name()?)
+            format!("{}/{}", parent_dir, blockchain_dir)
         };
 
         let filenames = Filenames::with_dir(parent_dir);

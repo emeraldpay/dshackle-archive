@@ -33,11 +33,6 @@ pub trait BlockchainTypes: Send + Sync + Sized {
     fn create_data_provider(blockchain: Blockchain, id: String) -> Self::DataProvider;
 }
 
-pub enum BlockchainType {
-    Ethereum,
-    Bitcoin,
-}
-
 pub struct EthereumType {}
 impl BlockchainTypes for EthereumType {
     type BlockHash = alloy::primitives::BlockHash;

@@ -53,20 +53,16 @@ impl Default for Args {
 
 impl Args {
 
-    pub fn get_chain(&self) -> Result<ChainRef, ConfigError> {
+    pub fn get_blockchain(&self) -> Result<ChainRef, ConfigError> {
         ChainRef::from_str(&self.blockchain)
             .map_err(|_| ConfigError::UnsupportedBlockchain(self.blockchain.clone()))
     }
 
-    pub fn as_dshackle_chain(&self) -> Result<i32, ConfigError> {
-        let chain_ref = self.get_chain()?;
+    pub fn as_dshackle_blockchain(&self) -> Result<i32, ConfigError> {
+        let chain_ref = self.get_blockchain()?;
         Ok(chain_ref as i32)
     }
 
-    pub fn get_chain_name(&self) -> Result<String, ConfigError> {
-        let chain_ref = self.get_chain()?.as_str_name();
-        Ok(chain_ref.replace("CHAIN_", "").to_lowercase())
-    }
 }
 
 #[derive(Deserialize, clap::ValueEnum, Debug, Display, Clone, PartialEq)]
@@ -177,15 +173,21 @@ mod tests {
             blockchain: "ethereum".to_string(),
             ..Args::default()
         };
-        assert_eq!(args.as_dshackle_chain().unwrap(), 100);
+        assert_eq!(args.as_dshackle_blockchain().unwrap(), 100);
     }
 
     #[test]
-    fn test_chain_name() {
+    fn test_chain_naming() {
         let args = Args {
             blockchain: "testnet-sepolia".to_string(),
             ..Args::default()
         };
-        assert_eq!(args.get_chain_name().unwrap(), "sepolia");
+        assert_eq!(args.get_blockchain().unwrap().code(), "SEPOLIA");
+
+        let args = Args {
+            blockchain: "etc".to_string(),
+            ..Args::default()
+        };
+        assert_eq!(args.get_blockchain().unwrap().code(), "ETC");
     }
 }
