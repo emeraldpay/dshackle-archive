@@ -1,5 +1,6 @@
 use std::io::Write;
 use std::sync::{Arc, Mutex};
+use std::sync::atomic::AtomicUsize;
 use anyhow::anyhow;
 use apache_avro::types::Record;
 use apache_avro::{Codec, Writer};
@@ -98,7 +99,7 @@ impl<S: ObjectStore> TargetStorage for ObjectsStorage<S> {
 struct ObjectsFile<'a> {
     pipe: ObjectWriterPipe,
     writer: Mutex<Writer<'a, ObjectWriterPipe>>,
-    closed: oneshot::Receiver<()>,
+    closed: oneshot::Receiver<usize>,
 
     bucket: String,
     path: Path,
@@ -113,13 +114,24 @@ impl TargetFile for ObjectsFile<'_> {
 
     async fn append(&self, data: Record<'_>) -> anyhow::Result<()> {
         let mut writer = self.writer.lock().unwrap();
-        writer.append(data).map_err(|e| anyhow!("IO Error: {:?}", e))?;
+        let _size: usize = writer.append(data).map_err(|e| anyhow!("IO Error: {:?}", e))?;
         Ok(())
     }
 
     async fn close(self: Box<Self>) -> anyhow::Result<()> {
-        let _ = self.pipe.0.send(WriteOp::Close);
-        let _ = self.closed.await;
+        // Avro doesn't always write the data to the underlying writer immediately, and needs to be
+        // flushed independently before closing the file. Otherwise, the file is correct but missing the last appended record(s).
+        // Note that the flush should not be called on each append because in that case it misses some of the optimization/compaction/etc
+        // that Avro uses where there are multiple records.
+        {
+            let mut writer = self.writer.lock().unwrap();
+            let _ = writer.flush().map_err(|e| anyhow!("IO Error: {:?}", e))?;
+            let _ = self.pipe.0.send(WriteOp::Close);
+        }
+
+        let url = self.get_url();
+        let total_size = self.closed.await?;
+        tracing::trace!("Close object: {} ({} bytes written)", url, total_size);
         Ok(())
     }
 }
@@ -140,15 +152,22 @@ impl ObjectsFile<'_> {
         }
     }
 
-    fn pipe_start(mut buf: BufWriter, on_close: oneshot::Sender<()>) -> ObjectWriterPipe {
+    fn pipe_start(mut buf: BufWriter, on_close: oneshot::Sender<usize>) -> ObjectWriterPipe {
         let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
         tokio::spawn(async move {
+            let mut total_size = 0;
             while let Some(op) = rx.recv().await {
                 match op {
                     WriteOp::Data(data) => {
-                        if let Err(e) = buf.write_all(data.as_slice()).await {
-                            tracing::error!("Error writing to object: {:?}", e);
-                            return;
+                        match buf.write_all(data.as_slice()).await {
+                            Err(e) => {
+                                tracing::error!("Error writing to object: {:?}", e);
+                                let _ = on_close.send(total_size);
+                                return;
+                            }
+                            Ok(_) => {
+                                total_size += data.len();
+                            }
                         }
                     }
                     WriteOp::Flush => {
@@ -161,12 +180,12 @@ impl ObjectsFile<'_> {
                         if let Err(e) = buf.shutdown().await {
                             tracing::error!("Error flushing object: {:?}", e);
                         }
-                        let _ = on_close.send(());
+                        let _ = on_close.send(total_size);
                         return;
                     }
                     WriteOp::Abort => {
                         let _ = buf.abort().await;
-                        let _ = on_close.send(());
+                        let _ = on_close.send(total_size);
                         return;
                     }
                 }

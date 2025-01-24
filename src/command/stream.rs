@@ -64,6 +64,7 @@ impl<B: BlockchainTypes> StreamCommand<B> {
 
     async fn copy_block(&self, height: Height) -> Result<()> {
         tracing::info!("Archive block: {} {:?}", height.height, height.hash);
+        let start_time = Utc::now();
         let archiver = self.archiver.clone();
         let range = Range::Single(height.height);
         let block_file = self.target.create(DataKind::Blocks, &range)
@@ -114,7 +115,8 @@ impl<B: BlockchainTypes> StreamCommand<B> {
         };
         let _ = self.notifications.send(notification_tx).await;
 
-        tracing::info!("Block {} is archived", height.height);
+        let duration = Utc::now().signed_duration_since(start_time);
+        tracing::info!("Block {} is archived in {}ms", height.height, duration.num_milliseconds());
         Ok(())
     }
 
