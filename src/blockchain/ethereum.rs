@@ -9,9 +9,10 @@ use alloy::{
     primitives::{TxHash, BlockHash},
     rpc::types::{Transaction as TransactionJson, Block as BlockJson, Block, TransactionTrait}
 };
-use crate::blockchain::{BlockReference, BlockchainData, EthereumType};
+use crate::blockchain::{BlockReference, BlockchainData, EthereumType, JsonString};
 use anyhow::{Result, anyhow};
 
+#[derive(Clone)]
 pub struct EthereumData {
     blockchain: Arc<Blockchain>,
     blockchain_id: String,
@@ -76,6 +77,8 @@ impl BlockchainData<EthereumType> for EthereumData {
     fn blockchain_id(&self) -> String {
         self.blockchain_id.clone()
     }
+
+
 
     async fn fetch_block(&self, height: &BlockReference<BlockHash>) -> Result<(Record, Block<TxHash>, Vec<TxHash>)> {
         let raw_block = match height {
@@ -147,4 +150,21 @@ impl BlockchainData<EthereumType> for EthereumData {
 
         Ok(record)
     }
+
+    async fn height(&self) -> Result<(u64, BlockHash)> {
+        let height = self.blockchain.native_call("eth_blockNumber", b"[]".to_vec())
+            .await?;
+        let height = parse_number(JsonString::try_from(height)?.into())?;
+        let raw_block = self.get_block_at(height).await?;
+        let parsed_block = serde_json::from_slice::<BlockJson<TxHash>>(raw_block.as_slice())
+            .map_err(|_| BlockchainError::InvalidResponse)?;
+
+        Ok((parsed_block.header.number, parsed_block.header.hash))
+    }
+}
+
+
+fn parse_number(s: String) -> Result<u64> {
+    let s = s.trim_start_matches("0x");
+    u64::from_str_radix(s, 16).map_err(|e| anyhow!("Invalid number: {}", e))
 }

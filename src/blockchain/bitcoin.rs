@@ -11,6 +11,7 @@ use serde::{Deserialize, Deserializer};
 use crate::avros::{BLOCK_SCHEMA, TX_SCHEMA};
 use crate::blockchain::{BitcoinType, BlockReference, BlockchainData, JsonString};
 
+#[derive(Clone)]
 pub struct BitcoinData {
     blockchain: Arc<Blockchain>,
     blockchain_id: String,
@@ -56,6 +57,12 @@ impl BitcoinData {
             blockchain: Arc::new(blockchain),
             blockchain_id,
         }
+    }
+
+    async fn get_bet_block_hash(&self) -> Result<BlockHash> {
+        let data = self.blockchain.native_call("getbestblockhash", b"[]".to_vec()).await?;
+        let hash = JsonString::try_from(data)?;
+        BlockHash::from_str(&hash.0)
     }
 
     async fn get_block_hash(&self, height: u64) -> Result<BlockHash> {
@@ -153,5 +160,12 @@ impl BlockchainData<BitcoinType> for BitcoinData {
         record.put("raw", tx_raw?);
 
         Ok(record)
+    }
+
+    async fn height(&self) -> Result<(u64, BlockHash)> {
+        let best_block = self.get_bet_block_hash().await?;
+        let raw_block = self.get_block(&best_block).await?;
+        let parsed_block = serde_json::from_slice::<BitcoinBlock>(&raw_block)?;
+        Ok((parsed_block.height, best_block))
     }
 }

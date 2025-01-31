@@ -24,6 +24,8 @@ use emerald_api::{
     proto::common::ChainRef,
     common::blockchain_ref::BlockchainType
 };
+use crate::args::Command;
+use crate::command::fix::FixCommand;
 
 pub mod args;
 pub mod command;
@@ -79,13 +81,21 @@ async fn run<B: BlockchainTypes>(builder: Builder<B>, args: &Args) -> Result<()>
     let chain_ref = ChainRef::from_str(&args.blockchain)
         .map_err(|_| anyhow!("Unsupported blockchain: {}", args.blockchain))?;
 
-    builder.with_target(target)
+    let builder = builder.with_target(target)
         .with_notifier(notify::create_notifier(&args).await?)
-        .with_data(blockchain, chain_ref.code())
-        .stream(args)
-        .await
-        .execute()
-        .await
+        .with_data(blockchain, chain_ref.code());
+
+    match args.command {
+        Command::Stream => {
+            builder.stream(args).await
+                .execute().await
+        },
+        Command::Fix => {
+            builder.fix(args)
+                .execute().await
+        },
+    }
+
 }
 
 struct Builder<B: BlockchainTypes> {
@@ -135,6 +145,13 @@ impl<B> BuilderWithData<B> where B: BlockchainTypes {
         let shutdown = shutdown::Shutdown::new().unwrap();
         let notifier = self.parent.notifier.unwrap();
         let command = StreamCommand::new(&args, shutdown, self.parent.target.unwrap(), self.data, notifier).await.unwrap();
+        command
+    }
+
+    fn fix(self, args: &Args) -> FixCommand<B> {
+        let shutdown = shutdown::Shutdown::new().unwrap();
+        let notifier = self.parent.notifier.unwrap();
+        let command = FixCommand::new(&args, shutdown, self.parent.target.unwrap(), self.data, notifier).unwrap();
         command
     }
 }

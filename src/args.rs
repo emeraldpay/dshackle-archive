@@ -34,6 +34,14 @@ pub struct Args {
     /// Continue from the last file if set
     #[arg(long = "continue")]
     pub continue_last: bool,
+
+    /// Ensure that the latest T are archived (with `fix` command)
+    #[arg(long = "tail")]
+    pub tail: Option<u64>,
+
+    /// Blocks Range (`N...M`)
+    #[arg(long, short)]
+    pub range: Option<String>,
 }
 
 impl Default for Args {
@@ -47,6 +55,8 @@ impl Default for Args {
             aws: None,
             dir: None,
             continue_last: false,
+            tail: None,
+            range: None,
         }
     }
 }
@@ -69,6 +79,7 @@ impl Args {
 #[serde(rename_all = "lowercase")]
 pub enum Command {
     Stream,
+    Fix,
 }
 
 #[derive(Parser, Debug, Clone)]

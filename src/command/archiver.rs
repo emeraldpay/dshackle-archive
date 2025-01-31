@@ -1,0 +1,147 @@
+use std::collections::HashMap;
+use std::marker::PhantomData;
+use std::str::FromStr;
+use std::sync::Arc;
+use anyhow::anyhow;
+use chrono::Utc;
+use futures_util::future::join_all;
+use shutdown::Shutdown;
+use tokio::sync::mpsc::Sender;
+use crate::blockchain::{BlockReference, BlockchainData, BlockchainTypes};
+use crate::blockchain::connection::{Height};
+use crate::datakind::DataKind;
+use crate::notify::{Notification, RunMode};
+use crate::range::Range;
+use crate::storage::TargetStorage;
+
+#[derive(Clone)]
+pub struct Archiver<B: BlockchainTypes> {
+    b: PhantomData<B>,
+    target: Arc<Box<dyn TargetStorage>>,
+    pub data_provider: Arc<B::DataProvider>,
+    shutdown: Shutdown,
+    notifications: Sender<Notification>,
+}
+
+impl<B: BlockchainTypes> Archiver<B> {
+    pub fn new(shutdown: Shutdown,
+                     target: Arc<Box<dyn TargetStorage>>,
+                     data_provider: Arc<B::DataProvider>,
+                     notifications: Sender<Notification>,
+    ) -> Self {
+        Self {
+            b: PhantomData,
+            target,
+            data_provider,
+            shutdown,
+            notifications,
+        }
+    }
+
+    pub async fn copy_block(&self, height: Height) -> anyhow::Result<()> {
+        tracing::info!("Archive block: {} {:?}", height.height, height.hash);
+        let start_time = Utc::now();
+        let archiver = self.data_provider.clone();
+        let range = Range::Single(height.height);
+        let block_file = self.target.create(DataKind::Blocks, &range)
+            .await
+            .map_err(|e| anyhow!("Unable to create file: {}", e))?;
+        let block_file_url = block_file.get_url();
+        let block_ref = if let Some(hash) = &height.hash {
+            BlockReference::Hash(
+                B::BlockHash::from_str(hash).map_err(|_| anyhow!("Not a valid hash"))?
+            )
+        } else {
+            BlockReference::height(height.height)
+        };
+        let (record, block, txes) = archiver.fetch_block(&block_ref).await?;
+        let _ = match block_file.append(record).await {
+            Ok(_) => block_file.close().await?,
+            Err(e) => return Err(e)
+        };
+        let notification_block = Notification {
+            // common fields
+            version: Notification::version(),
+            ts: Utc::now(),
+            blockchain: self.data_provider.blockchain_id(),
+            run: RunMode::Stream,
+            height_start: height.height,
+            height_end: height.height,
+
+            // specific fields
+            file_type: DataKind::Blocks,
+            location: block_file_url,
+        };
+        let _ = self.notifications.send(notification_block.clone()).await;
+
+        let tx_file = self.target.create(DataKind::Transactions, &range)
+            .await
+            .map_err(|e| anyhow!("Unable to create file: {}", e))?;
+        let tx_file_url = tx_file.get_url();
+        for tx_index in 0..txes.len() {
+            let data = archiver.fetch_tx(&block, tx_index).await?;
+            let _ = tx_file.append(data).await?;
+        }
+        let _ = tx_file.close().await?;
+        let notification_tx = Notification {
+            file_type: DataKind::Transactions,
+            location: tx_file_url,
+
+            ..notification_block
+        };
+        let _ = self.notifications.send(notification_tx).await;
+
+        let duration = Utc::now().signed_duration_since(start_time);
+        tracing::info!("Block {} is archived in {}ms", height.height, duration.num_milliseconds());
+        Ok(())
+    }
+
+    pub async fn ensure_all(&self, blocks: Range) -> anyhow::Result<()> {
+        tracing::info!("Check if blocks are fully archived in range: {}", blocks);
+        let mut existing = self.target.list(blocks.clone())?;
+        let mut archived = HashMap::new();
+        let shutdown = self.shutdown.clone();
+        while let Some(file) = existing.recv().await {
+            let range = file.range;
+            let kind = file.kind;
+
+            for height in range.iter() {
+                let entry = archived.entry(height).or_insert(Vec::new());
+                entry.push(kind.clone());
+            }
+        }
+        let mut missing = Vec::new();
+        for height in blocks.iter() {
+            if let Some(entry) = archived.get(&height) {
+                if entry.contains(&DataKind::Blocks) && entry.contains(&DataKind::Transactions) {
+                    continue;
+                }
+            }
+            missing.push(height);
+        }
+        if missing.is_empty() {
+            tracing::info!("Previous blocks are archived");
+            return Ok(());
+        }
+        tracing::debug!("Missing blocks to download {} (sample: {:?},...)", missing.len(), missing.iter().take(5).collect::<Vec<_>>());
+
+        // Process 10 blocks at a time just to make the output more predictable, b/c otherwise it fills the gaps in a random order and it looks confusing
+        let mut heights = missing.chunks(10);
+        while let Some(heights_next) = heights.next() {
+            let mut jobs = Vec::new();
+            for height in heights_next {
+                jobs.push(self.copy_block(Height { height: *height, hash: None }));
+            }
+            tokio::select! {
+                _ = shutdown.signalled() => {
+                    tracing::info!("Shutdown signal received");
+                    return Ok(());
+                }
+                _ = join_all(jobs) => {}
+            }
+        }
+
+        tracing::info!("Previous blocks are archived");
+        Ok(())
+    }
+}
