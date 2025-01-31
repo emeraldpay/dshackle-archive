@@ -28,10 +28,11 @@ pub trait BlockchainTypes: Send + Sync + Sized {
 
     ///
     /// Data provider for the blockchain
-    type DataProvider: BlockchainData<Self> + Send + Sync + Sized;
+    type DataProvider: BlockchainData<Self> + Send + Sync + Sized + Clone;
 
     fn create_data_provider(blockchain: Blockchain, id: String) -> Self::DataProvider;
 }
+
 
 pub struct EthereumType {}
 impl BlockchainTypes for EthereumType {
@@ -75,6 +76,10 @@ pub trait BlockchainData<T: BlockchainTypes>: Send + Sync {
     ///
     /// Get the details for the transaction
     async fn fetch_tx(&self, block: &T::BlockParsed, index: usize) -> Result<Record>;
+
+    ///
+    /// Get the current height
+    async fn height(&self) -> Result<(u64, T::BlockHash)>;
 }
 
 ///
@@ -108,7 +113,13 @@ impl<T> BlockReference<T> where T: FromStr {
 
 }
 
-pub struct JsonString(String);
+pub struct JsonString(pub String);
+
+impl Into<String> for JsonString {
+    fn into(self) -> String {
+        self.0
+    }
+}
 
 impl TryFrom<Vec<u8>> for JsonString {
     type Error = Error;

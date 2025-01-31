@@ -1,6 +1,5 @@
 use std::io::Write;
 use std::sync::{Arc, Mutex};
-use std::sync::atomic::AtomicUsize;
 use anyhow::anyhow;
 use apache_avro::types::Record;
 use apache_avro::{Codec, Writer};
@@ -226,9 +225,11 @@ mod tests {
     use std::sync::Arc;
     use apache_avro::types::Value;
     use chrono::Utc;
-    use futures_util::StreamExt;
     use object_store::memory::InMemory;
+    use object_store::PutPayload;
+    use tonic::codegen::tokio_stream::wrappers::ReceiverStream;
     use crate::avros::BLOCK_SCHEMA;
+    use futures::stream::StreamExt;
 
     #[tokio::test]
     pub async fn can_write() {
@@ -264,5 +265,109 @@ mod tests {
         assert_eq!(files.len(), 1);
         assert_eq!(files[0].0, "test.avro");
         assert!(files[0].1 > 500);
+    }
+
+    async fn list(
+        range: Range,
+        all: Vec<&str>,
+    ) -> Vec<FileReference> {
+        let mem = InMemory::new();
+
+        for path in all {
+            mem.put(
+                &Path::from(path),
+                PutPayload::from_static(&[1]),
+            ).await.unwrap();
+        }
+
+        let storage = ObjectsStorage::new(mem, "test".to_string(), Filenames::with_dir("archive/eth".to_string()));
+
+        let files = storage.list(range);
+        if let Err(e) = files {
+            panic!("Error: {:?}", e);
+        }
+        let files = ReceiverStream::new(files.unwrap());
+        files.collect::<Vec<FileReference>>().await
+    }
+
+    #[tokio::test]
+    pub async fn test_list_whole() {
+        let files = list(
+            Range::new(021000000, 022000000),
+            vec![
+                "archive/eth/021000000/021596000/021596362.block.avro",
+                "archive/eth/021000000/021596000/021596362.txes.avro",
+                "archive/eth/021000000/021596000/021596363.block.avro",
+                "archive/eth/021000000/021596000/021596363.txes.avro",
+            ]
+        ).await;
+
+        assert_eq!(files.len(), 4);
+        assert_eq!(files[0].path, "archive/eth/021000000/021596000/021596362.block.avro");
+        assert_eq!(files[1].path, "archive/eth/021000000/021596000/021596362.txes.avro");
+        assert_eq!(files[1].kind, DataKind::Transactions);
+        assert_eq!(files[1].range, Range::Single(21596362));
+        assert_eq!(files[2].path, "archive/eth/021000000/021596000/021596363.block.avro");
+        assert_eq!(files[2].kind, DataKind::Blocks);
+        assert_eq!(files[3].range, Range::Single(21596363));
+    }
+
+    #[tokio::test]
+    pub async fn test_list_part() {
+        let files = list(
+            Range::new(021596363, 021596364),
+            vec![
+                "archive/eth/021000000/021596000/021596362.block.avro",
+                "archive/eth/021000000/021596000/021596362.txes.avro",
+                "archive/eth/021000000/021596000/021596363.block.avro",
+                "archive/eth/021000000/021596000/021596363.txes.avro",
+                "archive/eth/021000000/021596000/021596364.block.avro",
+                "archive/eth/021000000/021596000/021596364.txes.avro",
+                "archive/eth/021000000/021596000/021596365.block.avro",
+                "archive/eth/021000000/021596000/021596365.txes.avro",
+            ]
+        ).await;
+
+        assert_eq!(files.len(), 4);
+        assert_eq!(files[0].path, "archive/eth/021000000/021596000/021596363.block.avro");
+        assert_eq!(files[1].path, "archive/eth/021000000/021596000/021596363.txes.avro");
+        assert_eq!(files[2].path, "archive/eth/021000000/021596000/021596364.block.avro");
+        assert_eq!(files[3].path, "archive/eth/021000000/021596000/021596364.txes.avro");
+    }
+
+    #[tokio::test]
+    pub async fn test_list_no_files() {
+        let files = list(
+            Range::new(021596370, 021596375),
+            vec![
+                "archive/eth/021000000/021596000/021596362.block.avro",
+                "archive/eth/021000000/021596000/021596362.txes.avro",
+                "archive/eth/021000000/021596000/021596363.block.avro",
+                "archive/eth/021000000/021596000/021596363.txes.avro",
+            ]
+        ).await;
+
+        assert_eq!(files.len(), 0);
+    }
+
+    #[tokio::test]
+    pub async fn test_list_multi_levels() {
+        let files = list(
+            Range::new(21_500_000, 21_600_000),
+            vec![
+                "archive/eth/021000000/021596000/021596362.block.avro",
+                "archive/eth/021000000/021596000/021596362.txes.avro",
+                "archive/eth/021000000/021596000/021596363.block.avro",
+                "archive/eth/021000000/021596000/021596363.txes.avro",
+                "archive/eth/021000000/021597000/021597111.block.avro",
+                "archive/eth/021000000/021597000/021597111.txes.avro",
+                "archive/eth/021000000/021598000/021598444.txes.avro",
+            ]
+        ).await;
+
+        assert_eq!(files.len(), 7);
+        assert_eq!(files[0].path, "archive/eth/021000000/021596000/021596362.block.avro");
+        assert_eq!(files[1].path, "archive/eth/021000000/021596000/021596362.txes.avro");
+        assert_eq!(files[6].path, "archive/eth/021000000/021598000/021598444.txes.avro");
     }
 }

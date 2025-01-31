@@ -18,6 +18,9 @@ mod objects;
 
 pub fn from_args(value: &Args) -> Result<Box<dyn TargetStorage>> {
 
+    // inside the archive we create a subdirectory for each blockchain
+    let blockchain_dir = value.get_blockchain()?.code().to_lowercase();
+
     let target_storage: Box<dyn TargetStorage> = if let Some(aws) = &value.aws {
         tracing::info!("Using S3 storage");
 
@@ -30,8 +33,6 @@ pub fn from_args(value: &Args) -> Result<Box<dyn TargetStorage>> {
             "".to_string()
         };
 
-        // inside the archive we create a subdirectory for each blockchain
-        let blockchain_dir = value.get_blockchain()?.code().to_lowercase();
         let parent_dir = if parent_dir.ends_with('/') {
             blockchain_dir
         } else {
@@ -83,7 +84,7 @@ pub fn from_args(value: &Args) -> Result<Box<dyn TargetStorage>> {
             return Err(anyhow!("No target dir set for a Filesystem based storage"));
         }
         let dir = value.dir.as_ref().unwrap().clone();
-        Box::new(FsStorage::new(PathBuf::from(dir), Filenames::default()))
+        Box::new(FsStorage::new(PathBuf::from(dir), Filenames::with_dir(blockchain_dir)))
     };
 
     Ok(target_storage)

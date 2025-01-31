@@ -1,3 +1,7 @@
+use std::fmt::{Display, Formatter};
+use std::str::FromStr;
+use anyhow::anyhow;
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum Range {
     Single(u64),
@@ -76,6 +80,29 @@ impl Range {
                     }
                 }
             }
+        }
+    }
+}
+
+impl FromStr for Range {
+    type Err = anyhow::Error;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        let parts: Vec<&str> = s.split("..").collect();
+        if parts.len() != 2 {
+            return Err(anyhow!("Invalid range: {}", s));
+        }
+        let start = parts[0].parse::<u64>()?;
+        let end = parts[1].parse::<u64>()?;
+        Ok(Range::new(start, end))
+    }
+}
+
+impl Display for Range {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Range::Single(height) => write!(f, "{}", height),
+            Range::Multiple(start, end) => write!(f, "{}..{}", start, end),
         }
     }
 }
