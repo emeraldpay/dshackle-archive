@@ -1,6 +1,8 @@
 pub mod ethereum;
 pub mod connection;
 pub mod bitcoin;
+#[cfg(test)]
+pub mod mock;
 
 use std::str::FromStr;
 use apache_avro::types::Record;

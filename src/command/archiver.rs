@@ -1,4 +1,3 @@
-use std::collections::HashMap;
 use std::marker::PhantomData;
 use std::str::FromStr;
 use std::sync::Arc;
@@ -9,21 +8,33 @@ use shutdown::Shutdown;
 use tokio::sync::mpsc::Sender;
 use crate::blockchain::{BlockReference, BlockchainData, BlockchainTypes};
 use crate::blockchain::connection::{Height};
+use crate::command::{ArchivesList, Blocks};
 use crate::datakind::DataKind;
-use crate::notify::{Notification, RunMode};
+use crate::notify::{Notification, Notifier, RunMode};
+use crate::notify::empty::EmptyNotifier;
 use crate::range::Range;
 use crate::storage::TargetStorage;
 
 #[derive(Clone)]
 pub struct Archiver<B: BlockchainTypes> {
     b: PhantomData<B>,
-    target: Arc<Box<dyn TargetStorage>>,
+    pub target: Arc<Box<dyn TargetStorage>>,
     pub data_provider: Arc<B::DataProvider>,
     shutdown: Shutdown,
     notifications: Sender<Notification>,
 }
 
 impl<B: BlockchainTypes> Archiver<B> {
+
+    pub fn new_simple(target: Arc<Box<dyn TargetStorage>>, data_provider: Arc<B::DataProvider>) -> Self {
+        Self::new(
+            Shutdown::new().unwrap(),
+            target,
+            data_provider,
+            EmptyNotifier::default().start(),
+        )
+    }
+
     pub fn new(shutdown: Shutdown,
                      target: Arc<Box<dyn TargetStorage>>,
                      data_provider: Arc<B::DataProvider>,
@@ -99,25 +110,20 @@ impl<B: BlockchainTypes> Archiver<B> {
     pub async fn ensure_all(&self, blocks: Range) -> anyhow::Result<()> {
         tracing::info!("Check if blocks are fully archived in range: {}", blocks);
         let mut existing = self.target.list(blocks.clone())?;
-        let mut archived = HashMap::new();
+        let mut archived = ArchivesList::new();
         let shutdown = self.shutdown.clone();
         while let Some(file) = existing.recv().await {
-            let range = file.range;
-            let kind = file.kind;
-
-            for height in range.iter() {
-                let entry = archived.entry(height).or_insert(Vec::new());
-                entry.push(kind.clone());
-            }
+            archived.append(file)?;
         }
+        let completed_heights: Vec<u64> = archived.iter()
+            .filter(|a| a.is_complete())
+            .flat_map(|a| a.range.iter())
+            .collect();
         let mut missing = Vec::new();
         for height in blocks.iter() {
-            if let Some(entry) = archived.get(&height) {
-                if entry.contains(&DataKind::Blocks) && entry.contains(&DataKind::Transactions) {
-                    continue;
-                }
+            if !completed_heights.contains(&height) {
+                missing.push(height);
             }
-            missing.push(height);
         }
         if missing.is_empty() {
             tracing::info!("Previous blocks are archived");
@@ -143,5 +149,21 @@ impl<B: BlockchainTypes> Archiver<B> {
 
         tracing::info!("Previous blocks are archived");
         Ok(())
+    }
+
+    pub async fn get_range(&self, blocks: &Blocks) -> anyhow::Result<Range> {
+        let range = match blocks {
+            Blocks::Tail(n) => {
+                let height = self.data_provider.height().await?;
+                let start = if height.0 > *n {
+                    height.0 - n
+                } else {
+                    0
+                };
+                Range::new(start, height.0)
+            }
+            Blocks::Range(range) => range.clone()
+        };
+        Ok(range)
     }
 }

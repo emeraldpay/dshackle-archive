@@ -8,13 +8,11 @@ use crate::{
     blockchain::{
         connection::{Blockchain}
     },
-    storage::TargetStorage
 };
 use anyhow::{Result};
 use shutdown::Shutdown;
 use crate::blockchain::BlockchainTypes;
 use crate::command::archiver::Archiver;
-use crate::notify::{Notifier};
 
 ///
 /// Provides `stream` command.
@@ -32,23 +30,16 @@ pub struct StreamCommand<B: BlockchainTypes> {
 impl<B: BlockchainTypes> StreamCommand<B> {
     pub async fn new(config: &Args,
                      shutdown: Shutdown,
-                     target: Box<dyn TargetStorage>,
-                     data_provider: B::DataProvider,
-                     notifier: Box<dyn Notifier>,
+                     archiver: Archiver<B>
     ) -> Result<Self> {
         let blockchain = Arc::new(Blockchain::new(&config.connection, config.as_dshackle_blockchain()?).await?);
-        let target = Arc::new(target);
-        let data_provider = Arc::new(data_provider);
 
         let continue_blocks = if config.continue_last {
             Some(100)
         } else {
             None
         };
-        let notifications = notifier.start();
-        let archiver = Archiver::new(
-            shutdown.clone(), target, data_provider, notifications.clone()
-        );
+
         Ok(Self {
             b: PhantomData,
             blockchain,

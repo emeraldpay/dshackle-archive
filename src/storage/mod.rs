@@ -1,4 +1,5 @@
 use std::path::PathBuf;
+use std::sync::Arc;
 use apache_avro::types::Record;
 use async_trait::async_trait;
 use crate::args::Args;
@@ -13,8 +14,8 @@ use tokio::sync::mpsc::Receiver;
 use url::Url;
 use crate::storage::objects::ObjectsStorage;
 
-mod fs;
-mod objects;
+pub mod fs;
+pub mod objects;
 
 pub fn from_args(value: &Args) -> Result<Box<dyn TargetStorage>> {
 
@@ -77,7 +78,7 @@ pub fn from_args(value: &Args) -> Result<Box<dyn TargetStorage>> {
             .map_err(|e| anyhow!("Invalid S3 connection options: {}", e))?;
 
 
-        Box::new(ObjectsStorage::new(os, bucket, filenames))
+        Box::new(ObjectsStorage::new(Arc::new(os), bucket, filenames))
     } else {
         tracing::info!("Using Filesystem storage");
         if value.dir.is_none() {
@@ -93,6 +94,7 @@ pub fn from_args(value: &Args) -> Result<Box<dyn TargetStorage>> {
 #[async_trait]
 pub trait TargetStorage: Send + Sync {
     async fn create(&self, kind: DataKind, range: &Range) -> Result<Box<dyn TargetFile + Send + Sync>>;
+    async fn delete(&self, path: &FileReference) -> Result<()>;
 
     fn list(&self, range: Range) -> Result<Receiver<FileReference>>;
 }
@@ -108,6 +110,7 @@ pub trait TargetFile {
     async fn close(mut self: Box<Self>) -> Result<()>;
 }
 
+#[derive(Debug, Clone, PartialEq)]
 pub struct FileReference {
     pub path: String,
     pub kind: DataKind,

@@ -80,6 +80,7 @@ impl Args {
 pub enum Command {
     Stream,
     Fix,
+    Verify,
 }
 
 #[derive(Parser, Debug, Clone)]
