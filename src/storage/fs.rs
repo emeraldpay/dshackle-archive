@@ -31,6 +31,18 @@ impl TargetStorage for FsStorage {
         Ok(Box::new(FsFile::new(filename.clone(), kind).context(format!("Path: {:?}", &filename))?))
     }
 
+    async fn delete(&self, path: &FileReference) -> Result<()> {
+        let path = PathBuf::from(&path.path);
+        if !fs::exists(&path).map_err(|e| anyhow!("FS is not accessible: {}", e))? {
+            return Ok(())
+        }
+        let removed = fs::remove_file(&path);
+        if let Err(err) = removed {
+            return Err(anyhow!("Failed to remove file: {:?}", err));
+        }
+        Ok(())
+    }
+
     fn list(&self, range: Range) -> Result<Receiver<FileReference>> {
         let (tx, rx) = tokio::sync::mpsc::channel(2);
         let filenames = self.filenames.clone();

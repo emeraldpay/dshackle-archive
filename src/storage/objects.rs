@@ -27,8 +27,8 @@ pub struct ObjectsStorage<S: ObjectStore> {
 }
 
 impl<S: ObjectStore>  ObjectsStorage<S>{
-    pub fn new(os: S, bucket: String, filenames: Filenames) -> Self {
-        Self { os: Arc::new(os), bucket, filenames }
+    pub fn new(os: Arc<S>, bucket: String, filenames: Filenames) -> Self {
+        Self { os, bucket, filenames }
     }
 }
 
@@ -38,6 +38,16 @@ impl<S: ObjectStore> TargetStorage for ObjectsStorage<S> {
         let filename = Path::from(self.filenames.path(&kind, range));
         Ok(Box::new(ObjectsFile::new(self.os.clone(), kind, self.bucket.clone(), filename)))
     }
+
+    async fn delete(&self, path: &FileReference) -> anyhow::Result<()> {
+        let path = Path::from(path.path.clone());
+        let removed = self.os.delete(&path).await;
+        if let Err(err) = removed {
+            return Err(anyhow!("Failed to remove file: {:?}", err));
+        }
+        Ok(())
+    }
+
 
     fn list(&self, range: Range) -> anyhow::Result<Receiver<FileReference>> {
         let (tx, rx) = tokio::sync::mpsc::channel(2);
@@ -271,7 +281,7 @@ mod tests {
         range: Range,
         all: Vec<&str>,
     ) -> Vec<FileReference> {
-        let mem = InMemory::new();
+        let mem = Arc::new(InMemory::new());
 
         for path in all {
             mem.put(

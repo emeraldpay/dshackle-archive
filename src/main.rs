@@ -4,6 +4,7 @@ extern crate serde;
 
 use std::marker::PhantomData;
 use std::str::FromStr;
+use std::sync::Arc;
 use clap::Parser;
 use tracing_subscriber::filter::Targets;
 use tracing_subscriber::Layer;
@@ -25,7 +26,9 @@ use emerald_api::{
     common::blockchain_ref::BlockchainType
 };
 use crate::args::Command;
+use crate::command::archiver::Archiver;
 use crate::command::fix::FixCommand;
+use crate::command::verify::VerifyCommand;
 
 pub mod args;
 pub mod command;
@@ -37,6 +40,7 @@ pub mod datakind;
 pub mod filenames;
 pub mod avros;
 pub mod notify;
+pub mod testing;
 
 fn init_tracing() {
     let filter = Targets::new()
@@ -94,6 +98,10 @@ async fn run<B: BlockchainTypes>(builder: Builder<B>, args: &Args) -> Result<()>
             builder.fix(args)
                 .execute().await
         },
+        Command::Verify => {
+            builder.verify(args)
+                .execute().await
+        }
     }
 
 }
@@ -141,17 +149,37 @@ impl<B> Builder<B> where B: BlockchainTypes {
 }
 
 impl<B> BuilderWithData<B> where B: BlockchainTypes {
+
     async fn stream(self, args: &Args) -> StreamCommand<B> {
         let shutdown = shutdown::Shutdown::new().unwrap();
         let notifier = self.parent.notifier.unwrap();
-        let command = StreamCommand::new(&args, shutdown, self.parent.target.unwrap(), self.data, notifier).await.unwrap();
+        let notifications = notifier.start();
+        let archiver = Archiver::new(
+            shutdown.clone(), Arc::new(self.parent.target.unwrap()), Arc::new(self.data), notifications
+        );
+        let command = StreamCommand::new(&args, shutdown, archiver).await.unwrap();
         command
     }
 
     fn fix(self, args: &Args) -> FixCommand<B> {
         let shutdown = shutdown::Shutdown::new().unwrap();
         let notifier = self.parent.notifier.unwrap();
-        let command = FixCommand::new(&args, shutdown, self.parent.target.unwrap(), self.data, notifier).unwrap();
+        let notifications = notifier.start();
+        let archiver = Archiver::new(
+            shutdown.clone(), Arc::new(self.parent.target.unwrap()), Arc::new(self.data), notifications
+        );
+        let command = FixCommand::new(&args, archiver).unwrap();
+        command
+    }
+
+    fn verify(self, args: &Args) -> VerifyCommand<B> {
+        let shutdown = shutdown::Shutdown::new().unwrap();
+        let notifier = self.parent.notifier.unwrap();
+        let notifications = notifier.start();
+        let archiver = Archiver::new(
+            shutdown.clone(), Arc::new(self.parent.target.unwrap()), Arc::new(self.data), notifications
+        );
+        let command = VerifyCommand::new(&args, shutdown, archiver).unwrap();
         command
     }
 }
