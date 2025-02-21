@@ -14,19 +14,21 @@ use crate::notify::{Notification, Notifier, RunMode};
 use crate::notify::empty::EmptyNotifier;
 use crate::range::Range;
 use crate::storage::TargetStorage;
+use crate::storage::TargetFile;
+use crate::storage::TargetFileWriter;
 
 #[derive(Clone)]
-pub struct Archiver<B: BlockchainTypes> {
+pub struct Archiver<B: BlockchainTypes, TS: TargetStorage> {
     b: PhantomData<B>,
-    pub target: Arc<Box<dyn TargetStorage>>,
+    pub target: Arc<TS>,
     pub data_provider: Arc<B::DataProvider>,
     shutdown: Shutdown,
     notifications: Sender<Notification>,
 }
 
-impl<B: BlockchainTypes> Archiver<B> {
+impl<B: BlockchainTypes, TS: TargetStorage> Archiver<B, TS> {
 
-    pub fn new_simple(target: Arc<Box<dyn TargetStorage>>, data_provider: Arc<B::DataProvider>) -> Self {
+    pub fn new_simple(target: Arc<TS>, data_provider: Arc<B::DataProvider>) -> Self {
         Self::new(
             Shutdown::new().unwrap(),
             target,
@@ -36,7 +38,7 @@ impl<B: BlockchainTypes> Archiver<B> {
     }
 
     pub fn new(shutdown: Shutdown,
-                     target: Arc<Box<dyn TargetStorage>>,
+                     target: Arc<TS>,
                      data_provider: Arc<B::DataProvider>,
                      notifications: Sender<Notification>,
     ) -> Self {

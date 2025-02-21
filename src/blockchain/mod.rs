@@ -4,10 +4,12 @@ pub mod bitcoin;
 #[cfg(test)]
 pub mod mock;
 
+use std::hash::Hash;
 use std::str::FromStr;
 use apache_avro::types::Record;
 use async_trait::async_trait;
 use anyhow::{anyhow, Error, Result};
+use serde::Deserialize;
 use crate::blockchain::bitcoin::BitcoinData;
 use crate::blockchain::connection::Blockchain;
 use crate::blockchain::ethereum::EthereumData;
@@ -18,15 +20,15 @@ pub trait BlockchainTypes: Send + Sync + Sized {
 
     ///
     /// Type of the Block Hash / Block Identifier
-    type BlockHash: FromStr + Send + Sync;
+    type BlockHash: FromStr + PartialEq + Hash + Eq + Send + Sync;
 
     ///
     /// Type of the Transaction Hash / Transaction Identifier
-    type TxId: Send + Sync;
+    type TxId: FromStr + PartialEq + Hash + Eq + Send + Sync;
 
     ///
     /// Block details converted from the JSON response
-    type BlockParsed: Send + Sync;
+    type BlockParsed: BlockDetails<Self::TxId> + for<'a> Deserialize<'a> + Send + Sync;
 
     ///
     /// Data provider for the blockchain
@@ -113,6 +115,10 @@ impl<T> BlockReference<T> where T: FromStr {
         BlockReference::Height(h)
     }
 
+}
+
+pub trait BlockDetails<T> {
+    fn txes(&self) -> Vec<T>;
 }
 
 pub struct JsonString(pub String);

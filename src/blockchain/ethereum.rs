@@ -9,7 +9,7 @@ use alloy::{
     primitives::{TxHash, BlockHash},
     rpc::types::{Transaction as TransactionJson, Block as BlockJson, Block, TransactionTrait}
 };
-use crate::blockchain::{BlockReference, BlockchainData, EthereumType, JsonString};
+use crate::blockchain::{BlockDetails, BlockReference, BlockchainData, EthereumType, JsonString};
 use anyhow::{Result, anyhow};
 
 #[derive(Clone)]
@@ -167,4 +167,12 @@ impl BlockchainData<EthereumType> for EthereumData {
 fn parse_number(s: String) -> Result<u64> {
     let s = s.trim_start_matches("0x");
     u64::from_str_radix(s, 16).map_err(|e| anyhow!("Invalid number: {}", e))
+}
+
+impl BlockDetails<TxHash> for Block<TxHash> {
+    fn txes(&self) -> Vec<TxHash> {
+        self.transactions.as_transactions()
+            .map(|txes| txes.to_vec())
+            .unwrap_or_default()
+    }
 }
