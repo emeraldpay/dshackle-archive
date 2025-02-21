@@ -156,13 +156,16 @@ impl<B: BlockchainTypes, TS: TargetStorage> Archiver<B, TS> {
     pub async fn get_range(&self, blocks: &Blocks) -> anyhow::Result<Range> {
         let range = match blocks {
             Blocks::Tail(n) => {
-                let height = self.data_provider.height().await?;
-                let start = if height.0 > *n {
-                    height.0 - n
+                // for the tail it's possibly that some data is still being written
+                // and so for the tail range we don't touch the last 4 blocks
+                // TODO blocks length should be configurable
+                let height = self.data_provider.height().await?.0 - 4;
+                let start = if height > *n {
+                    height - n
                 } else {
                     0
                 };
-                Range::new(start, height.0)
+                Range::new(start, height)
             }
             Blocks::Range(range) => range.clone()
         };
