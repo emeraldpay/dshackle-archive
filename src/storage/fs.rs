@@ -8,7 +8,7 @@ use async_trait::async_trait;
 use crate::datakind::DataKind;
 use crate::filenames::Filenames;
 use crate::range::Range;
-use crate::storage::{FileReference, TargetFile, TargetStorage};
+use crate::storage::{avro_reader, copy, FileReference, TargetFile, TargetFileReader, TargetFileWriter, TargetStorage};
 use anyhow::{anyhow, Context, Result};
 use tokio::sync::mpsc::Receiver;
 
@@ -26,9 +26,12 @@ impl FsStorage {
 #[async_trait]
 impl TargetStorage for FsStorage {
 
-    async fn create(&self, kind: DataKind, range: &Range) -> Result<Box<dyn TargetFile + Sync + Send>> {
+    type Writer = FsFileWriter<'static>;
+    type Reader = FsFileReader;
+
+    async fn create(&self, kind: DataKind, range: &Range) -> Result<FsFileWriter<'static>> {
         let filename = self.parent_dir.join(self.filenames.path(&kind, range));
-        Ok(Box::new(FsFile::new(filename.clone(), kind).context(format!("Path: {:?}", &filename))?))
+        Ok(FsFileWriter::new(filename.clone(), kind).context(format!("Path: {:?}", &filename))?)
     }
 
     async fn delete(&self, path: &FileReference) -> Result<()> {
@@ -41,6 +44,15 @@ impl TargetStorage for FsStorage {
             return Err(anyhow!("Failed to remove file: {:?}", err));
         }
         Ok(())
+    }
+
+    async fn open(&self, path: &FileReference) -> Result<FsFileReader> {
+        let file = FsFileReader {
+            path: PathBuf::from(&path.path),
+            kind: path.kind.clone(),
+            file: File::open(&path.path).context(format!("Path: {:?}", &path.path))?,
+        };
+        Ok(file)
     }
 
     fn list(&self, range: Range) -> Result<Receiver<FileReference>> {
@@ -116,12 +128,12 @@ impl TargetStorage for FsStorage {
     }
 }
 
-pub struct FsFile<'a> {
+pub struct FsFileWriter<'a> {
     path: PathBuf,
     pub writer: Option<Mutex<Writer<'a, File>>>,
 }
 
-impl FsFile<'_> {
+impl FsFileWriter<'_> {
     pub fn new(path: PathBuf, kind: DataKind) -> Result<Self> {
         tracing::debug!("Create file: {:?}", path);
         let _ = fs::create_dir_all(path.parent().unwrap())?;
@@ -132,12 +144,26 @@ impl FsFile<'_> {
     }
 }
 
-#[async_trait]
-impl TargetFile for FsFile<'_> {
+pub struct FsFileReader {
+    path: PathBuf,
+    kind: DataKind,
+    file: File,
+}
 
+impl TargetFile for FsFileWriter<'_> {
     fn get_url(&self) -> String {
         format!("file://{}", self.path.canonicalize().unwrap_or(self.path.clone()).to_str().unwrap_or("invalid"))
     }
+}
+
+impl TargetFile for FsFileReader {
+    fn get_url(&self) -> String {
+        format!("file://{}", self.path.canonicalize().unwrap_or(self.path.clone()).to_str().unwrap_or("invalid"))
+    }
+}
+
+#[async_trait]
+impl TargetFileWriter for FsFileWriter<'_> {
 
     async fn append(&self, data: Record<'_>) -> Result<()> {
         match &self.writer {
@@ -150,7 +176,7 @@ impl TargetFile for FsFile<'_> {
         }
     }
 
-    async fn close(mut self: Box<Self>) -> Result<()> {
+    async fn close(mut self: Self) -> Result<()> {
         if let Some(writer) = self.writer.take() {
             let mut writer = writer.lock().unwrap();
             let _ = writer.flush().map_err(|e| anyhow!("IO Error: {}. File: {:?}", e, self.path))?;
@@ -160,7 +186,15 @@ impl TargetFile for FsFile<'_> {
     }
 }
 
-impl Drop for FsFile<'_> {
+impl TargetFileReader for FsFileReader {
+    fn read(self) -> Result<Receiver<Record<'static>>> {
+        let rx_sync = avro_reader::consume_sync(self.kind.schema(), self.file);
+        let rx = copy::copy_from_sync(rx_sync);
+        Ok(rx)
+    }
+}
+
+impl Drop for FsFileWriter<'_> {
     fn drop(&mut self) {
         if self.writer.is_none() {
             return;

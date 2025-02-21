@@ -1,24 +1,25 @@
-use std::io::Write;
+use std::io::{Write};
 use std::sync::{Arc, Mutex};
 use anyhow::anyhow;
 use apache_avro::types::Record;
 use apache_avro::{Codec, Writer};
 use async_trait::async_trait;
-use futures_util::StreamExt;
+use futures_util::{StreamExt};
 use object_store::buffered::BufWriter;
-use object_store::ObjectStore;
+use object_store::{GetResult, ObjectStore};
 use object_store::path::Path;
 use tokio::{
     sync::{
         mpsc::Receiver,
         oneshot
     },
-    io::AsyncWriteExt,
+    io::AsyncWriteExt
 };
+use tokio_util::io::{StreamReader, SyncIoBridge};
 use crate::datakind::DataKind;
 use crate::filenames::Filenames;
 use crate::range::Range;
-use crate::storage::{FileReference, TargetFile, TargetStorage};
+use crate::storage::{avro_reader, copy, FileReference, TargetFile, TargetFileReader, TargetFileWriter, TargetStorage};
 
 pub struct ObjectsStorage<S: ObjectStore> {
     os: Arc<S>,
@@ -34,9 +35,13 @@ impl<S: ObjectStore>  ObjectsStorage<S>{
 
 #[async_trait]
 impl<S: ObjectStore> TargetStorage for ObjectsStorage<S> {
-    async fn create(&self, kind: DataKind, range: &Range) -> anyhow::Result<Box<dyn TargetFile + Send + Sync>> {
+
+    type Writer = NewObjectsFile<'static>;
+    type Reader = ExisingObjectsFile;
+
+    async fn create(&self, kind: DataKind, range: &Range) -> anyhow::Result<NewObjectsFile<'static>> {
         let filename = Path::from(self.filenames.path(&kind, range));
-        Ok(Box::new(ObjectsFile::new(self.os.clone(), kind, self.bucket.clone(), filename)))
+        Ok(NewObjectsFile::new(self.os.clone(), kind, self.bucket.clone(), filename))
     }
 
     async fn delete(&self, path: &FileReference) -> anyhow::Result<()> {
@@ -48,6 +53,18 @@ impl<S: ObjectStore> TargetStorage for ObjectsStorage<S> {
         Ok(())
     }
 
+    async fn open(&self, path: &FileReference) -> anyhow::Result<ExisingObjectsFile> {
+        let object_path = Path::from(path.path.clone());
+        let get_result = self.os.get(&object_path).await?;
+        let file = ExisingObjectsFile {
+            bucket: self.bucket.clone(),
+            path: object_path.clone(),
+            kind: path.kind.clone(),
+            // stream: get_result,
+            stream: Mutex::new(get_result),
+        };
+        Ok(file)
+    }
 
     fn list(&self, range: Range) -> anyhow::Result<Receiver<FileReference>> {
         let (tx, rx) = tokio::sync::mpsc::channel(2);
@@ -105,7 +122,7 @@ impl<S: ObjectStore> TargetStorage for ObjectsStorage<S> {
     }
 }
 
-struct ObjectsFile<'a> {
+pub struct NewObjectsFile<'a> {
     pipe: ObjectWriterPipe,
     writer: Mutex<Writer<'a, ObjectWriterPipe>>,
     closed: oneshot::Receiver<usize>,
@@ -114,12 +131,14 @@ struct ObjectsFile<'a> {
     path: Path,
 }
 
-#[async_trait]
-impl TargetFile for ObjectsFile<'_> {
-
+impl TargetFile for NewObjectsFile<'_> {
     fn get_url(&self) -> String {
         format!("s3://{}/{}", self.bucket, self.path.to_string())
     }
+}
+
+#[async_trait]
+impl TargetFileWriter for NewObjectsFile<'_> {
 
     async fn append(&self, data: Record<'_>) -> anyhow::Result<()> {
         let mut writer = self.writer.lock().unwrap();
@@ -127,7 +146,7 @@ impl TargetFile for ObjectsFile<'_> {
         Ok(())
     }
 
-    async fn close(self: Box<Self>) -> anyhow::Result<()> {
+    async fn close(self: Self) -> anyhow::Result<()> {
         // Avro doesn't always write the data to the underlying writer immediately, and needs to be
         // flushed independently before closing the file. Otherwise, the file is correct but missing the last appended record(s).
         // Note that the flush should not be called on each append because in that case it misses some of the optimization/compaction/etc
@@ -145,7 +164,39 @@ impl TargetFile for ObjectsFile<'_> {
     }
 }
 
-impl ObjectsFile<'_> {
+#[derive(Debug)]
+pub struct ExisingObjectsFile {
+    bucket: String,
+    path: Path,
+    kind: DataKind,
+    // reader: BoxStream<'static, std::io::Result<Bytes>>,
+    // stream: Arc<BoxStream<'static, object_store::Result<Bytes>>>,
+    stream: Mutex<GetResult>
+}
+
+impl TargetFile for ExisingObjectsFile {
+    fn get_url(&self) -> String {
+        format!("s3://{}/{}", self.bucket, self.path.to_string())
+    }
+}
+
+impl TargetFileReader for ExisingObjectsFile {
+    fn read(self) -> anyhow::Result<Receiver<Record<'static>>> {
+        let path = self.path.clone();
+        let kind = self.kind.clone();
+        tracing::trace!(path = path.to_string(), "Start reading avro file");
+
+        let stream = self.stream.into_inner().unwrap().into_stream();
+        let std_reader = SyncIoBridge::new(StreamReader::new(stream));
+
+        let rx_sync = avro_reader::consume_sync(kind.schema(), std_reader);
+        let rx = copy::copy_from_sync(rx_sync);
+
+        Ok(rx)
+    }
+}
+
+impl NewObjectsFile<'_> {
     fn new(storage: Arc<dyn ObjectStore>, kind: DataKind, bucket: String, path: Path) -> Self {
         tracing::debug!("Create object: s3://{}/{}", bucket, path.to_string());
         let buf = BufWriter::new(storage, path.clone());
@@ -240,11 +291,12 @@ mod tests {
     use tonic::codegen::tokio_stream::wrappers::ReceiverStream;
     use crate::avros::BLOCK_SCHEMA;
     use futures::stream::StreamExt;
+    use crate::testing;
 
     #[tokio::test]
     pub async fn can_write() {
         let mem = Arc::new(InMemory::new());
-        let file = Box::new(ObjectsFile::new(mem.clone(), DataKind::Blocks, "test".to_string(), Path::from("test.avro")));
+        let file = Box::new(NewObjectsFile::new(mem.clone(), DataKind::Blocks, "test".to_string(), Path::from("test.avro")));
 
         let mut record = Record::new(&BLOCK_SCHEMA).unwrap();
         record.put("blockchainType", "ETHEREUM");
@@ -379,5 +431,45 @@ mod tests {
         assert_eq!(files[0].path, "archive/eth/021000000/021596000/021596362.block.avro");
         assert_eq!(files[1].path, "archive/eth/021000000/021596000/021596362.txes.avro");
         assert_eq!(files[6].path, "archive/eth/021000000/021598000/021598444.txes.avro");
+    }
+
+    #[tokio::test]
+    pub async fn write_and_read() {
+        testing::start_test();
+        let mem = Arc::new(InMemory::new());
+        let path = Path::from("test.avro");
+        let bucket = "test".to_string();
+
+
+        let file = NewObjectsFile::new(mem.clone(), DataKind::Blocks, bucket.clone(), path.clone());
+        for i in 0..10_000 {
+            let mut record = Record::new(&BLOCK_SCHEMA).unwrap();
+            record.put("blockchainType", "ETHEREUM");
+            record.put("blockchainId", "ETH");
+            record.put("archiveTimestamp", Utc::now().timestamp_millis());
+            record.put("height", i);
+            record.put("blockId", "0xdfe2e70d6c116a541101cecbb256d7402d62125f6ddc9b607d49edc989825c64");
+            record.put("parentId", "0xdb10afd3efa45327eb284c83cc925bd9bd7966aea53067c1eebe0724d124ec1e");
+            record.put("timestamp", 0x55ba43eb_i64 * 1000 + i * 12);
+            record.put("json", Value::Bytes(vec![1, 2, 3]));
+            record.put("unclesCount", 0);
+            file.append(record).await.unwrap();
+        }
+        Box::new(file).close().await.unwrap();
+
+        let file = ExisingObjectsFile {
+            bucket,
+            path: path.clone(),
+            kind: DataKind::Blocks,
+            stream: Mutex::new(mem.get(&path).await.unwrap()),
+        };
+
+        let mut records_stream = file.read().unwrap();
+        let mut records = vec![];
+        while let Some(record) = records_stream.recv().await {
+            records.push(record);
+        }
+
+        assert_eq!(records.len(), 10_000);
     }
 }

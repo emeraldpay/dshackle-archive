@@ -1,12 +1,16 @@
+use std::collections::HashSet;
 use std::marker::PhantomData;
 use std::str::FromStr;
-use anyhow::anyhow;
+use anyhow::{anyhow, Result};
+use apache_avro::types::{Record, Value};
 use async_trait::async_trait;
 use shutdown::Shutdown;
-use crate::blockchain::BlockchainTypes;
+use crate::blockchain::{BlockDetails, BlockchainTypes};
 use crate::command::archiver::Archiver;
-use crate::command::{ArchivesList, Blocks, CommandExecutor};
+use crate::command::{ArchiveGroup, ArchivesList, Blocks, CommandExecutor};
 use crate::range::Range;
+use crate::storage::TargetStorage;
+use crate::storage::TargetFileReader;
 
 ///
 /// Provides `verify` command.
@@ -14,17 +18,17 @@ use crate::range::Range;
 /// Checks the range of block in the current archive and deleted files with missing or incorrect data (which is supposed to be reloaded back with `fix` command)
 ///
 #[derive(Clone)]
-pub struct VerifyCommand<B: BlockchainTypes> {
+pub struct VerifyCommand<B: BlockchainTypes, TS: TargetStorage> {
     b: PhantomData<B>,
     shutdown: Shutdown,
     blocks: Blocks,
-    archiver: Archiver<B>,
+    archiver: Archiver<B, TS>,
 }
 
-impl<B: BlockchainTypes> VerifyCommand<B> {
+impl<B: BlockchainTypes, TS: TargetStorage> VerifyCommand<B, TS> {
     pub fn new(config: &crate::args::Args,
                shutdown: Shutdown,
-               archiver: Archiver<B>,
+               archiver: Archiver<B, TS>,
     ) -> anyhow::Result<Self> {
 
         let blocks = if let Some(tail) = config.tail {
@@ -42,10 +46,102 @@ impl<B: BlockchainTypes> VerifyCommand<B> {
             archiver
         })
     }
+
+    async fn verify_content(&self, group: &ArchiveGroup) -> Result<()> {
+        let mut blocks = self.archiver.target
+            .open(group.blocks.as_ref().unwrap())
+            .await?
+            .read()?;
+
+        let mut heights = HashSet::new();
+        let mut expected_txes = Vec::new();
+        while let Some(record) = blocks.recv().await {
+            let height = record.fields.iter()
+                .find(|f| f.0 == "height")
+                .ok_or(anyhow!("No height in the record"))?;
+            let height = match &height.1 {
+                Value::Long(h) => h.clone() as u64,
+                _ => return Err(anyhow!("Invalid height type: {:?}", height.1))
+            };
+            if !group.range.contains(height) {
+                return Err(anyhow!("Height is not in range: {}", height));
+            }
+            let first = heights.insert(height);
+            if !first {
+                return Err(anyhow!("Duplicate height: {}", height));
+            }
+
+            let json = record.fields.iter()
+                .find(|f| f.0 == "json")
+                .ok_or(anyhow!("No block json in the record"))?;
+            let json = match &json.1 {
+                Value::Bytes(b) => b.clone(),
+                _ => return Err(anyhow!("Invalid json type: {:?}", json.1))
+            };
+            let block = serde_json::from_slice::<B::BlockParsed>(json.as_slice())?;
+            expected_txes.extend(block.txes());
+        }
+        if heights.len() != group.range.len() {
+            return Err(anyhow!("Missing block"));
+        }
+
+        let mut txes = self.archiver.target.open(group.txes.as_ref().unwrap())
+            .await?
+            .read()?;
+        let mut existing_txes = HashSet::new();
+        while let Some(record) = txes.recv().await {
+            let txid = record.fields.iter()
+                .find(|f| f.0 == "txid")
+                .ok_or(anyhow!("No txid in the record"))?;
+            let txid_str = match &txid.1 {
+                Value::String(s) => s.clone(),
+                _ => return Err(anyhow!("Invalid txid type: {:?}", txid.1))
+            };
+
+            let txid = B::TxId::from_str(&txid_str)
+                .map_err(|_| anyhow!("Invalid txid: {}", txid_str))?;
+            if !expected_txes.contains(&txid) {
+                return Err(anyhow!("Unexpected txid: {}", txid_str));
+            }
+
+            Self::verify_field_exist(&record, "json")?;
+            Self::verify_field_exist(&record, "raw")?;
+            //TODO blockchain specific verification
+
+            let first = existing_txes.insert(txid);
+            if !first {
+                return Err(anyhow!("Duplicate txid: {}", txid_str));
+            }
+        }
+        if existing_txes.len() != expected_txes.len() {
+            return Err(anyhow!("Missing tx"));
+        }
+        Ok(())
+    }
+
+    fn verify_field_exist(record: &Record, field: &str) -> Result<()> {
+        let value = record.fields.iter()
+            .find(|f| f.0 == field)
+            .ok_or(anyhow!("No {} in the record", field))?;
+        match &value.1 {
+            Value::Null => Err(anyhow!("Null {} in the record", field)),
+            Value::Bytes(v) => if v.is_empty() {
+                Err(anyhow!("Empty {} in the record", field))
+            } else {
+                Ok(())
+            },
+            Value::String(s) => if s.is_empty() {
+                Err(anyhow!("Empty {} in the record", field))
+            } else {
+                Ok(())
+            },
+            _ => Ok(())
+        }
+    }
 }
 
 #[async_trait]
-impl<B: BlockchainTypes> CommandExecutor for VerifyCommand<B> {
+impl<B: BlockchainTypes, FR: TargetStorage> CommandExecutor for VerifyCommand<B, FR> {
 
     async fn execute(&self) -> anyhow::Result<()> {
         let range = self.archiver.get_range(&self.blocks).await?;
@@ -64,22 +160,28 @@ impl<B: BlockchainTypes> CommandExecutor for VerifyCommand<B> {
                     }
                     let file = file.unwrap();
                     tracing::trace!("Received file: {:?}", file.path);
-                    //TODO start processing once it's known the range is not complete
+                    //TODO start processing once it's known the range is complete / incomplete
                     let _is_completed = archived.append(file);
                 }
             }
         }
 
         for group in archived.iter() {
-            if !group.is_complete() {
-                tracing::info!("Incomplete group: {:?}", group);
+            let delete = if !group.is_complete() {
+                tracing::info!("Incomplete group {:?}", group.range);
+                true
+            } else {
+                if let Err(e) = self.verify_content(group).await {
+                    tracing::info!("Invalid data in group {:?}: {}", group.range, e);
+                    true
+                } else {
+                    false
+                }
+            };
+            if delete {
+                tracing::info!("Deleting group {:?}", group.range);
                 for f in group.files() {
-                    //TODO delete in parallel
-                    tracing::debug!("Deleting file: {:?}", f.path);
-                    let deleted = self.archiver.target.delete(f).await;
-                    if let Err(err) = deleted {
-                        tracing::warn!("Failed to delete file: {:?}", err);
-                    }
+                    self.archiver.target.delete(f).await?;
                 }
             }
         }
@@ -91,31 +193,37 @@ impl<B: BlockchainTypes> CommandExecutor for VerifyCommand<B> {
 #[cfg(test)]
 mod tests {
     use std::sync::Arc;
-    use bytes::Bytes;
     use object_store::memory::InMemory;
     use object_store::{ObjectMeta, ObjectStore};
-    use object_store::path::Path;
     use shutdown::Shutdown;
     use crate::args::Args;
-    use crate::blockchain::mock::{MockData, MockType};
+    use crate::blockchain::mock::{MockBlock, MockData, MockTx, MockType};
     use crate::command::archiver::Archiver;
     use crate::command::CommandExecutor;
     use crate::command::verify::VerifyCommand;
     use crate::filenames::Filenames;
     use crate::storage::objects::ObjectsStorage;
     use futures_util::StreamExt;
+    use crate::blockchain::{BlockReference, BlockchainData};
+    use crate::datakind::DataKind;
+    use crate::range::Range;
+    use crate::storage::{TargetFileWriter, TargetStorage};
     use crate::testing;
+
+    fn create_archiver(mem: Arc<InMemory>) -> Archiver<MockType, ObjectsStorage<InMemory>> {
+        let storage = ObjectsStorage::new(mem, "test".to_string(), Filenames::with_dir("archive/eth".to_string()));
+
+        Archiver::new_simple(
+            Arc::new(storage),
+            Arc::new(MockData::new("test")),
+        )
+    }
 
     #[tokio::test]
     async fn does_nothing_on_empty_archive() {
         testing::start_test();
         let mem = Arc::new(InMemory::new());
-        let storage = ObjectsStorage::new(mem, "test".to_string(), Filenames::with_dir("archive/eth".to_string()));
-
-        let archiver: Archiver<MockType> = Archiver::new_simple(
-            Arc::new(Box::new(storage)),
-            Arc::new(MockData::new("test")),
-        );
+        let archiver = create_archiver(mem.clone());
 
         let args = Args {
             range: Some("100..110".to_string()),
@@ -139,21 +247,28 @@ mod tests {
         testing::start_test();
         let mem = Arc::new(InMemory::new());
 
-        mem.put(
-            &Path::from("archive/eth/000000000/000000000/000000101.block.avro"),
-            Bytes::from_static(b"test").into(),
-        ).await.expect("Put 1");
-        mem.put(
-            &Path::from("archive/eth/000000000/000000000/000000101.txes.avro"),
-            Bytes::from_static(b"test").into(),
-        ).await.expect("Put 2");
+        let block101 = MockBlock {
+            height: 101,
+            hash: "B101".to_string(),
+            transactions: vec!["TX001".to_string()],
+        };
+        let data = MockData::new("TEST");
+        data.add_block(block101.clone());
+        data.add_tx(MockTx {
+            hash: "TX001".to_string(),
+        });
 
-        let storage = ObjectsStorage::new(mem.clone(), "test".to_string(), Filenames::with_dir("archive/eth".to_string()));
+        let archiver = create_archiver(mem.clone());
 
-        let archiver: Archiver<MockType> = Archiver::new_simple(
-            Arc::new(Box::new(storage)),
-            Arc::new(MockData::new("test")),
-        );
+        let write = archiver.target.create(DataKind::Blocks, &Range::Single(101)).await.unwrap();
+        let record = data.fetch_block(&BlockReference::Height(101)).await.unwrap();
+        write.append(record.0).await.unwrap();
+        write.close().await.unwrap();
+
+        let write = archiver.target.create(DataKind::Transactions, &Range::Single(101)).await.unwrap();
+        let record = data.fetch_tx(&block101, 0).await.unwrap();
+        write.append(record).await.unwrap();
+        write.close().await.unwrap();
 
         let args = Args {
             range: Some("100..110".to_string()),
@@ -181,29 +296,61 @@ mod tests {
         testing::start_test();
         let mem = Arc::new(InMemory::new());
 
-        mem.put(
-            &Path::from("archive/eth/000000000/000000000/000000101.block.avro"),
-            Bytes::from_static(b"test").into(),
-        ).await.expect("Put 1");
-        mem.put(
-            &Path::from("archive/eth/000000000/000000000/000000101.txes.avro"),
-            Bytes::from_static(b"test").into(),
-        ).await.expect("Put 2");
-        mem.put(
-            &Path::from("archive/eth/000000000/000000000/000000102.txes.avro"),
-            Bytes::from_static(b"test").into(),
-        ).await.expect("Put 3");
-        mem.put(
-            &Path::from("archive/eth/000000000/000000000/000000103.block.avro"),
-            Bytes::from_static(b"test").into(),
-        ).await.expect("Put 4");
+        let block101 = MockBlock {
+            height: 101,
+            hash: "B101".to_string(),
+            transactions: vec!["TX001".to_string()],
+        };
+        let block102 = MockBlock {
+            height: 102,
+            hash: "B102".to_string(),
+            transactions: vec!["TX002".to_string()],
+        };
+        let block103 = MockBlock {
+            height: 103,
+            hash: "B103".to_string(),
+            transactions: vec!["TX003".to_string()],
+        };
+        let data = MockData::new("TEST");
+        data.add_block(block101.clone());
+        data.add_block(block102.clone());
+        data.add_block(block103.clone());
+        data.add_tx(MockTx {
+            hash: "TX001".to_string(),
+        });
+        data.add_tx(MockTx {
+            hash: "TX002".to_string(),
+        });
+        data.add_tx(MockTx {
+            hash: "TX003".to_string(),
+        });
 
-        let storage = ObjectsStorage::new(mem.clone(), "test".to_string(), Filenames::with_dir("archive/eth".to_string()));
+        let archiver = create_archiver(mem.clone());
 
-        let archiver: Archiver<MockType> = Archiver::new_simple(
-            Arc::new(Box::new(storage)),
-            Arc::new(MockData::new("test")),
-        );
+        // should have:
+        // block 101 + txes 101
+        // txes 102
+        // block 103
+
+        let write = archiver.target.create(DataKind::Blocks, &Range::Single(101)).await.unwrap();
+        let record = data.fetch_block(&BlockReference::Height(101)).await.unwrap();
+        write.append(record.0).await.unwrap();
+        write.close().await.unwrap();
+
+        let write = archiver.target.create(DataKind::Blocks, &Range::Single(103)).await.unwrap();
+        let record = data.fetch_block(&BlockReference::Height(103)).await.unwrap();
+        write.append(record.0).await.unwrap();
+        write.close().await.unwrap();
+
+        let write = archiver.target.create(DataKind::Transactions, &Range::Single(101)).await.unwrap();
+        let record = data.fetch_tx(&block101, 0).await.unwrap();
+        write.append(record).await.unwrap();
+        write.close().await.unwrap();
+
+        let write = archiver.target.create(DataKind::Transactions, &Range::Single(102)).await.unwrap();
+        let record = data.fetch_tx(&block102, 0).await.unwrap();
+        write.append(record).await.unwrap();
+        write.close().await.unwrap();
 
         let args = Args {
             range: Some("100..110".to_string()),
@@ -234,5 +381,111 @@ mod tests {
         );
     }
 
+    #[tokio::test]
+    async fn deletes_empty_block() {
+        testing::start_test();
+        let mem = Arc::new(InMemory::new());
+        let archiver = create_archiver(mem.clone());
+        let data = MockData::new("TEST");
+
+        let block100 = MockBlock {
+            height: 100,
+            hash: "B100".to_string(),
+            transactions: vec!["TX001".to_string()],
+        };
+        data.add_block(block100.clone());
+        data.add_tx(MockTx {
+            hash: "TX001".to_string(),
+        });
+
+        let blocks = archiver.target
+            .create(DataKind::Blocks, &Range::Single(100))
+            .await.expect("Create block");
+        // no date written
+        blocks.close().await.unwrap();
+
+        let txes = archiver.target
+            .create(DataKind::Transactions, &Range::Single(100))
+            .await.expect("Create txes");
+        let record = data.fetch_tx(&block100, 0).await.unwrap();
+        txes.append(record).await.unwrap();
+        txes.close().await.unwrap();
+
+        let files = testing::list_mem_filenames(mem.clone()).await;
+        assert_eq!(files.len(), 2);
+
+        let args = Args {
+            range: Some("100..110".to_string()),
+            ..Default::default()
+        };
+
+        let command = VerifyCommand::new(
+            &args,
+            Shutdown::new().unwrap(),
+            archiver,
+        ).unwrap();
+
+        let result = command.execute().await;
+        if let Err(err) = result {
+            panic!("Failed: {:?}", err);
+        }
+
+        let files = testing::list_mem_filenames(mem).await;
+        assert_eq!(files.len(), 0);
+    }
+
+    #[tokio::test]
+    async fn deletes_missing_tx() {
+        testing::start_test();
+        let mem = Arc::new(InMemory::new());
+        let archiver = create_archiver(mem.clone());
+        let data = MockData::new("TEST");
+
+        let block100 = MockBlock {
+            height: 100,
+            hash: "B100".to_string(),
+            transactions: vec!["TX001".to_string(), "TX002".to_string()],
+        };
+        data.add_block(block100.clone());
+        data.add_tx(MockTx {
+            hash: "TX001".to_string(),
+        });
+
+        let blocks = archiver.target
+            .create(DataKind::Blocks, &Range::Single(100))
+            .await.expect("Create block");
+        let record = data.fetch_block(&BlockReference::Height(100)).await.unwrap();
+        blocks.append(record.0).await.unwrap();
+        blocks.close().await.unwrap();
+
+        let txes = archiver.target
+            .create(DataKind::Transactions, &Range::Single(100))
+            .await.expect("Create txes");
+        let record = data.fetch_tx(&block100, 0).await.unwrap();
+        txes.append(record).await.unwrap();
+        txes.close().await.unwrap();
+
+        let files = testing::list_mem_filenames(mem.clone()).await;
+        assert_eq!(files.len(), 2);
+
+        let args = Args {
+            range: Some("100..110".to_string()),
+            ..Default::default()
+        };
+
+        let command = VerifyCommand::new(
+            &args,
+            Shutdown::new().unwrap(),
+            archiver,
+        ).unwrap();
+
+        let result = command.execute().await;
+        if let Err(err) = result {
+            panic!("Failed: {:?}", err);
+        }
+
+        let files = testing::list_mem_filenames(mem).await;
+        assert_eq!(files.len(), 0);
+    }
 
 }

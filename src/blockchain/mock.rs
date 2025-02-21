@@ -5,7 +5,7 @@ use async_trait::async_trait;
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use crate::avros::{BLOCK_SCHEMA, TX_SCHEMA};
-use crate::blockchain::{BlockReference, BlockchainData, BlockchainTypes};
+use crate::blockchain::{BlockDetails, BlockReference, BlockchainData, BlockchainTypes};
 use crate::blockchain::connection::Blockchain;
 
 pub struct MockType {}
@@ -28,6 +28,12 @@ pub struct MockBlock {
     pub height: u64,
     pub hash: String,
     pub transactions: Vec<String>,
+}
+
+impl BlockDetails<String> for MockBlock {
+    fn txes(&self) -> Vec<String> {
+        self.transactions.clone()
+    }
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -79,14 +85,14 @@ impl BlockchainData<MockType> for MockData {
             .clone();
 
         let mut record = Record::new(&BLOCK_SCHEMA).unwrap();
-        record.put("blockchainType", "MOCK");
+        record.put("blockchainType", "ETHEREUM");
         record.put("blockchainId", self.blockchain_id());
         record.put("archiveTimestamp", Utc::now().timestamp_millis());
         record.put("height", block.height as i64);
         record.put("blockId", block.hash.clone());
         record.put("parentId", "");
-        record.put("timestamp", 0);
-        record.put("json", serde_json::to_string(&block).unwrap());
+        record.put("timestamp", 1_i64);
+        record.put("json", serde_json::to_vec(&block).unwrap());
         record.put("unclesCount", 0);
 
         let txes = block.transactions.clone();
@@ -101,16 +107,16 @@ impl BlockchainData<MockType> for MockData {
             .clone();
 
         let mut record = Record::new(&TX_SCHEMA).unwrap();
-        record.put("blockchainType", "MOCK");
+        record.put("blockchainType", "ETHEREUM");
         record.put("blockchainId", self.blockchain_id());
         record.put("archiveTimestamp", Utc::now().timestamp_millis());
         record.put("height", block.height as i64);
         record.put("blockId", block.hash.clone());
-        record.put("timestamp", 0);
+        record.put("timestamp", 1_i64);
         record.put("index", index as i64);
         record.put("txid", tx.hash.clone());
-        record.put("json", serde_json::to_string(&tx).unwrap());
-        record.put("raw", serde_json::to_string(&tx).unwrap());
+        record.put("json", serde_json::to_vec(&tx).unwrap());
+        record.put("raw", serde_json::to_vec(&tx).unwrap());
 
         Ok(record)
     }

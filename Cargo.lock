@@ -1774,6 +1774,7 @@ dependencies = [
  "thiserror 2.0.10",
  "tokio",
  "tokio-retry",
+ "tokio-util",
  "tonic",
  "tracing",
  "tracing-subscriber",

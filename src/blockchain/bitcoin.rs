@@ -9,7 +9,7 @@ use async_trait::async_trait;
 use chrono::Utc;
 use serde::{Deserialize, Deserializer};
 use crate::avros::{BLOCK_SCHEMA, TX_SCHEMA};
-use crate::blockchain::{BitcoinType, BlockReference, BlockchainData, JsonString};
+use crate::blockchain::{BitcoinType, BlockDetails, BlockReference, BlockchainData, JsonString};
 
 #[derive(Clone)]
 pub struct BitcoinData {
@@ -17,7 +17,7 @@ pub struct BitcoinData {
     blockchain_id: String,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Hex32([u8; 32]);
 pub type BlockHash = Hex32;
 pub type TxHash = Hex32;
@@ -107,6 +107,12 @@ pub struct BitcoinBlock {
     #[serde(rename = "tx")]
     pub transactions: Vec<TxHash>,
     time: u64
+}
+
+impl BlockDetails<TxHash> for BitcoinBlock {
+    fn txes(&self) -> Vec<TxHash> {
+        self.transactions.clone()
+    }
 }
 
 #[async_trait]

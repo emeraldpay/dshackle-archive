@@ -80,13 +80,25 @@ async fn main_inner() -> Result<()> {
 }
 
 async fn run<B: BlockchainTypes>(builder: Builder<B>, args: &Args) -> Result<()> {
-    let target: Box<dyn TargetStorage> = storage::from_args(&args).unwrap();
+    if storage::is_fs(&args) {
+        let target = storage::create_fs(&args)?;
+        run_with_target(builder, target, args).await
+    } else if storage::is_s3(&args) {
+        let target = storage::create_aws(&args)?;
+        run_with_target(builder, target, args).await
+    } else {
+        return Err(anyhow!("Unsupported storage"));
+    }
+}
+
+async fn run_with_target<B: BlockchainTypes, TS: TargetStorage>(builder: Builder<B>, target: TS, args: &Args) -> Result<()> {
     let blockchain = Blockchain::new(&args.connection, args.as_dshackle_blockchain()?).await?;
     let chain_ref = ChainRef::from_str(&args.blockchain)
         .map_err(|_| anyhow!("Unsupported blockchain: {}", args.blockchain))?;
 
-    let builder = builder.with_target(target)
+    let builder = builder
         .with_notifier(notify::create_notifier(&args).await?)
+        .with_target(target)
         .with_data(blockchain, chain_ref.code());
 
     match args.command {
@@ -103,17 +115,20 @@ async fn run<B: BlockchainTypes>(builder: Builder<B>, args: &Args) -> Result<()>
                 .execute().await
         }
     }
-
 }
 
 struct Builder<B: BlockchainTypes> {
     b: PhantomData<B>,
-    target: Option<Box<dyn TargetStorage>>,
     notifier: Option<Box<dyn Notifier>>,
 }
 
-struct BuilderWithData<B: BlockchainTypes> {
+struct BuilderWithTarget<B: BlockchainTypes, TS: TargetStorage> {
     parent: Builder<B>,
+    target: TS,
+}
+
+struct BuilderWithData<B: BlockchainTypes, TS: TargetStorage> {
+    parent: BuilderWithTarget<B, TS>,
     data: B::DataProvider,
 }
 
@@ -121,7 +136,6 @@ impl<B> Builder<B> where B: BlockchainTypes {
     fn new() -> Self {
         Self {
             b: PhantomData,
-            target: None,
             notifier: None,
         }
     }
@@ -133,14 +147,16 @@ impl<B> Builder<B> where B: BlockchainTypes {
         }
     }
 
-    fn with_target(self, target: Box<dyn TargetStorage>) -> Self {
-        Self {
-            target: Some(target),
-            ..self
+    fn with_target<TS>(self, target: TS) -> BuilderWithTarget<B, TS> where TS: TargetStorage {
+        BuilderWithTarget {
+            target,
+            parent: self,
         }
     }
+}
 
-    fn with_data(self, blockchain: Blockchain, id: String) -> BuilderWithData<B> {
+impl<B, TS> BuilderWithTarget<B, TS> where B: BlockchainTypes, TS: TargetStorage {
+    fn with_data(self, blockchain: Blockchain, id: String) -> BuilderWithData<B, TS> {
         BuilderWithData {
             parent: self,
             data: B::create_data_provider(blockchain, id),
@@ -148,36 +164,36 @@ impl<B> Builder<B> where B: BlockchainTypes {
     }
 }
 
-impl<B> BuilderWithData<B> where B: BlockchainTypes {
+impl<B, TS> BuilderWithData<B, TS> where B: BlockchainTypes, TS: TargetStorage {
 
-    async fn stream(self, args: &Args) -> StreamCommand<B> {
+    async fn stream(self, args: &Args) -> StreamCommand<B, TS> {
         let shutdown = shutdown::Shutdown::new().unwrap();
-        let notifier = self.parent.notifier.unwrap();
+        let notifier = self.parent.parent.notifier.unwrap();
         let notifications = notifier.start();
         let archiver = Archiver::new(
-            shutdown.clone(), Arc::new(self.parent.target.unwrap()), Arc::new(self.data), notifications
+            shutdown.clone(), Arc::new(self.parent.target), Arc::new(self.data), notifications
         );
         let command = StreamCommand::new(&args, shutdown, archiver).await.unwrap();
         command
     }
 
-    fn fix(self, args: &Args) -> FixCommand<B> {
+    fn fix(self, args: &Args) -> FixCommand<B, TS> {
         let shutdown = shutdown::Shutdown::new().unwrap();
-        let notifier = self.parent.notifier.unwrap();
+        let notifier = self.parent.parent.notifier.unwrap();
         let notifications = notifier.start();
         let archiver = Archiver::new(
-            shutdown.clone(), Arc::new(self.parent.target.unwrap()), Arc::new(self.data), notifications
+            shutdown.clone(), Arc::new(self.parent.target), Arc::new(self.data), notifications
         );
         let command = FixCommand::new(&args, archiver).unwrap();
         command
     }
 
-    fn verify(self, args: &Args) -> VerifyCommand<B> {
+    fn verify(self, args: &Args) -> VerifyCommand<B, TS> {
         let shutdown = shutdown::Shutdown::new().unwrap();
-        let notifier = self.parent.notifier.unwrap();
+        let notifier = self.parent.parent.notifier.unwrap();
         let notifications = notifier.start();
         let archiver = Archiver::new(
-            shutdown.clone(), Arc::new(self.parent.target.unwrap()), Arc::new(self.data), notifications
+            shutdown.clone(), Arc::new(self.parent.target), Arc::new(self.data), notifications
         );
         let command = VerifyCommand::new(&args, shutdown, archiver).unwrap();
         command

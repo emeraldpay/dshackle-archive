@@ -1,4 +1,6 @@
+use anyhow::anyhow;
 use apache_avro::Schema;
+use apache_avro::types::{Record, Value};
 use lazy_static::lazy_static;
 
 lazy_static! {
@@ -177,4 +179,17 @@ lazy_static! {
           ]
         }
     "#).unwrap();
+}
+
+pub fn to_record<'s>(schema: &'s Schema, value: Value) -> anyhow::Result<Record<'s>> {
+    match value {
+        Value::Record(r) => {
+            let mut result = Record::new(schema).unwrap();
+            for (name, field) in r {
+                result.put(name.as_str(), field);
+            }
+            Ok(result)
+        },
+        _ => Err(anyhow!("Expected a record, got {:?}", value))
+    }
 }

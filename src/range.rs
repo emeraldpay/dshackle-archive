@@ -82,6 +82,13 @@ impl Range {
             }
         }
     }
+
+    pub fn len(&self) -> usize {
+        match self {
+            Range::Single(_) => 1,
+            Range::Multiple(start, end) => (end - start + 1) as usize,
+        }
+    }
 }
 
 impl FromStr for Range {

@@ -13,24 +13,25 @@ use anyhow::{Result};
 use shutdown::Shutdown;
 use crate::blockchain::BlockchainTypes;
 use crate::command::archiver::Archiver;
+use crate::storage::TargetStorage;
 
 ///
 /// Provides `stream` command.
 /// It appends fresh blocks one by one to the archive
 ///
 #[derive(Clone)]
-pub struct StreamCommand<B: BlockchainTypes> {
+pub struct StreamCommand<B: BlockchainTypes, TS: TargetStorage> {
     b: PhantomData<B>,
     blockchain: Arc<Blockchain>,
     shutdown: Shutdown,
     continue_blocks: Option<u64>,
-    archiver: Archiver<B>,
+    archiver: Archiver<B, TS>,
 }
 
-impl<B: BlockchainTypes> StreamCommand<B> {
+impl<B: BlockchainTypes, TS: TargetStorage> StreamCommand<B, TS> {
     pub async fn new(config: &Args,
                      shutdown: Shutdown,
-                     archiver: Archiver<B>
+                     archiver: Archiver<B, TS>
     ) -> Result<Self> {
         let blockchain = Arc::new(Blockchain::new(&config.connection, config.as_dshackle_blockchain()?).await?);
 
@@ -51,7 +52,7 @@ impl<B: BlockchainTypes> StreamCommand<B> {
 }
 
 #[async_trait]
-impl<B: BlockchainTypes> CommandExecutor for StreamCommand<B> {
+impl<B: BlockchainTypes, TS: TargetStorage> CommandExecutor for StreamCommand<B, TS> {
 
     async fn execute(&self) -> Result<()> {
         let mut heights = self.blockchain.subscribe_blocks().await?;
