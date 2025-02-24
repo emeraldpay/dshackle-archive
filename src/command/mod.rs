@@ -119,6 +119,10 @@ impl ArchivesList {
     pub fn iter(&self) -> impl Iterator<Item = &ArchiveGroup> {
         self.current.values()
     }
+
+    pub fn all(self) -> Vec<ArchiveGroup> {
+        self.current.into_iter().map(|(_, group)| group).collect()
+    }
 }
 
 #[cfg(test)]
@@ -205,8 +209,12 @@ mod tests {
         archives_list.append(file2).unwrap();
         archives_list.append(file3).unwrap();
 
-        let mut iter = archives_list.iter();
-        assert_eq!(iter.next().unwrap().range, range1);
-        assert_eq!(iter.next().unwrap().range, range2);
+        let mut all: Vec<Range> = archives_list.iter()
+            .map(|x| x.range.clone())
+            .collect();
+        all.sort();
+        assert!(all.contains(&range1));
+        assert!(all.contains(&range2));
+        assert_eq!(all.len(), 2);
     }
 }

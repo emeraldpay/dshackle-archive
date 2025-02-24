@@ -8,6 +8,18 @@ pub enum Range {
     Multiple(u64, u64),
 }
 
+impl PartialOrd for Range {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for Range {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        self.start().cmp(&other.start())
+    }
+}
+
 impl Range {
 
     pub fn new(start: u64, end: u64) -> Self {
