@@ -88,9 +88,10 @@ impl Filenames {
     }
 
     pub fn levels(&self, height: u64) -> Level {
+        let level_height = (height / self.dir_block_size_l2) * self.dir_block_size_l2;
         Level {
             filenames: self,
-            height,
+            height: level_height,
         }
     }
 
@@ -225,6 +226,15 @@ mod tests {
 
         let level = level.next_l2();
         assert_eq!(level.dir(), "013000000/013001000");
+    }
+
+    #[test]
+    fn go_next_level2_starts_at_edge() {
+        let filenames = Filenames::default();
+        let level = filenames.levels(21917490);
+        assert_eq!(level.height, 21917000);
+        let level = level.next_l2();
+        assert_eq!(level.height, 21918000);
     }
 
     #[test]

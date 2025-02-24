@@ -74,7 +74,7 @@ impl<S: ObjectStore> TargetStorage for ObjectsStorage<S> {
         tokio::spawn(async move {
             let mut level = filenames.levels(range.start());
             let mut prev: Option<Path> = None;
-            while level.height < range.end() && !tx.is_closed() {
+            while level.height <= range.end() && !tx.is_closed() {
                 let path = Path::from(level.dir().as_str());
                 if prev.is_some() && prev.as_ref().unwrap() == &path {
                     tracing::error!("Checking the same dir twice");
@@ -90,10 +90,12 @@ impl<S: ObjectStore> TargetStorage for ObjectsStorage<S> {
                     }
                     let meta = next.unwrap();
                     if tx.is_closed() {
+                        tracing::trace!("Channel closed");
                         return
                     }
                     let filename = meta.location.filename();
                     if filename.is_none() {
+                        tracing::trace!("No filename: {:?}", meta.location);
                         continue
                     }
                     let filename = filename.unwrap();
@@ -109,11 +111,13 @@ impl<S: ObjectStore> TargetStorage for ObjectsStorage<S> {
                             kind,
                             path: meta.location.to_string(),
                         };
-                        if tx.send(r).await.is_err() {
+                        if let Err(e) = tx.send(r).await {
+                            tracing::warn!("Error listing archives: {:?}", e);
                             return
                         }
                     }
                 }
+                tracing::trace!("Trying with next level...");
                 level = level.next_l2();
             }
         });
@@ -395,6 +399,20 @@ mod tests {
         assert_eq!(files[1].path, "archive/eth/021000000/021596000/021596363.txes.avro");
         assert_eq!(files[2].path, "archive/eth/021000000/021596000/021596364.block.avro");
         assert_eq!(files[3].path, "archive/eth/021000000/021596000/021596364.txes.avro");
+    }
+
+    #[tokio::test]
+    pub async fn test_list_empty_start() {
+        testing::start_test();
+        let files = list(
+            Range::new(21917490, 21918490),
+            vec![
+                "archive/eth/021000000/021918000/021918015.block.avro",
+            ]
+        ).await;
+
+        assert_eq!(files.len(), 1);
+        assert_eq!(files[0].path, "archive/eth/021000000/021918000/021918015.block.avro");
     }
 
     #[tokio::test]
