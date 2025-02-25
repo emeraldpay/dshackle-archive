@@ -66,14 +66,12 @@ impl Blockchain {
         if let Some(resp) = response.next().await {
             if let Ok(value) = resp {
                 if value.succeed {
-                    //println!("received {}", String::from_utf8(value.payload.clone()).unwrap());
                     Ok(value.payload)
                 } else {
-                    //println!("Err: `{}`", value.error_message);
                     Err(BlockchainError::FailResponse(value.error_message))
                 }
             } else {
-                return Err(BlockchainError::IO);
+                Err(BlockchainError::IO)
             }
         } else {
             Err(BlockchainError::IO)
