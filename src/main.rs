@@ -30,6 +30,9 @@ use crate::command::archiver::Archiver;
 use crate::command::fix::FixCommand;
 use crate::command::verify::VerifyCommand;
 
+#[cfg(test)]
+pub mod testing;
+
 pub mod args;
 pub mod command;
 pub mod errors;
@@ -40,7 +43,6 @@ pub mod datakind;
 pub mod filenames;
 pub mod avros;
 pub mod notify;
-pub mod testing;
 
 fn init_tracing() {
     let filter = Targets::new()
@@ -79,7 +81,7 @@ async fn main_inner() -> Result<()> {
     Ok(())
 }
 
-async fn run<B: BlockchainTypes>(builder: Builder<B>, args: &Args) -> Result<()> {
+async fn run<B: BlockchainTypes + 'static>(builder: Builder<B>, args: &Args) -> Result<()> {
     if storage::is_fs(&args) {
         let target = storage::create_fs(&args)?;
         run_with_target(builder, target, args).await
@@ -91,7 +93,7 @@ async fn run<B: BlockchainTypes>(builder: Builder<B>, args: &Args) -> Result<()>
     }
 }
 
-async fn run_with_target<B: BlockchainTypes, TS: TargetStorage>(builder: Builder<B>, target: TS, args: &Args) -> Result<()> {
+async fn run_with_target<B: BlockchainTypes + 'static, TS: TargetStorage + 'static>(builder: Builder<B>, target: TS, args: &Args) -> Result<()> {
     let blockchain = Blockchain::new(&args.connection, args.as_dshackle_blockchain()?).await?;
     let chain_ref = ChainRef::from_str(&args.blockchain)
         .map_err(|_| anyhow!("Unsupported blockchain: {}", args.blockchain))?;
@@ -164,7 +166,7 @@ impl<B, TS> BuilderWithTarget<B, TS> where B: BlockchainTypes, TS: TargetStorage
     }
 }
 
-impl<B, TS> BuilderWithData<B, TS> where B: BlockchainTypes, TS: TargetStorage {
+impl<B, TS> BuilderWithData<B, TS> where B: BlockchainTypes + 'static, TS: TargetStorage + 'static {
 
     async fn stream(self, args: &Args) -> StreamCommand<B, TS> {
         let shutdown = shutdown::Shutdown::new().unwrap();

@@ -8,7 +8,6 @@ use tracing_subscriber::layer::SubscriberExt;
 
 static INIT: std::sync::Once = std::sync::Once::new();
 
-#[cfg(test)]
 pub fn start_test() {
     INIT.call_once(|| {
         init_tracing();
