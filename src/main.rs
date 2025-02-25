@@ -6,9 +6,11 @@ use std::marker::PhantomData;
 use std::str::FromStr;
 use std::sync::Arc;
 use clap::Parser;
-use tracing_subscriber::filter::Targets;
-use tracing_subscriber::Layer;
-use tracing_subscriber::layer::SubscriberExt;
+use tracing_subscriber::{
+    EnvFilter,
+    Layer,
+    layer::SubscriberExt
+};
 use crate::{
     blockchain::{BitcoinType, BlockchainTypes, EthereumType},
     command::{
@@ -45,13 +47,12 @@ pub mod avros;
 pub mod notify;
 
 fn init_tracing() {
-    let filter = Targets::new()
-        .with_target("dshackle_archive", tracing::level_filters::LevelFilter::DEBUG)
-        .with_default(tracing::level_filters::LevelFilter::INFO);
+    let filter = EnvFilter::builder()
+        .with_default_directive("dshackle_archive=info".parse().unwrap())
+        .from_env_lossy();
     let stdout_layer = tracing_subscriber::fmt::layer()
         .with_writer(std::io::stdout)
-        .with_filter(filter.clone())
-        ;
+        .with_filter(filter);
     let subscriber = tracing_subscriber::registry()
         .with(stdout_layer);
     tracing::subscriber::set_global_default(subscriber)
@@ -67,6 +68,8 @@ async fn main_inner() -> Result<()> {
     init_tracing();
     let args = Args::parse();
     tracing::info!("Run: {}", args.command);
+    tracing::debug!("debug");
+    tracing::trace!("trace");
 
     let chain_ref = ChainRef::from_str(&args.blockchain)
         .map_err(|_| anyhow!("Unsupported blockchain: {}", args.blockchain))?;
