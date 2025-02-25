@@ -1,10 +1,13 @@
 use std::collections::HashSet;
 use std::marker::PhantomData;
 use std::str::FromStr;
+use std::sync::Arc;
 use anyhow::{anyhow, Result};
 use apache_avro::types::{Record, Value};
 use async_trait::async_trait;
 use shutdown::Shutdown;
+use tokio::sync::Semaphore;
+use tokio::task::JoinSet;
 use crate::blockchain::{BlockDetails, BlockchainTypes};
 use crate::command::archiver::Archiver;
 use crate::command::{ArchiveGroup, ArchivesList, Blocks, CommandExecutor};
@@ -22,10 +25,10 @@ pub struct VerifyCommand<B: BlockchainTypes, TS: TargetStorage> {
     b: PhantomData<B>,
     shutdown: Shutdown,
     blocks: Blocks,
-    archiver: Archiver<B, TS>,
+    archiver: Arc<Archiver<B, TS>>,
 }
 
-impl<B: BlockchainTypes, TS: TargetStorage> VerifyCommand<B, TS> {
+impl<B: BlockchainTypes + 'static, TS: TargetStorage + 'static> VerifyCommand<B, TS> {
     pub fn new(config: &crate::args::Args,
                shutdown: Shutdown,
                archiver: Archiver<B, TS>,
@@ -43,109 +46,18 @@ impl<B: BlockchainTypes, TS: TargetStorage> VerifyCommand<B, TS> {
             b: PhantomData,
             shutdown,
             blocks,
-            archiver
+            archiver: Arc::new(archiver),
         })
     }
 
-    async fn verify_content(&self, group: &ArchiveGroup) -> Result<()> {
-        let mut blocks = self.archiver.target
-            .open(group.blocks.as_ref().unwrap())
-            .await?
-            .read()?;
-
-        let mut heights = HashSet::new();
-        let mut expected_txes = Vec::new();
-        while let Some(record) = blocks.recv().await {
-            let height = record.fields.iter()
-                .find(|f| f.0 == "height")
-                .ok_or(anyhow!("No height in the record"))?;
-            let height = match &height.1 {
-                Value::Long(h) => h.clone() as u64,
-                _ => return Err(anyhow!("Invalid height type: {:?}", height.1))
-            };
-            if !group.range.contains(height) {
-                return Err(anyhow!("Height is not in range: {}", height));
-            }
-            let first = heights.insert(height);
-            if !first {
-                return Err(anyhow!("Duplicate height: {}", height));
-            }
-
-            let json = record.fields.iter()
-                .find(|f| f.0 == "json")
-                .ok_or(anyhow!("No block json in the record"))?;
-            let json = match &json.1 {
-                Value::Bytes(b) => b.clone(),
-                _ => return Err(anyhow!("Invalid json type: {:?}", json.1))
-            };
-            let block = serde_json::from_slice::<B::BlockParsed>(json.as_slice())?;
-            expected_txes.extend(block.txes());
-        }
-        if heights.len() != group.range.len() {
-            return Err(anyhow!("Missing block"));
-        }
-
-        let mut txes = self.archiver.target.open(group.txes.as_ref().unwrap())
-            .await?
-            .read()?;
-        let mut existing_txes = HashSet::new();
-        while let Some(record) = txes.recv().await {
-            let txid = record.fields.iter()
-                .find(|f| f.0 == "txid")
-                .ok_or(anyhow!("No txid in the record"))?;
-            let txid_str = match &txid.1 {
-                Value::String(s) => s.clone(),
-                _ => return Err(anyhow!("Invalid txid type: {:?}", txid.1))
-            };
-
-            let txid = B::TxId::from_str(&txid_str)
-                .map_err(|_| anyhow!("Invalid txid: {}", txid_str))?;
-            if !expected_txes.contains(&txid) {
-                return Err(anyhow!("Unexpected txid: {}", txid_str));
-            }
-
-            Self::verify_field_exist(&record, "json")?;
-            Self::verify_field_exist(&record, "raw")?;
-            //TODO blockchain specific verification
-
-            let first = existing_txes.insert(txid);
-            if !first {
-                return Err(anyhow!("Duplicate txid: {}", txid_str));
-            }
-        }
-        if existing_txes.len() != expected_txes.len() {
-            return Err(anyhow!("Missing tx"));
-        }
-        Ok(())
-    }
-
-    fn verify_field_exist(record: &Record, field: &str) -> Result<()> {
-        let value = record.fields.iter()
-            .find(|f| f.0 == field)
-            .ok_or(anyhow!("No {} in the record", field))?;
-        match &value.1 {
-            Value::Null => Err(anyhow!("Null {} in the record", field)),
-            Value::Bytes(v) => if v.is_empty() {
-                Err(anyhow!("Empty {} in the record", field))
-            } else {
-                Ok(())
-            },
-            Value::String(s) => if s.is_empty() {
-                Err(anyhow!("Empty {} in the record", field))
-            } else {
-                Ok(())
-            },
-            _ => Ok(())
-        }
-    }
 }
 
 #[async_trait]
-impl<B: BlockchainTypes, FR: TargetStorage> CommandExecutor for VerifyCommand<B, FR> {
+impl<B: BlockchainTypes + 'static, FR: TargetStorage + 'static> CommandExecutor for VerifyCommand<B, FR> {
 
     async fn execute(&self) -> anyhow::Result<()> {
         let range = self.archiver.get_range(&self.blocks).await?;
-        tracing::info!("Verifying range: {}", range);
+        tracing::info!(range = %range, "Verifying range");
 
         let mut existing = self.archiver.target.list(range)?;
         let mut archived = ArchivesList::new();
@@ -166,27 +78,142 @@ impl<B: BlockchainTypes, FR: TargetStorage> CommandExecutor for VerifyCommand<B,
             }
         }
 
-        for group in archived.iter() {
-            let delete = if !group.is_complete() {
-                tracing::info!("Incomplete group {:?}", group.range);
-                true
-            } else {
-                if let Err(e) = self.verify_content(group).await {
-                    tracing::info!("Invalid data in group {:?}: {}", group.range, e);
-                    true
-                } else {
-                    false
-                }
-            };
-            if delete {
-                tracing::info!("Deleting group {:?}", group.range);
-                for f in group.files() {
-                    self.archiver.target.delete(f).await?;
-                }
-            }
-        }
+        verify_list(self.archiver.clone(), archived).await?;
 
         Ok(())
+    }
+}
+
+async fn verify_list<B: BlockchainTypes + 'static, TS: TargetStorage + 'static>(archiver: Arc<Archiver<B, TS>>, archived: ArchivesList) -> Result<()> {
+    let mut jobs = JoinSet::new();
+    let parallel = Arc::new(Semaphore::new(4));
+    for group in archived.all() {
+        let parallel = parallel.clone();
+        let archiver = archiver.clone();
+        jobs.spawn(async move {
+            let _permit = parallel.acquire().await;
+            verify_group(archiver, group).await
+        });
+    }
+    let _ = jobs.join_all().await;
+    Ok(())
+}
+
+async fn verify_group<B: BlockchainTypes, TS: TargetStorage>(archiver: Arc<Archiver<B, TS>>, group: ArchiveGroup) -> Result<()> {
+    let delete = if !group.is_complete() {
+        tracing::info!(range = %group.range, "Incomplete group");
+        true
+    } else {
+        if let Err(e) = verify_content(archiver.clone(), &group).await {
+            tracing::info!(range = %group.range, "Invalid data in group: {}", e);
+            true
+        } else {
+            tracing::info!(range = %group.range, "Confirmed group");
+            false
+        }
+    };
+    if delete {
+        tracing::info!(range = %group.range, "Deleting group");
+        for f in group.files() {
+            archiver.target.delete(f).await?;
+        }
+    }
+    Ok(())
+}
+
+async fn verify_content<B: BlockchainTypes, TS: TargetStorage>(archiver: Arc<Archiver<B, TS>>, group: &ArchiveGroup) -> Result<()> {
+    tracing::trace!(range = %group.range, "Verify group");
+
+    tracing::trace!(range = %group.range, "Verify blocks");
+    let mut blocks = archiver.target
+        .open(group.blocks.as_ref().unwrap())
+        .await?
+        .read()?;
+
+    let mut heights = HashSet::new();
+    let mut expected_txes = Vec::new();
+    while let Some(record) = blocks.recv().await {
+        let height = record.fields.iter()
+            .find(|f| f.0 == "height")
+            .ok_or(anyhow!("No height in the record"))?;
+        let height = match &height.1 {
+            Value::Long(h) => h.clone() as u64,
+            _ => return Err(anyhow!("Invalid height type: {:?}", height.1))
+        };
+        if !group.range.contains(height) {
+            return Err(anyhow!("Height is not in range: {}", height));
+        }
+        let first = heights.insert(height);
+        if !first {
+            return Err(anyhow!("Duplicate height: {}", height));
+        }
+
+        let json = record.fields.iter()
+            .find(|f| f.0 == "json")
+            .ok_or(anyhow!("No block json in the record"))?;
+        let json = match &json.1 {
+            Value::Bytes(b) => b.clone(),
+            _ => return Err(anyhow!("Invalid json type: {:?}", json.1))
+        };
+        let block = serde_json::from_slice::<B::BlockParsed>(json.as_slice())?;
+        expected_txes.extend(block.txes());
+    }
+    if heights.len() != group.range.len() {
+        return Err(anyhow!("Missing block"));
+    }
+
+    tracing::trace!(range = %group.range, "Verify txes");
+    let mut txes = archiver.target.open(group.txes.as_ref().unwrap())
+        .await?
+        .read()?;
+    let mut existing_txes = HashSet::new();
+    while let Some(record) = txes.recv().await {
+        let txid = record.fields.iter()
+            .find(|f| f.0 == "txid")
+            .ok_or(anyhow!("No txid in the record"))?;
+        let txid_str = match &txid.1 {
+            Value::String(s) => s.clone(),
+            _ => return Err(anyhow!("Invalid txid type: {:?}", txid.1))
+        };
+
+        let txid = B::TxId::from_str(&txid_str)
+            .map_err(|_| anyhow!("Invalid txid: {}", txid_str))?;
+        if !expected_txes.contains(&txid) {
+            return Err(anyhow!("Unexpected txid: {}", txid_str));
+        }
+
+        verify_field_exist(&record, "json")?;
+        verify_field_exist(&record, "raw")?;
+        //TODO blockchain specific verification
+
+        let first = existing_txes.insert(txid);
+        if !first {
+            return Err(anyhow!("Duplicate txid: {}", txid_str));
+        }
+    }
+    if existing_txes.len() != expected_txes.len() {
+        return Err(anyhow!("Missing tx"));
+    }
+    Ok(())
+}
+
+fn verify_field_exist(record: &Record, field: &str) -> Result<()> {
+    let value = record.fields.iter()
+        .find(|f| f.0 == field)
+        .ok_or(anyhow!("No {} in the record", field))?;
+    match &value.1 {
+        Value::Null => Err(anyhow!("Null {} in the record", field)),
+        Value::Bytes(v) => if v.is_empty() {
+            Err(anyhow!("Empty {} in the record", field))
+        } else {
+            Ok(())
+        },
+        Value::String(s) => if s.is_empty() {
+            Err(anyhow!("Empty {} in the record", field))
+        } else {
+            Ok(())
+        },
+        _ => Ok(())
     }
 }
 

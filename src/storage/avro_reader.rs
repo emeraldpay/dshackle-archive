@@ -10,6 +10,7 @@ pub(super) fn consume_sync<R: Read + Send + 'static>(schema: &'static Schema, re
     let (tx, rx) = std::sync::mpsc::sync_channel(8);
 
     thread::spawn(move || {
+        tracing::trace!("Reading avro file...");
         let avro_reader = apache_avro::Reader::with_schema(&schema, reader);
         if avro_reader.is_err() {
             tracing::error!("Error reading avro file: {:?}", avro_reader.err().unwrap());
@@ -32,9 +33,44 @@ pub(super) fn consume_sync<R: Read + Send + 'static>(schema: &'static Schema, re
             let record = record.unwrap();
             if let Err(e) = tx.send(record) {
                 tracing::error!("Error sending record to channel: {:?}", e);
+                break
             }
         }
+        tracing::trace!("Read avro file...");
     });
 
     rx
+}
+
+
+#[cfg(test)]
+mod tests {
+    use crate::avros::{BLOCK_SCHEMA, TX_SCHEMA};
+    use crate::testing;
+
+    #[test]
+    fn test_read_btc_723743_block() {
+        testing::start_test();
+        let file = std::fs::File::open("testdata/fullAvroFiles/000723743.block.avro").unwrap();
+        let schema = &BLOCK_SCHEMA;
+        let rx = super::consume_sync(schema, file);
+        let mut count = 0;
+        for record in rx.iter() {
+            count += 1;
+        }
+        assert_eq!(count, 1);
+    }
+
+    #[test]
+    fn test_read_btc_723743_txes() {
+        testing::start_test();
+        let file = std::fs::File::open("testdata/fullAvroFiles/000723743.txes.avro").unwrap();
+        let schema = &TX_SCHEMA;
+        let rx = super::consume_sync(schema, file);
+        let mut count = 0;
+        for record in rx.iter() {
+            count += 1;
+        }
+        assert_eq!(count, 2498);
+    }
 }

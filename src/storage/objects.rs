@@ -173,8 +173,6 @@ pub struct ExisingObjectsFile {
     bucket: String,
     path: Path,
     kind: DataKind,
-    // reader: BoxStream<'static, std::io::Result<Bytes>>,
-    // stream: Arc<BoxStream<'static, object_store::Result<Bytes>>>,
     stream: Mutex<GetResult>
 }
 
