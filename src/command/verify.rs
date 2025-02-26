@@ -11,6 +11,7 @@ use tokio::task::JoinSet;
 use crate::blockchain::{BlockDetails, BlockchainTypes};
 use crate::command::archiver::Archiver;
 use crate::command::{ArchiveGroup, ArchivesList, Blocks, CommandExecutor};
+use crate::global;
 use crate::range::Range;
 use crate::storage::TargetStorage;
 use crate::storage::TargetFileReader;
@@ -23,14 +24,12 @@ use crate::storage::TargetFileReader;
 #[derive(Clone)]
 pub struct VerifyCommand<B: BlockchainTypes, TS: TargetStorage> {
     b: PhantomData<B>,
-    shutdown: Shutdown,
     blocks: Blocks,
     archiver: Arc<Archiver<B, TS>>,
 }
 
 impl<B: BlockchainTypes + 'static, TS: TargetStorage + 'static> VerifyCommand<B, TS> {
     pub fn new(config: &crate::args::Args,
-               shutdown: Shutdown,
                archiver: Archiver<B, TS>,
     ) -> anyhow::Result<Self> {
 
@@ -44,7 +43,6 @@ impl<B: BlockchainTypes + 'static, TS: TargetStorage + 'static> VerifyCommand<B,
 
         Ok(Self {
             b: PhantomData,
-            shutdown,
             blocks,
             archiver: Arc::new(archiver),
         })
@@ -61,7 +59,7 @@ impl<B: BlockchainTypes + 'static, FR: TargetStorage + 'static> CommandExecutor 
 
         let mut existing = self.archiver.target.list(range)?;
         let mut archived = ArchivesList::new();
-        let shutdown = self.shutdown.clone();
+        let shutdown = global::get_shutdown();
 
         while !shutdown.is_signalled() {
             tokio::select! {
@@ -78,40 +76,59 @@ impl<B: BlockchainTypes + 'static, FR: TargetStorage + 'static> CommandExecutor 
             }
         }
 
-        verify_list(self.archiver.clone(), archived).await?;
+        verify_list(self.archiver.clone(), archived, shutdown).await?;
 
         Ok(())
     }
 }
 
-async fn verify_list<B: BlockchainTypes + 'static, TS: TargetStorage + 'static>(archiver: Arc<Archiver<B, TS>>, archived: ArchivesList) -> Result<()> {
+async fn verify_list<B: BlockchainTypes + 'static, TS: TargetStorage + 'static>(archiver: Arc<Archiver<B, TS>>, archived: ArchivesList, shutdown: Shutdown) -> Result<()> {
     let mut jobs = JoinSet::new();
     let parallel = Arc::new(Semaphore::new(4));
     for group in archived.all() {
         let parallel = parallel.clone();
         let archiver = archiver.clone();
+        let shutdown = shutdown.clone();
         jobs.spawn(async move {
             let _permit = parallel.acquire().await;
-            verify_group(archiver, group).await
+            verify_group(archiver, group, shutdown).await
         });
     }
-    let _ = jobs.join_all().await;
+    while !shutdown.is_signalled() {
+        tokio::select! {
+            _ = shutdown.signalled() => {
+                tracing::info!("Shutting down...");
+                jobs.shutdown().await
+            },
+            next = jobs.join_next() => {
+                if next.is_none() {
+                    break;
+                }
+            }
+        }
+    }
     Ok(())
 }
 
-async fn verify_group<B: BlockchainTypes, TS: TargetStorage>(archiver: Arc<Archiver<B, TS>>, group: ArchiveGroup) -> Result<()> {
+async fn verify_group<B: BlockchainTypes, TS: TargetStorage>(archiver: Arc<Archiver<B, TS>>, group: ArchiveGroup, shutdown: Shutdown) -> Result<()> {
     let delete = if !group.is_complete() {
         tracing::info!(range = %group.range, "Incomplete group");
         true
     } else {
-        if let Err(e) = verify_content(archiver.clone(), &group).await {
+        if let Err(e) = verify_content(archiver.clone(), &group, shutdown.clone()).await {
             tracing::info!(range = %group.range, "Invalid data in group: {}", e);
             true
+        } else if shutdown.is_signalled() {
+            return Ok(());
         } else {
             tracing::info!(range = %group.range, "Confirmed group");
             false
         }
     };
+    if shutdown.is_signalled() {
+        // when it's shutting down there (1) is not time for deletion and (2) most likely it got some invalid data as other threads are stopping
+        return Ok(());
+    }
     if delete {
         tracing::info!(range = %group.range, "Deleting group");
         for f in group.files() {
@@ -121,7 +138,7 @@ async fn verify_group<B: BlockchainTypes, TS: TargetStorage>(archiver: Arc<Archi
     Ok(())
 }
 
-async fn verify_content<B: BlockchainTypes, TS: TargetStorage>(archiver: Arc<Archiver<B, TS>>, group: &ArchiveGroup) -> Result<()> {
+async fn verify_content<B: BlockchainTypes, TS: TargetStorage>(archiver: Arc<Archiver<B, TS>>, group: &ArchiveGroup, shutdown: Shutdown) -> Result<()> {
     tracing::trace!(range = %group.range, "Verify group");
 
     tracing::trace!(range = %group.range, "Verify blocks");
@@ -132,31 +149,49 @@ async fn verify_content<B: BlockchainTypes, TS: TargetStorage>(archiver: Arc<Arc
 
     let mut heights = HashSet::new();
     let mut expected_txes = Vec::new();
-    while let Some(record) = blocks.recv().await {
-        let height = record.fields.iter()
-            .find(|f| f.0 == "height")
-            .ok_or(anyhow!("No height in the record"))?;
-        let height = match &height.1 {
-            Value::Long(h) => h.clone() as u64,
-            _ => return Err(anyhow!("Invalid height type: {:?}", height.1))
-        };
-        if !group.range.contains(height) {
-            return Err(anyhow!("Height is not in range: {}", height));
-        }
-        let first = heights.insert(height);
-        if !first {
-            return Err(anyhow!("Duplicate height: {}", height));
-        }
+    while !shutdown.is_signalled() {
+        tokio::select! {
+            _ = shutdown.signalled() => {
+                tracing::info!("Shutting down...");
+                return Ok(());
+            },
 
-        let json = record.fields.iter()
-            .find(|f| f.0 == "json")
-            .ok_or(anyhow!("No block json in the record"))?;
-        let json = match &json.1 {
-            Value::Bytes(b) => b.clone(),
-            _ => return Err(anyhow!("Invalid json type: {:?}", json.1))
-        };
-        let block = serde_json::from_slice::<B::BlockParsed>(json.as_slice())?;
-        expected_txes.extend(block.txes());
+            record = blocks.recv() => {
+                if record.is_none() {
+                    break
+                }
+                let record = record.unwrap();
+
+                let height = record.fields.iter()
+                    .find(|f| f.0 == "height")
+                    .ok_or(anyhow!("No height in the record"))?;
+                let height = match &height.1 {
+                    Value::Long(h) => h.clone() as u64,
+                    _ => return Err(anyhow!("Invalid height type: {:?}", height.1))
+                };
+                if !group.range.contains(height) {
+                    return Err(anyhow!("Height is not in range: {}", height));
+                }
+                let first = heights.insert(height);
+                if !first {
+                    return Err(anyhow!("Duplicate height: {}", height));
+                }
+
+                let json = record.fields.iter()
+                    .find(|f| f.0 == "json")
+                    .ok_or(anyhow!("No block json in the record"))?;
+                let json = match &json.1 {
+                    Value::Bytes(b) => b.clone(),
+                    _ => return Err(anyhow!("Invalid json type: {:?}", json.1))
+                };
+                let block = serde_json::from_slice::<B::BlockParsed>(json.as_slice())?;
+                expected_txes.extend(block.txes());
+            },
+        }
+    }
+
+    if shutdown.is_signalled() {
+        return Ok(());
     }
     if heights.len() != group.range.len() {
         return Err(anyhow!("Missing block"));
@@ -167,29 +202,45 @@ async fn verify_content<B: BlockchainTypes, TS: TargetStorage>(archiver: Arc<Arc
         .await?
         .read()?;
     let mut existing_txes = HashSet::new();
-    while let Some(record) = txes.recv().await {
-        let txid = record.fields.iter()
-            .find(|f| f.0 == "txid")
-            .ok_or(anyhow!("No txid in the record"))?;
-        let txid_str = match &txid.1 {
-            Value::String(s) => s.clone(),
-            _ => return Err(anyhow!("Invalid txid type: {:?}", txid.1))
-        };
+    while !shutdown.is_signalled() {
+        tokio::select! {
+            _ = shutdown.signalled() => {
+                tracing::info!("Shutting down...");
+                return Ok(());
+            },
+            record = txes.recv() => {
+                if record.is_none() {
+                    break
+                }
+                let record = record.unwrap();
+                let txid = record.fields.iter()
+                    .find(|f| f.0 == "txid")
+                    .ok_or(anyhow!("No txid in the record"))?;
+                let txid_str = match &txid.1 {
+                    Value::String(s) => s.clone(),
+                    _ => return Err(anyhow!("Invalid txid type: {:?}", txid.1))
+                };
 
-        let txid = B::TxId::from_str(&txid_str)
-            .map_err(|_| anyhow!("Invalid txid: {}", txid_str))?;
-        if !expected_txes.contains(&txid) {
-            return Err(anyhow!("Unexpected txid: {}", txid_str));
+                let txid = B::TxId::from_str(&txid_str)
+                    .map_err(|_| anyhow!("Invalid txid: {}", txid_str))?;
+                if !expected_txes.contains(&txid) {
+                    return Err(anyhow!("Unexpected txid: {}", txid_str));
+                }
+
+                verify_field_exist(&record, "json")?;
+                verify_field_exist(&record, "raw")?;
+                //TODO blockchain specific verification
+
+                let first = existing_txes.insert(txid);
+                if !first {
+                    return Err(anyhow!("Duplicate txid: {}", txid_str));
+                }
+            }
         }
+    }
 
-        verify_field_exist(&record, "json")?;
-        verify_field_exist(&record, "raw")?;
-        //TODO blockchain specific verification
-
-        let first = existing_txes.insert(txid);
-        if !first {
-            return Err(anyhow!("Duplicate txid: {}", txid_str));
-        }
+    if shutdown.is_signalled() {
+        return Ok(());
     }
     if existing_txes.len() != expected_txes.len() {
         return Err(anyhow!("Missing tx"));
@@ -259,7 +310,6 @@ mod tests {
 
         let command = VerifyCommand::new(
             &args,
-            Shutdown::new().unwrap(),
             archiver,
         ).unwrap();
 
@@ -304,7 +354,6 @@ mod tests {
 
         let command = VerifyCommand::new(
             &args,
-            Shutdown::new().unwrap(),
             archiver,
         ).unwrap();
 
@@ -386,7 +435,6 @@ mod tests {
 
         let command = VerifyCommand::new(
             &args,
-            Shutdown::new().unwrap(),
             archiver,
         ).unwrap();
 
@@ -448,7 +496,6 @@ mod tests {
 
         let command = VerifyCommand::new(
             &args,
-            Shutdown::new().unwrap(),
             archiver,
         ).unwrap();
 
@@ -502,7 +549,6 @@ mod tests {
 
         let command = VerifyCommand::new(
             &args,
-            Shutdown::new().unwrap(),
             archiver,
         ).unwrap();
 
