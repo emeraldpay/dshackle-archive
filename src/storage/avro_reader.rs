@@ -1,15 +1,14 @@
 use std::io::Read;
-use std::sync::mpsc::Receiver;
-use std::thread;
 use anyhow::anyhow;
 use apache_avro::Schema;
 use apache_avro::types::Record;
+use tokio::sync::mpsc::{unbounded_channel, UnboundedReceiver};
 use crate::avros;
 
-pub(super) fn consume_sync<R: Read + Send + 'static>(schema: &'static Schema, reader: R) -> Receiver<Record<'static>> {
-    let (tx, rx) = std::sync::mpsc::sync_channel(8);
+pub(super) fn consume_sync<R: Read + Send + 'static>(schema: &'static Schema, reader: R) -> UnboundedReceiver<Record<'static>> {
+    let (tx, rx) = unbounded_channel();
 
-    thread::spawn(move || {
+    tokio::task::spawn_blocking(move || {
         tracing::trace!("Reading avro file...");
         let avro_reader = apache_avro::Reader::with_schema(&schema, reader);
         if avro_reader.is_err() {
