@@ -45,6 +45,7 @@ pub mod datakind;
 pub mod filenames;
 pub mod avros;
 pub mod notify;
+mod global;
 
 fn init_tracing() {
     let filter = EnvFilter::builder()
@@ -194,13 +195,13 @@ impl<B, TS> BuilderWithData<B, TS> where B: BlockchainTypes + 'static, TS: Targe
     }
 
     fn verify(self, args: &Args) -> VerifyCommand<B, TS> {
-        let shutdown = shutdown::Shutdown::new().unwrap();
+        let shutdown = global::get_shutdown();
         let notifier = self.parent.parent.notifier.unwrap();
         let notifications = notifier.start();
         let archiver = Archiver::new(
             shutdown.clone(), Arc::new(self.parent.target), Arc::new(self.data), notifications
         );
-        let command = VerifyCommand::new(&args, shutdown, archiver).unwrap();
+        let command = VerifyCommand::new(&args, archiver).unwrap();
         command
     }
 }

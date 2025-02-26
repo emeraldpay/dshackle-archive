@@ -3,7 +3,7 @@ use anyhow::anyhow;
 use apache_avro::Schema;
 use apache_avro::types::Record;
 use tokio::sync::mpsc::{unbounded_channel, UnboundedReceiver};
-use crate::avros;
+use crate::{avros, global};
 
 pub(super) fn consume_sync<R: Read + Send + 'static>(schema: &'static Schema, reader: R) -> UnboundedReceiver<Record<'static>> {
     let (tx, rx) = unbounded_channel();
@@ -15,8 +15,12 @@ pub(super) fn consume_sync<R: Read + Send + 'static>(schema: &'static Schema, re
             tracing::error!("Error reading avro file: {:?}", avro_reader.err().unwrap());
             return
         }
+        let shutdown = global::get_shutdown();
         let mut avro_reader = avro_reader.unwrap();
         while let Some(record) = avro_reader.next() {
+            if shutdown.is_signalled() {
+                break
+            }
             let record = record
                 .map_err(|e| anyhow!("Error reading record: {:?}", e));
             if record.is_err() {
