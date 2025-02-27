@@ -273,7 +273,6 @@ mod tests {
     use std::sync::Arc;
     use object_store::memory::InMemory;
     use object_store::{ObjectMeta, ObjectStore};
-    use shutdown::Shutdown;
     use crate::args::Args;
     use crate::blockchain::mock::{MockBlock, MockData, MockTx, MockType};
     use crate::command::archiver::Archiver;

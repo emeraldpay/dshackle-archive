@@ -173,33 +173,30 @@ impl<B, TS> BuilderWithTarget<B, TS> where B: BlockchainTypes, TS: TargetStorage
 impl<B, TS> BuilderWithData<B, TS> where B: BlockchainTypes + 'static, TS: TargetStorage + 'static {
 
     async fn stream(self, args: &Args) -> StreamCommand<B, TS> {
-        let shutdown = shutdown::Shutdown::new().unwrap();
         let notifier = self.parent.parent.notifier.unwrap();
         let notifications = notifier.start();
         let archiver = Archiver::new(
-            shutdown.clone(), Arc::new(self.parent.target), Arc::new(self.data), notifications
+            Arc::new(self.parent.target), Arc::new(self.data), notifications
         );
-        let command = StreamCommand::new(&args, shutdown, archiver).await.unwrap();
+        let command = StreamCommand::new(&args, archiver).await.unwrap();
         command
     }
 
     fn fix(self, args: &Args) -> FixCommand<B, TS> {
-        let shutdown = shutdown::Shutdown::new().unwrap();
         let notifier = self.parent.parent.notifier.unwrap();
         let notifications = notifier.start();
         let archiver = Archiver::new(
-            shutdown.clone(), Arc::new(self.parent.target), Arc::new(self.data), notifications
+            Arc::new(self.parent.target), Arc::new(self.data), notifications
         );
         let command = FixCommand::new(&args, archiver).unwrap();
         command
     }
 
     fn verify(self, args: &Args) -> VerifyCommand<B, TS> {
-        let shutdown = global::get_shutdown();
         let notifier = self.parent.parent.notifier.unwrap();
         let notifications = notifier.start();
         let archiver = Archiver::new(
-            shutdown.clone(), Arc::new(self.parent.target), Arc::new(self.data), notifications
+            Arc::new(self.parent.target), Arc::new(self.data), notifications
         );
         let command = VerifyCommand::new(&args, archiver).unwrap();
         command

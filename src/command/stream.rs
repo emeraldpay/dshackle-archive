@@ -1,16 +1,10 @@
 use std::marker::PhantomData;
 use std::sync::Arc;
 use async_trait::async_trait;
-use crate::{
-    range::Range,
-    command::CommandExecutor,
-    args::Args,
-    blockchain::{
-        connection::{Blockchain}
-    },
-};
+use crate::{range::Range, command::CommandExecutor, args::Args, blockchain::{
+    connection::{Blockchain}
+}, global};
 use anyhow::{Result};
-use shutdown::Shutdown;
 use crate::blockchain::BlockchainTypes;
 use crate::command::archiver::Archiver;
 use crate::storage::TargetStorage;
@@ -23,14 +17,12 @@ use crate::storage::TargetStorage;
 pub struct StreamCommand<B: BlockchainTypes, TS: TargetStorage> {
     b: PhantomData<B>,
     blockchain: Arc<Blockchain>,
-    shutdown: Shutdown,
     continue_blocks: Option<u64>,
     archiver: Archiver<B, TS>,
 }
 
 impl<B: BlockchainTypes, TS: TargetStorage> StreamCommand<B, TS> {
     pub async fn new(config: &Args,
-                     shutdown: Shutdown,
                      archiver: Archiver<B, TS>
     ) -> Result<Self> {
         let blockchain = Arc::new(Blockchain::new(&config.connection, config.as_dshackle_blockchain()?).await?);
@@ -45,7 +37,6 @@ impl<B: BlockchainTypes, TS: TargetStorage> StreamCommand<B, TS> {
             b: PhantomData,
             blockchain,
             continue_blocks,
-            shutdown,
             archiver
         })
     }
@@ -58,9 +49,10 @@ impl<B: BlockchainTypes, TS: TargetStorage> CommandExecutor for StreamCommand<B,
         let mut heights = self.blockchain.subscribe_blocks().await?;
         let mut stop = false;
         let mut cotinued = self.continue_blocks.is_none();
+        let shutdown = global::get_shutdown();
         while !stop {
             tokio::select! {
-                _ = self.shutdown.signalled() => {
+                _ = shutdown.signalled() => {
                     tracing::info!("Shutdown signal received");
                     stop = true;
                 }
