@@ -4,12 +4,12 @@ use std::sync::Arc;
 use anyhow::anyhow;
 use chrono::Utc;
 use futures_util::future::join_all;
-use shutdown::Shutdown;
 use tokio::sync::mpsc::Sender;
 use crate::blockchain::{BlockReference, BlockchainData, BlockchainTypes};
 use crate::blockchain::connection::{Height};
 use crate::command::{ArchivesList, Blocks};
 use crate::datakind::DataKind;
+use crate::global;
 use crate::notify::{Notification, Notifier, RunMode};
 use crate::notify::empty::EmptyNotifier;
 use crate::range::Range;
@@ -22,7 +22,6 @@ pub struct Archiver<B: BlockchainTypes, TS: TargetStorage> {
     b: PhantomData<B>,
     pub target: Arc<TS>,
     pub data_provider: Arc<B::DataProvider>,
-    shutdown: Shutdown,
     notifications: Sender<Notification>,
 }
 
@@ -30,15 +29,13 @@ impl<B: BlockchainTypes, TS: TargetStorage> Archiver<B, TS> {
 
     pub fn new_simple(target: Arc<TS>, data_provider: Arc<B::DataProvider>) -> Self {
         Self::new(
-            Shutdown::new().unwrap(),
             target,
             data_provider,
             EmptyNotifier::default().start(),
         )
     }
 
-    pub fn new(shutdown: Shutdown,
-                     target: Arc<TS>,
+    pub fn new(target: Arc<TS>,
                      data_provider: Arc<B::DataProvider>,
                      notifications: Sender<Notification>,
     ) -> Self {
@@ -46,7 +43,6 @@ impl<B: BlockchainTypes, TS: TargetStorage> Archiver<B, TS> {
             b: PhantomData,
             target,
             data_provider,
-            shutdown,
             notifications,
         }
     }
@@ -113,7 +109,7 @@ impl<B: BlockchainTypes, TS: TargetStorage> Archiver<B, TS> {
         tracing::info!("Check if blocks are fully archived in range: {}", blocks);
         let mut existing = self.target.list(blocks.clone())?;
         let mut archived = ArchivesList::new();
-        let shutdown = self.shutdown.clone();
+        let shutdown = global::get_shutdown();
         while let Some(file) = existing.recv().await {
             archived.append(file)?;
         }
