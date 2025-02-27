@@ -51,27 +51,27 @@ mod tests {
     use crate::avros::{BLOCK_SCHEMA, TX_SCHEMA};
     use crate::testing;
 
-    #[test]
-    fn test_read_btc_723743_block() {
+    #[tokio::test]
+    async fn test_read_btc_723743_block() {
         testing::start_test();
         let file = std::fs::File::open("testdata/fullAvroFiles/000723743.block.avro").unwrap();
         let schema = &BLOCK_SCHEMA;
-        let rx = super::consume_sync(schema, file);
+        let mut rx = super::consume_sync(schema, file);
         let mut count = 0;
-        for record in rx.iter() {
+        while let Some(_record) = rx.recv().await {
             count += 1;
         }
         assert_eq!(count, 1);
     }
 
-    #[test]
-    fn test_read_btc_723743_txes() {
+    #[tokio::test]
+    async fn test_read_btc_723743_txes() {
         testing::start_test();
         let file = std::fs::File::open("testdata/fullAvroFiles/000723743.txes.avro").unwrap();
         let schema = &TX_SCHEMA;
-        let rx = super::consume_sync(schema, file);
+        let mut rx = super::consume_sync(schema, file);
         let mut count = 0;
-        for record in rx.iter() {
+        while let Some(_record) = rx.recv().await {
             count += 1;
         }
         assert_eq!(count, 2498);
