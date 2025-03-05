@@ -42,6 +42,10 @@ pub struct Args {
     /// Blocks Range (`N...M`)
     #[arg(long, short)]
     pub range: Option<String>,
+
+    /// Range chunk size (default 1000)
+    #[arg(long = "rangeChunk")]
+    pub range_chunk: Option<usize>,
 }
 
 impl Default for Args {
@@ -57,6 +61,7 @@ impl Default for Args {
             continue_last: false,
             tail: None,
             range: None,
+            range_chunk: Some(1000),
         }
     }
 }
@@ -81,6 +86,7 @@ pub enum Command {
     Stream,
     Fix,
     Verify,
+    Archive,
 }
 
 #[derive(Parser, Debug, Clone)]

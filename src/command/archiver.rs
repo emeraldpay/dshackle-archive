@@ -22,7 +22,7 @@ pub struct Archiver<B: BlockchainTypes, TS: TargetStorage> {
     b: PhantomData<B>,
     pub target: Arc<TS>,
     pub data_provider: Arc<B::DataProvider>,
-    notifications: Sender<Notification>,
+    pub notifications: Sender<Notification>,
 }
 
 impl<B: BlockchainTypes, TS: TargetStorage> Archiver<B, TS> {
@@ -47,15 +47,7 @@ impl<B: BlockchainTypes, TS: TargetStorage> Archiver<B, TS> {
         }
     }
 
-    pub async fn copy_block(&self, height: Height) -> anyhow::Result<()> {
-        tracing::info!("Archive block: {} {:?}", height.height, height.hash);
-        let start_time = Utc::now();
-        let archiver = self.data_provider.clone();
-        let range = Range::Single(height.height);
-        let block_file = self.target.create(DataKind::Blocks, &range)
-            .await
-            .map_err(|e| anyhow!("Unable to create file: {}", e))?;
-        let block_file_url = block_file.get_url();
+    pub async fn append_block(&self, block_file: &TS::Writer, height: &Height) -> anyhow::Result<(B::BlockParsed, Vec<B::TxId>)> {
         let block_ref = if let Some(hash) = &height.hash {
             BlockReference::Hash(
                 B::BlockHash::from_str(hash).map_err(|_| anyhow!("Not a valid hash"))?
@@ -63,11 +55,32 @@ impl<B: BlockchainTypes, TS: TargetStorage> Archiver<B, TS> {
         } else {
             BlockReference::height(height.height)
         };
-        let (record, block, txes) = archiver.fetch_block(&block_ref).await?;
-        let _ = match block_file.append(record).await {
-            Ok(_) => block_file.close().await?,
-            Err(e) => return Err(e)
-        };
+        let (record, block, txes) = self.data_provider.fetch_block(&block_ref).await?;
+        block_file.append(record).await?;
+        Ok((block, txes))
+    }
+
+    pub async fn append_txes(&self, tx_file: &TS::Writer, block: &B::BlockParsed, txes: &Vec<B::TxId>) -> anyhow::Result<()> {
+        for tx_index in 0..txes.len() {
+            let data = self.data_provider.fetch_tx(&block, tx_index).await?;
+            let _ = tx_file.append(data).await?;
+        }
+        Ok(())
+    }
+
+    ///
+    /// Archive a single block with all the transactions
+    pub async fn archive_single(&self, height: Height) -> anyhow::Result<()> {
+        let start_time = Utc::now();
+        let range = Range::Single(height.height);
+        let block_file = self.target.create(DataKind::Blocks, &range)
+            .await
+            .map_err(|e| anyhow!("Unable to create file: {}", e))?;
+        let block_file_url = block_file.get_url();
+
+        let (block, txes) = self.append_block(&block_file, &height).await?;
+        block_file.close().await?;
+
         let notification_block = Notification {
             // common fields
             version: Notification::version(),
@@ -87,10 +100,9 @@ impl<B: BlockchainTypes, TS: TargetStorage> Archiver<B, TS> {
             .await
             .map_err(|e| anyhow!("Unable to create file: {}", e))?;
         let tx_file_url = tx_file.get_url();
-        for tx_index in 0..txes.len() {
-            let data = archiver.fetch_tx(&block, tx_index).await?;
-            let _ = tx_file.append(data).await?;
-        }
+
+        self.append_txes(&tx_file, &block, &txes).await?;
+
         let _ = tx_file.close().await?;
         let notification_tx = Notification {
             file_type: DataKind::Transactions,
@@ -134,7 +146,7 @@ impl<B: BlockchainTypes, TS: TargetStorage> Archiver<B, TS> {
         while let Some(heights_next) = heights.next() {
             let mut jobs = Vec::new();
             for height in heights_next {
-                jobs.push(self.copy_block(Height { height: *height, hash: None }));
+                jobs.push(self.archive_single(Height { height: *height, hash: None }));
             }
             tokio::select! {
                 _ = shutdown.signalled() => {

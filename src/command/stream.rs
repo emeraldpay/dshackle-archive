@@ -64,7 +64,8 @@ impl<B: BlockchainTypes, TS: TargetStorage> CommandExecutor for StreamCommand<B,
                             ).await?;
                             cotinued = true;
                         }
-                        self.archiver.copy_block(height).await?;
+                        tracing::info!("Archive block: {} {:?}", height.height, height.hash);
+                        self.archiver.archive_single(height).await?;
                     } else {
                         stop = true;
                     }

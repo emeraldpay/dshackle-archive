@@ -157,4 +157,13 @@ pub struct Height {
     pub hash: Option<String>,
 }
 
+impl From<u64> for Height {
+    fn from(height: u64) -> Self {
+        Height {
+            height,
+            hash: None,
+        }
+    }
+}
+
 pub type TransactionId = String;

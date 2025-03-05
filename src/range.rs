@@ -64,17 +64,30 @@ impl Range {
         }
     }
 
-    pub fn contains(&self, height: u64) -> bool {
+    pub fn contains(&self, other: &Range) -> bool {
         match self {
-            Range::Single(h) => *h == height,
-            Range::Multiple(start, end) => *start <= height && height <= *end,
+            Range::Single(h) => match other {
+                Range::Single(ho) => *h == *ho,
+                Range::Multiple(_, _) => false
+            },
+            Range::Multiple(start, end) => match other {
+                Range::Single(h) => {
+                    *start <= *h && *h <= *end
+                }
+                Range::Multiple(other_start, other_end) => {
+                    *start >= *other_start && *end <= *other_end
+                }
+            }
         }
     }
 
     pub fn intersect(&self, other: &Self) -> bool {
         match self {
             Range::Single(h) => {
-                other.contains(*h)
+                match other {
+                    Range::Single(other_h) => *h == *other_h,
+                    Range::Multiple(other_start, other_end) => other_start <= h && h <= other_end
+                }
             }
             Range::Multiple(start, end) => {
                 match other {
@@ -100,6 +113,43 @@ impl Range {
             Range::Single(_) => 1,
             Range::Multiple(start, end) => (end - start + 1) as usize,
         }
+    }
+
+    pub fn join(self, another: Range) -> anyhow::Result<Self> {
+        if self.intersect(&another) {
+            let start = std::cmp::min(self.start(), another.start());
+            let end = std::cmp::max(self.end(), another.end());
+            Ok(Range::new(start, end))
+        } else {
+            Err(anyhow!("Ranges do not intersect"))
+        }
+    }
+
+    ///
+    /// Split this range into chunks of the given size.
+    /// Note that the chunks start at 0, not from the start of the range.
+    pub fn split_chunks(&self, chunk_size: usize) -> Vec<Self> {
+
+        match self {
+            Range::Single(_) => {
+                vec![self.clone()]
+            }
+            Range::Multiple(start, end) => {
+                let mut result = Vec::new();
+                // Find the chunk boundary that contains the start
+                let chunk_start = (start / chunk_size as u64) * chunk_size as u64;
+                let mut current_start = chunk_start;
+
+                while current_start <= *end {
+                    let current_end = std::cmp::min(current_start + chunk_size as u64 - 1, *end);
+                    let adjusted_start = std::cmp::max(current_start, *start);
+                    result.push(Range::new(adjusted_start, current_end));
+                    current_start = current_end + 1;
+                }
+                result
+            }
+        }
+
     }
 }
 
@@ -174,23 +224,23 @@ mod tests {
     #[test]
     fn test_range_contains_single() {
         let single = Range::Single(5);
-        assert!(single.contains(5));
-        assert!(!single.contains(4));
-        assert!(!single.contains(0));
-        assert!(!single.contains(6));
+        assert!(single.contains(&Range::Single(5)));
+        assert!(!single.contains(&Range::Single(4)));
+        assert!(!single.contains(&Range::Single(0)));
+        assert!(!single.contains(&Range::Single(6)));
     }
 
     #[test]
     fn test_range_contains_multi() {
         let multiple = Range::Multiple(3, 7);
-        assert!(multiple.contains(3));
-        assert!(multiple.contains(4));
-        assert!(multiple.contains(5));
-        assert!(multiple.contains(6));
-        assert!(multiple.contains(7));
-        assert!(!multiple.contains(8));
-        assert!(!multiple.contains(2));
-        assert!(!multiple.contains(0));
+        assert!(multiple.contains(&Range::Single(3)));
+        assert!(multiple.contains(&Range::Single(4)));
+        assert!(multiple.contains(&Range::Single(5)));
+        assert!(multiple.contains(&Range::Single(6)));
+        assert!(multiple.contains(&Range::Single(7)));
+        assert!(!multiple.contains(&Range::Single(8)));
+        assert!(!multiple.contains(&Range::Single(2)));
+        assert!(!multiple.contains(&Range::Single(0)));
     }
 
     #[test]
@@ -218,5 +268,61 @@ mod tests {
         assert!(!base.intersect(&Range::new(0, 10_000)));
         assert!(!base.intersect(&Range::new(21_001, 30_000)));
         assert!(!base.intersect(&Range::new(25_000, 30_000)));
+    }
+
+    #[test]
+    fn test_split_chunks_large() {
+        assert_eq!(
+            Range::new(123, 345).split_chunks(100),
+            vec![
+                Range::new(123, 199),
+                Range::new(200, 299),
+                Range::new(300, 345),
+            ]
+        )
+    }
+
+    #[test]
+    fn test_split_chunks_already_at_boundaries() {
+        assert_eq!(
+            Range::new(200, 999).split_chunks(200),
+            vec![
+                Range::new(200, 399),
+                Range::new(400, 599),
+                Range::new(600, 799),
+                Range::new(800, 999),
+            ]
+        )
+    }
+
+    #[test]
+    fn test_split_single() {
+        assert_eq!(
+            Range::Single(123).split_chunks(100),
+            vec![
+                Range::Single(123),
+            ]
+        )
+    }
+
+    #[test]
+    fn test_split_middle() {
+        assert_eq!(
+            Range::new(150, 250).split_chunks(100),
+            vec![
+                Range::new(150, 199),
+                Range::new(200, 250),
+            ]
+        )
+    }
+
+    #[test]
+    fn test_split_fits() {
+        assert_eq!(
+            Range::new(150, 250).split_chunks(1000),
+            vec![
+                Range::new(150, 250),
+            ]
+        )
     }
 }

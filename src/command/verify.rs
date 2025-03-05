@@ -169,7 +169,7 @@ async fn verify_content<B: BlockchainTypes, TS: TargetStorage>(archiver: Arc<Arc
                     Value::Long(h) => h.clone() as u64,
                     _ => return Err(anyhow!("Invalid height type: {:?}", height.1))
                 };
-                if !group.range.contains(height) {
+                if !group.range.contains(&Range::Single(height)) {
                     return Err(anyhow!("Height is not in range: {}", height));
                 }
                 let first = heights.insert(height);

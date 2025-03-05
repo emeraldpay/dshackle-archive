@@ -104,7 +104,7 @@ impl BlockchainData<EthereumType> for EthereumData {
         for (i, _uncle) in parsed_block.uncles.iter().enumerate() {
             let uncle = self.get_uncle(&parsed_block.header.hash, i).await?;
             // TODO should it verify if it has the same hash as expected?
-            record.put(format!("uncle{}Json", i).as_str(), uncle);
+            record.put(format!("uncle{}Json", i).as_str(), Value::Union(1, Box::new(Value::Bytes(uncle))));
         }
 
         for transaction in parsed_block.transactions.txns() {

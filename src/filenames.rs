@@ -61,18 +61,27 @@ impl Filenames {
                 format!("{}.{}.avro", self.range_padded(*height), suffix)
             },
             Range::Multiple(start, end) => {
-                format!("{}_{}.{}.avro", self.range_padded(*start), self.range_padded(*end), suffix)
+                format!("range-{}_{}.{}.avro", self.range_padded(*start), self.range_padded(*end), suffix)
             }
         }
     }
 
     pub fn relative_path(&self, kind: &DataKind, range: &Range) -> String {
-        let start_height = range.start();
-        format!("{}/{}/{}",
-            self.level_1(start_height),
-            self.level_2(start_height),
-            self.filename(kind, range)
-        )
+        match range {
+            Range::Single(start) => {
+                format!("{}/{}/{}",
+                        self.level_1(*start),
+                        self.level_2(*start),
+                        self.filename(kind, range)
+                )
+            }
+            Range::Multiple(start, _end) => {
+                format!("{}/{}",
+                        self.level_1(*start),
+                        self.filename(kind, range)
+                )
+            }
+        }
     }
 
     pub fn full_path(&self, relative: String) -> String {
@@ -177,6 +186,20 @@ mod tests {
         assert_eq!(filenames.path(&kind, &Range::Single(12005000)), "012000000/012005000/012005000.block.avro");
         assert_eq!(filenames.path(&kind, &Range::Single(12005001)), "012000000/012005000/012005001.block.avro");
         assert_eq!(filenames.path(&kind, &Range::Single(12345678)), "012000000/012345000/012345678.block.avro");
+    }
+
+    #[test]
+    fn multi_block_path() {
+        let filenames = Filenames::default();
+        let kind = DataKind::Blocks;
+        assert_eq!(filenames.path(&kind, &Range::Multiple(12000000, 12000999)), "012000000/range-012000000_012000999.blocks.avro");
+    }
+
+    #[test]
+    fn multi_tx_path() {
+        let filenames = Filenames::default();
+        let kind = DataKind::Transactions;
+        assert_eq!(filenames.path(&kind, &Range::Multiple(12000000, 12000999)), "012000000/range-012000000_012000999.txes.avro");
     }
 
     #[test]
