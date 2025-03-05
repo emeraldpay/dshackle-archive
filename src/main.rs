@@ -28,6 +28,7 @@ use emerald_api::{
     common::blockchain_ref::BlockchainType
 };
 use crate::args::Command;
+use crate::command::archive::ArchiveCommand;
 use crate::command::archiver::Archiver;
 use crate::command::fix::FixCommand;
 use crate::command::verify::VerifyCommand;
@@ -61,8 +62,8 @@ fn init_tracing() {
 }
 
 #[tokio::main]
-async fn main() -> Result<(), String>{
-    main_inner().await.map_err(|e| e.to_string())
+async fn main() -> Result<()>{
+    main_inner().await
 }
 
 async fn main_inner() -> Result<()> {
@@ -119,7 +120,11 @@ async fn run_with_target<B: BlockchainTypes + 'static, TS: TargetStorage + 'stat
         Command::Verify => {
             builder.verify(args)
                 .execute().await
-        }
+        },
+        Command::Archive => {
+            builder.archive(args)
+                .execute().await
+        },
     }
 }
 
@@ -199,6 +204,16 @@ impl<B, TS> BuilderWithData<B, TS> where B: BlockchainTypes + 'static, TS: Targe
             Arc::new(self.parent.target), Arc::new(self.data), notifications
         );
         let command = VerifyCommand::new(&args, archiver).unwrap();
+        command
+    }
+
+    fn archive(self, args: &Args) -> ArchiveCommand<B, TS> {
+        let notifier = self.parent.parent.notifier.unwrap();
+        let notifications = notifier.start();
+        let archiver = Archiver::new(
+            Arc::new(self.parent.target), Arc::new(self.data), notifications
+        );
+        let command = ArchiveCommand::new(&args, archiver).unwrap();
         command
     }
 }
