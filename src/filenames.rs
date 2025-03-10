@@ -11,10 +11,10 @@ lazy_static! {
 
 #[derive(Debug, Clone)]
 pub struct Filenames {
-    parent: String,
-    padding: usize,
-    dir_block_size_l1: u64,
-    dir_block_size_l2: u64,
+    pub parent: String,
+    pub padding: usize,
+    pub dir_block_size_l1: u64,
+    pub dir_block_size_l2: u64,
 }
 
 impl Filenames {
@@ -84,6 +84,13 @@ impl Filenames {
         }
     }
 
+    pub fn offset(&self, range: &Range) -> String {
+        match range {
+            Range::Single(start) => self.range_padded(*start),
+            Range::Multiple(start, _) => format!("range-{}", self.range_padded(*start))
+        }
+    }
+
     pub fn full_path(&self, relative: String) -> String {
         if self.parent.is_empty() {
             relative
@@ -94,14 +101,6 @@ impl Filenames {
 
     pub fn path(&self, kind: &DataKind, range: &Range) -> String {
         self.full_path(self.relative_path(kind, range))
-    }
-
-    pub fn levels(&self, height: u64) -> Level {
-        let level_height = (height / self.dir_block_size_l2) * self.dir_block_size_l2;
-        Level {
-            filenames: self,
-            height: level_height,
-        }
     }
 
     fn level_1(&self, value: u64) -> String {
@@ -131,26 +130,87 @@ impl Default for Filenames {
     }
 }
 
-pub struct Level<'a> {
-    pub filenames: &'a Filenames,
-    pub height: u64,
+pub trait Level {
+    fn dir(&self) -> String;
+    fn next(self) -> Self;
+    fn height(&self) -> u64;
 }
 
-impl <'a> Level<'a> {
+pub struct LevelDouble<'a> {
+    filenames: &'a Filenames,
+    height: u64,
+    step: u64
+}
 
-    pub fn next_l2(&self) -> Level<'a> {
-        let height = self.height + self.filenames.dir_block_size_l2;
+pub struct LevelSingle<'a> {
+    filenames: &'a Filenames,
+    height: u64,
+    step: u64
+}
 
-        Level {
-            filenames: self.filenames,
-            height,
+impl<'a> LevelDouble<'a> {
+    pub fn new(filenames: &'a Filenames, height: u64) -> Self {
+        let start_height = (height / filenames.dir_block_size_l2) * filenames.dir_block_size_l2;
+        LevelDouble {
+            filenames,
+            height: start_height,
+            step: filenames.dir_block_size_l2
         }
     }
+}
 
-    pub fn dir(&self) -> String {
+impl<'a> LevelSingle<'a> {
+    pub fn new(filenames: &'a Filenames, height: u64) -> Self {
+        let start_height = (height / filenames.dir_block_size_l1) * filenames.dir_block_size_l1;
+        LevelSingle {
+            filenames,
+            height: start_height,
+            step: filenames.dir_block_size_l1
+        }
+    }
+}
+
+
+impl<'a> Level for LevelDouble<'a> {
+
+    fn dir(&self) -> String {
         self.filenames.full_path(
             format!("{}/{}", self.filenames.level_1(self.height), self.filenames.level_2(self.height))
         )
+    }
+
+    fn next(self) -> Self {
+        LevelDouble {
+            filenames: self.filenames,
+            height: self.height + self.step,
+            step: self.step
+        }
+    }
+
+    fn height(&self) -> u64 {
+        self.height
+    }
+
+}
+
+impl<'a> Level for LevelSingle<'a> {
+
+    fn dir(&self) -> String {
+        self.filenames.full_path(
+            format!("{}", self.filenames.level_1(self.height))
+        )
+    }
+
+    fn next(self) -> Self {
+        LevelSingle {
+            filenames: self.filenames,
+            height: self.height + self.step,
+            step: self.step
+        }
+    }
+
+    fn height(&self) -> u64 {
+        self.height
     }
 
 }
@@ -205,58 +265,61 @@ mod tests {
     #[test]
     fn correct_level_dir() {
         let filenames = Filenames::default();
-        assert_eq!(filenames.levels(12000005).dir(), "012000000/012000000");
-        assert_eq!(filenames.levels(12345678).dir(), "012000000/012345000");
+        assert_eq!(LevelDouble::new(&filenames, 12000005).dir(), "012000000/012000000");
+        assert_eq!(LevelDouble::new(&filenames, 12345678).dir(), "012000000/012345000");
+
+        assert_eq!(LevelSingle::new(&filenames, 12000005).dir(), "012000000");
+        assert_eq!(LevelSingle::new(&filenames, 12345678).dir(), "012000000");
     }
 
     #[test]
     fn go_next_level2() {
         let filenames = Filenames::default();
-        let level = filenames.levels(12000005);
+        let level = LevelDouble::new(&filenames, 12000005);
         assert_eq!(level.dir(), "012000000/012000000");
 
-        let level = level.next_l2();
+        let level = level.next();
         assert_eq!(level.dir(), "012000000/012001000");
 
-        let level = level.next_l2();
+        let level = level.next();
         assert_eq!(level.dir(), "012000000/012002000");
     }
 
     #[test]
     fn go_next_level2_start() {
         let filenames = Filenames::default();
-        let level = filenames.levels(0);
+        let level = LevelDouble::new(&filenames, 0);
         assert_eq!(level.dir(), "000000000/000000000");
 
-        let level = level.next_l2();
+        let level = level.next();
         assert_eq!(level.dir(), "000000000/000001000");
 
-        let level = level.next_l2();
+        let level = level.next();
         assert_eq!(level.dir(), "000000000/000002000");
     }
 
     #[test]
     fn go_next_level2_at_the_end() {
         let filenames = Filenames::default();
-        let level = filenames.levels(12_998_005);
+        let level = LevelDouble::new(&filenames, 12_998_005);
         assert_eq!(level.dir(), "012000000/012998000");
 
-        let level = level.next_l2();
+        let level = level.next();
         assert_eq!(level.dir(), "012000000/012999000");
 
-        let level = level.next_l2();
+        let level = level.next();
         assert_eq!(level.dir(), "013000000/013000000");
 
-        let level = level.next_l2();
+        let level = level.next();
         assert_eq!(level.dir(), "013000000/013001000");
     }
 
     #[test]
     fn go_next_level2_starts_at_edge() {
         let filenames = Filenames::default();
-        let level = filenames.levels(21917490);
+        let level = LevelDouble::new(&filenames, 21917490);
         assert_eq!(level.height, 21917000);
-        let level = level.next_l2();
+        let level = level.next();
         assert_eq!(level.height, 21918000);
     }
 

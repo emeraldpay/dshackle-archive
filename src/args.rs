@@ -87,6 +87,7 @@ pub enum Command {
     Fix,
     Verify,
     Archive,
+    Compact,
 }
 
 #[derive(Parser, Debug, Clone)]

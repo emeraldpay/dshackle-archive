@@ -75,13 +75,13 @@ impl Range {
                     *start <= *h && *h <= *end
                 }
                 Range::Multiple(other_start, other_end) => {
-                    *start >= *other_start && *end <= *other_end
+                    *start <= *other_start && *end >= *other_end
                 }
             }
         }
     }
 
-    pub fn intersect(&self, other: &Self) -> bool {
+    pub fn is_intersected_with(&self, other: &Self) -> bool {
         match self {
             Range::Single(h) => {
                 match other {
@@ -108,6 +108,13 @@ impl Range {
         }
     }
 
+    pub fn is_connected_to(&self, another: &Self) -> bool {
+        if another.start() < self.start() {
+            return another.is_connected_to(self);
+        }
+        self.end() + 1 == another.start()
+    }
+
     pub fn len(&self) -> usize {
         match self {
             Range::Single(_) => 1,
@@ -116,7 +123,7 @@ impl Range {
     }
 
     pub fn join(self, another: Range) -> anyhow::Result<Self> {
-        if self.intersect(&another) {
+        if self.is_intersected_with(&another) || self.is_connected_to(&another) {
             let start = std::cmp::min(self.start(), another.start());
             let end = std::cmp::max(self.end(), another.end());
             Ok(Range::new(start, end))
@@ -151,6 +158,13 @@ impl Range {
         }
 
     }
+
+    pub fn first(&self) -> Self {
+        match self {
+            Range::Single(h) => Range::Single(*h),
+            Range::Multiple(start, _) => Range::Single(*start),
+        }
+    }
 }
 
 impl FromStr for Range {
@@ -158,6 +172,10 @@ impl FromStr for Range {
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         let parts: Vec<&str> = s.split("..").collect();
+        if parts.len() == 1 {
+            let h = parts[0].parse::<u64>()?;
+            return Ok(Range::Single(h));
+        }
         if parts.len() != 2 {
             return Err(anyhow!("Invalid range: {}", s));
         }
@@ -173,6 +191,12 @@ impl Display for Range {
             Range::Single(height) => write!(f, "{}", height),
             Range::Multiple(start, end) => write!(f, "{}..{}", start, end),
         }
+    }
+}
+
+impl From<u64> for Range {
+    fn from(h: u64) -> Self {
+        Range::Single(h)
     }
 }
 
@@ -244,30 +268,71 @@ mod tests {
     }
 
     #[test]
+    fn test_range_contains_parts() {
+        let large = Range::Multiple(1, 29);
+        assert!(large.contains(&Range::Multiple(1, 9)));
+        assert!(large.contains(&Range::Multiple(10, 19)));
+        assert!(large.contains(&Range::Multiple(20, 29)));
+    }
+
+    #[test]
     fn test_intersection() {
         let base = Range::new(20_000, 21_000);
 
-        assert!(base.intersect(&Range::new(0, 100_000)));
-        assert!(base.intersect(&Range::new(0, 21_000)));
-        assert!(base.intersect(&Range::new(0, 20_500)));
-        assert!(base.intersect(&Range::new(0, 20_001)));
-        assert!(base.intersect(&Range::new(10_000, 21_000)));
-        assert!(base.intersect(&Range::new(20_000, 21_000)));
-        assert!(base.intersect(&Range::new(20_000, 25_000)));
-        assert!(base.intersect(&Range::new(20_500, 21_000)));
-        assert!(base.intersect(&Range::new(20_500, 20_510)));
-        assert!(base.intersect(&Range::new(20_500, 21_500)));
-        assert!(base.intersect(&Range::new(20_999, 21_099)));
-        assert!(base.intersect(&Range::new(20_999, 21_000)));
+        assert!(base.is_intersected_with(&Range::new(0, 100_000)));
+        assert!(base.is_intersected_with(&Range::new(0, 21_000)));
+        assert!(base.is_intersected_with(&Range::new(0, 20_500)));
+        assert!(base.is_intersected_with(&Range::new(0, 20_001)));
+        assert!(base.is_intersected_with(&Range::new(10_000, 21_000)));
+        assert!(base.is_intersected_with(&Range::new(20_000, 21_000)));
+        assert!(base.is_intersected_with(&Range::new(20_000, 25_000)));
+        assert!(base.is_intersected_with(&Range::new(20_500, 21_000)));
+        assert!(base.is_intersected_with(&Range::new(20_500, 20_510)));
+        assert!(base.is_intersected_with(&Range::new(20_500, 21_500)));
+        assert!(base.is_intersected_with(&Range::new(20_999, 21_099)));
+        assert!(base.is_intersected_with(&Range::new(20_999, 21_000)));
+    }
+
+    #[test]
+    fn test_no_intersect_next() {
+        let base =  Range::new(1, 29);
+        let other = Range::new(30, 39);
+
+        assert!(!base.is_intersected_with(&other));
+        assert!(!other.is_intersected_with(&base));
+
+        let base =  Range::new(21_500_000, 21_599_999);
+        let other = Range::new(21_600_000, 21_600_999);
+
+        assert!(!base.is_intersected_with(&other));
+        assert!(!other.is_intersected_with(&base));
     }
 
     #[test]
     fn test_no_intersection() {
         let base = Range::new(20_000, 21_000);
 
-        assert!(!base.intersect(&Range::new(0, 10_000)));
-        assert!(!base.intersect(&Range::new(21_001, 30_000)));
-        assert!(!base.intersect(&Range::new(25_000, 30_000)));
+        assert!(!base.is_intersected_with(&Range::new(0, 10_000)));
+        assert!(!base.is_intersected_with(&Range::new(21_001, 30_000)));
+        assert!(!base.is_intersected_with(&Range::new(25_000, 30_000)));
+    }
+
+    #[test]
+    fn test_connected_next() {
+        let base =  Range::new(1, 29);
+        let other = Range::new(30, 39);
+
+        assert!(base.is_connected_to(&other));
+        assert!(other.is_connected_to(&base));
+    }
+
+    #[test]
+    fn test_not_connected_far() {
+        let base =  Range::new(1, 29);
+        let other = Range::new(40, 79);
+
+        assert!(!base.is_connected_to(&other));
+        assert!(!other.is_connected_to(&base));
     }
 
     #[test]
@@ -324,5 +389,29 @@ mod tests {
                 Range::new(150, 250),
             ]
         )
+    }
+
+    #[test]
+    fn parse_range() {
+        assert_eq!(
+            "1..10".parse::<Range>().unwrap(),
+            Range::new(1, 10)
+        );
+        assert_eq!(
+            "1000..1999".parse::<Range>().unwrap(),
+            Range::new(1000, 1999)
+        );
+    }
+
+    #[test]
+    fn parse_single() {
+        assert_eq!(
+            "1".parse::<Range>().unwrap(),
+            Range::Single(1)
+        );
+        assert_eq!(
+            "1999".parse::<Range>().unwrap(),
+            Range::Single(1999)
+        );
     }
 }

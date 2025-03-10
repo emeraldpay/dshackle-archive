@@ -7,7 +7,7 @@ use futures_util::future::join_all;
 use tokio::sync::mpsc::Sender;
 use crate::blockchain::{BlockReference, BlockchainData, BlockchainTypes};
 use crate::blockchain::connection::{Height};
-use crate::command::{ArchivesList, Blocks};
+use crate::command::{ArchivesList};
 use crate::datakind::DataKind;
 use crate::global;
 use crate::notify::{Notification, Notifier, RunMode};
@@ -161,22 +161,4 @@ impl<B: BlockchainTypes, TS: TargetStorage> Archiver<B, TS> {
         Ok(())
     }
 
-    pub async fn get_range(&self, blocks: &Blocks) -> anyhow::Result<Range> {
-        let range = match blocks {
-            Blocks::Tail(n) => {
-                // for the tail it's possibly that some data is still being written
-                // and so for the tail range we don't touch the last 4 blocks
-                // TODO blocks length should be configurable
-                let height = self.data_provider.height().await?.0 - 4;
-                let start = if height > *n {
-                    height - n
-                } else {
-                    0
-                };
-                Range::new(start, height)
-            }
-            Blocks::Range(range) => range.clone()
-        };
-        Ok(range)
-    }
 }

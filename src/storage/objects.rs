@@ -15,9 +15,10 @@ use tokio::{
     },
     io::AsyncWriteExt
 };
+use tokio::sync::mpsc::Sender;
 use tokio_util::io::{StreamReader, SyncIoBridge};
 use crate::datakind::DataKind;
-use crate::filenames::Filenames;
+use crate::filenames::{Filenames, Level, LevelDouble, LevelSingle};
 use crate::range::Range;
 use crate::storage::{avro_reader, copy, FileReference, TargetFile, TargetFileReader, TargetFileWriter, TargetStorage};
 
@@ -68,61 +69,95 @@ impl<S: ObjectStore> TargetStorage for ObjectsStorage<S> {
 
     fn list(&self, range: Range) -> anyhow::Result<Receiver<FileReference>> {
         let (tx, rx) = tokio::sync::mpsc::channel(2);
+
         let filenames = self.filenames.clone();
         let os = self.os.clone();
-
+        let tx_clone = tx.clone();
+        let range_clone = range.clone();
         tokio::spawn(async move {
-            let mut level = filenames.levels(range.start());
-            let mut prev: Option<Path> = None;
-            while level.height <= range.end() && !tx.is_closed() {
-                let path = Path::from(level.dir().as_str());
-                if prev.is_some() && prev.as_ref().unwrap() == &path {
-                    tracing::error!("Checking the same dir twice");
-                    return
-                }
-                prev = Some(path.clone());
-                tracing::debug!("List dir: {:?}", path);
-                let mut list = os.list(Some(&path));
-                while let Some(next) = list.next().await {
-                    if next.is_err() {
-                        tracing::warn!("Cannot read dir: {:?}", next.err().unwrap());
-                        break
-                    }
-                    let meta = next.unwrap();
-                    if tx.is_closed() {
-                        tracing::trace!("Channel closed");
-                        return
-                    }
-                    let filename = meta.location.filename();
-                    if filename.is_none() {
-                        tracing::trace!("No filename: {:?}", meta.location);
-                        continue
-                    }
-                    let filename = filename.unwrap();
-                    let is_archive = Filenames::parse(filename.to_string());
-                    if is_archive.is_none() {
-                        tracing::debug!("Not an archive: {}", filename);
-                        continue
-                    }
-                    let (kind, file_range) = is_archive.unwrap();
-                    if file_range.intersect(&range) {
-                        let r = FileReference {
-                            range: file_range,
-                            kind,
-                            path: meta.location.to_string(),
-                        };
-                        if let Err(e) = tx.send(r).await {
-                            tracing::warn!("Error listing archives: {:?}", e);
-                            return
-                        }
-                    }
-                }
-                tracing::trace!("Trying with next level...");
-                level = level.next_l2();
-            }
+            Self::list_single(os, tx_clone, filenames, &range_clone).await;
+        });
+
+        let filenames = self.filenames.clone();
+        let os = self.os.clone();
+        let tx = tx.clone();
+        tokio::spawn(async move {
+            Self::list_ranges(os, tx, filenames, &range).await;
         });
 
         Ok(rx)
+    }
+}
+
+impl<S: ObjectStore> ObjectsStorage<S> {
+    async fn list_single(os: Arc<S>, tx: Sender<FileReference>, filenames: Filenames, range: &Range) {
+        let level = LevelDouble::new(&filenames, range.start());
+        Self::list_by_steps(os, tx, range, level, filenames.offset(&range.first())).await;
+    }
+
+    async fn list_ranges(os: Arc<S>, tx: Sender<FileReference>, filenames: Filenames, range: &Range) {
+        let level = LevelSingle::new(&filenames, range.start());
+        Self::list_by_steps(os, tx, range, level, filenames.offset(range)).await;
+    }
+
+    async fn list_by_steps<L: Level>(os: Arc<S>, tx: Sender<FileReference>, range: &Range, mut level: L, file_prefix: String) {
+        let mut prev: Option<Path> = None;
+        while level.height() <= range.end() && !tx.is_closed() {
+            let path = Path::from(level.dir().as_str());
+            let offset = path.child(file_prefix.clone());
+            if prev.is_some() && prev.as_ref().unwrap() == &path {
+                tracing::error!(range = display(range), "Checking the same dir twice");
+                return
+            }
+            prev = Some(path.clone());
+            tracing::debug!(range = display(range), "List dir: {:?} starting from {:?}", path, offset);
+            let mut list = os.list_with_offset(Some(&path), &offset);
+            while let Some(next) = list.next().await {
+                if next.is_err() {
+                    tracing::warn!(range = display(range), "Cannot read dir: {:?}", next.err().unwrap());
+                    break
+                }
+                let meta = next.unwrap();
+                if tx.is_closed() {
+                    tracing::trace!(range = display(range), "Channel closed");
+                    return
+                }
+                let filename = meta.location.filename();
+                if filename.is_none() {
+                    tracing::trace!(range = display(range), "No filename: {:?}", meta.location);
+                    continue
+                }
+                let filename = filename.unwrap();
+                let is_archive = Filenames::parse(filename.to_string());
+                if is_archive.is_none() {
+                    tracing::debug!(range = display(range), "Not an archive: {}", filename);
+                    continue
+                }
+                let (kind, file_range) = is_archive.unwrap();
+                if file_range.is_intersected_with(&range) {
+
+                    println!("add file {}", meta.location.to_string());
+
+                    let r = FileReference {
+                        range: file_range,
+                        kind,
+                        path: meta.location.to_string(),
+                    };
+                    if let Err(e) = tx.send(r).await {
+                        tracing::warn!(range = display(range), "Error listing archives: {:?}", e);
+                        return
+                    }
+                } else if file_range.start() > range.end() {
+                    tracing::trace!(range = display(range), "End of the range: {}", file_range.start());
+                    return
+                } else {
+                    tracing::trace!(range = display(range), "Not in the range: {}", file_range.start());
+                }
+            }
+            tracing::trace!(range = display(range), "Trying with next level...");
+            level = level.next();
+        }
+        tracing::trace!(range = display(range), "End of the range");
     }
 }
 
@@ -344,7 +379,7 @@ mod tests {
             ).await.unwrap();
         }
 
-        let storage = ObjectsStorage::new(mem, "test".to_string(), Filenames::with_dir("archive/eth".to_string()));
+        let storage = ObjectsStorage::new(mem.clone(), "test".to_string(), Filenames::with_dir("archive/eth".to_string()));
 
         let files = storage.list(range);
         if let Err(e) = files {
@@ -447,6 +482,34 @@ mod tests {
         assert_eq!(files[0].path, "archive/eth/021000000/021596000/021596362.block.avro");
         assert_eq!(files[1].path, "archive/eth/021000000/021596000/021596362.txes.avro");
         assert_eq!(files[6].path, "archive/eth/021000000/021598000/021598444.txes.avro");
+    }
+
+    #[tokio::test]
+    pub async fn test_list_with_ranges() {
+        testing::start_test();
+        let files = list(
+            Range::new(21_500_000, 21_599_999),
+            vec![
+                "archive/eth/021000000/021596000/021596362.block.avro",
+                "archive/eth/021000000/021596000/021596362.txes.avro",
+                "archive/eth/021000000/range-021596000_021596999.blocks.avro",
+                "archive/eth/021000000/range-021596000_021596999.txes.avro",
+                "archive/eth/021000000/range-021597000_021597999.blocks.avro",
+                "archive/eth/021000000/range-021597000_021597999.txes.avro",
+                "archive/eth/021000000/range-021600000_021600999.blocks.avro",
+                "archive/eth/021000000/range-021600000_021600999.txes.avro",
+            ]
+        ).await;
+
+        println!("Files: {:?}", files);
+
+        assert_eq!(files.len(), 6);
+        assert_eq!(files[0].path, "archive/eth/021000000/021596000/021596362.block.avro");
+        assert_eq!(files[1].path, "archive/eth/021000000/021596000/021596362.txes.avro");
+        assert_eq!(files[2].path, "archive/eth/021000000/range-021596000_021596999.blocks.avro");
+        assert_eq!(files[3].path, "archive/eth/021000000/range-021596000_021596999.txes.avro");
+        assert_eq!(files[4].path, "archive/eth/021000000/range-021597000_021597999.blocks.avro");
+        assert_eq!(files[5].path, "archive/eth/021000000/range-021597000_021597999.txes.avro");
     }
 
     #[tokio::test]

@@ -30,6 +30,7 @@ use emerald_api::{
 use crate::args::Command;
 use crate::command::archive::ArchiveCommand;
 use crate::command::archiver::Archiver;
+use crate::command::compact::CompactCommand;
 use crate::command::fix::FixCommand;
 use crate::command::verify::VerifyCommand;
 
@@ -47,6 +48,8 @@ pub mod filenames;
 pub mod avros;
 pub mod notify;
 mod global;
+mod range_bag;
+mod blocks_config;
 
 fn init_tracing() {
     let filter = EnvFilter::builder()
@@ -123,6 +126,10 @@ async fn run_with_target<B: BlockchainTypes + 'static, TS: TargetStorage + 'stat
         },
         Command::Archive => {
             builder.archive(args)
+                .execute().await
+        },
+        Command::Compact => {
+            builder.compact(args)
                 .execute().await
         },
     }
@@ -214,6 +221,16 @@ impl<B, TS> BuilderWithData<B, TS> where B: BlockchainTypes + 'static, TS: Targe
             Arc::new(self.parent.target), Arc::new(self.data), notifications
         );
         let command = ArchiveCommand::new(&args, archiver).unwrap();
+        command
+    }
+
+    fn compact(self, args: &Args) -> CompactCommand<B, TS> {
+        let notifier = self.parent.parent.notifier.unwrap();
+        let notifications = notifier.start();
+        let archiver = Archiver::new(
+            Arc::new(self.parent.target), Arc::new(self.data), notifications
+        );
+        let command = CompactCommand::new(&args, archiver).unwrap();
         command
     }
 }
