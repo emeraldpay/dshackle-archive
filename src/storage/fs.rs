@@ -6,7 +6,7 @@ use apache_avro::types::Record;
 use apache_avro::{Codec, Writer};
 use async_trait::async_trait;
 use crate::datakind::DataKind;
-use crate::filenames::Filenames;
+use crate::filenames::{Filenames, Level, LevelDouble};
 use crate::range::Range;
 use crate::storage::{avro_reader, copy, FileReference, TargetFile, TargetFileReader, TargetFileWriter, TargetStorage};
 use anyhow::{anyhow, Context, Result};
@@ -61,9 +61,9 @@ impl TargetStorage for FsStorage {
         let parent_dir = self.parent_dir.clone();
 
         tokio::spawn(async move {
-            let mut level = filenames.levels(range.start());
+            let mut level = LevelDouble::new(&filenames, range.start());
             let mut prev = PathBuf::new();
-            while level.height < range.end() {
+            while level.height() < range.end() {
                 let dir = parent_dir.join(level.dir());
                 if dir == prev {
                     tracing::error!("Checking the same dir twice");
@@ -109,7 +109,7 @@ impl TargetStorage for FsStorage {
                             continue
                         }
                         let (kind, file_range) = is_archive.unwrap();
-                        if file_range.intersect(&range) {
+                        if file_range.is_intersected_with(&range) {
                             let r = FileReference {
                                 range: file_range,
                                 kind,
@@ -121,7 +121,7 @@ impl TargetStorage for FsStorage {
                         }
                     }
                 }
-                level = level.next_l2();
+                level = level.next();
             }
         });
         Ok(rx)

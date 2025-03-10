@@ -10,8 +10,9 @@ use tokio::sync::Semaphore;
 use tokio::task::JoinSet;
 use crate::blockchain::{BlockDetails, BlockchainTypes};
 use crate::command::archiver::Archiver;
-use crate::command::{ArchiveGroup, ArchivesList, Blocks, CommandExecutor};
-use crate::global;
+use crate::command::{ArchiveGroup, ArchivesList, CommandExecutor};
+use crate::{avros, global};
+use crate::blocks_config::Blocks;
 use crate::range::Range;
 use crate::storage::TargetStorage;
 use crate::storage::TargetFileReader;
@@ -33,17 +34,9 @@ impl<B: BlockchainTypes + 'static, TS: TargetStorage + 'static> VerifyCommand<B,
                archiver: Archiver<B, TS>,
     ) -> anyhow::Result<Self> {
 
-        let blocks = if let Some(tail) = config.tail {
-            Blocks::Tail(tail)
-        } else if let Some(range) = &config.range {
-            Blocks::Range(Range::from_str(range)?)
-        } else {
-            return Err(anyhow!("Either `tail` or `range` should be specified"));
-        };
-
         Ok(Self {
             b: PhantomData,
-            blocks,
+            blocks: Blocks::try_from(config)?,
             archiver: Arc::new(archiver),
         })
     }
@@ -54,7 +47,7 @@ impl<B: BlockchainTypes + 'static, TS: TargetStorage + 'static> VerifyCommand<B,
 impl<B: BlockchainTypes + 'static, FR: TargetStorage + 'static> CommandExecutor for VerifyCommand<B, FR> {
 
     async fn execute(&self) -> anyhow::Result<()> {
-        let range = self.archiver.get_range(&self.blocks).await?;
+        let range = self.blocks.to_range(self.archiver.data_provider.as_ref()).await?;
         tracing::info!(range = %range, "Verifying range");
 
         let mut existing = self.archiver.target.list(range)?;
@@ -162,13 +155,7 @@ async fn verify_content<B: BlockchainTypes, TS: TargetStorage>(archiver: Arc<Arc
                 }
                 let record = record.unwrap();
 
-                let height = record.fields.iter()
-                    .find(|f| f.0 == "height")
-                    .ok_or(anyhow!("No height in the record"))?;
-                let height = match &height.1 {
-                    Value::Long(h) => h.clone() as u64,
-                    _ => return Err(anyhow!("Invalid height type: {:?}", height.1))
-                };
+                let height = avros::get_height(&record)?;
                 if !group.range.contains(&Range::Single(height)) {
                     return Err(anyhow!("Height is not in range: {}", height));
                 }
@@ -512,7 +499,7 @@ mod tests {
         testing::start_test();
         let mem = Arc::new(InMemory::new());
         let archiver = create_archiver(mem.clone());
-        let data = MockData::new("TEST");
+        let data = archiver.data_provider.clone();
 
         let block100 = MockBlock {
             height: 100,
@@ -524,19 +511,7 @@ mod tests {
             hash: "TX001".to_string(),
         });
 
-        let blocks = archiver.target
-            .create(DataKind::Blocks, &Range::Single(100))
-            .await.expect("Create block");
-        let record = data.fetch_block(&BlockReference::Height(100)).await.unwrap();
-        blocks.append(record.0).await.unwrap();
-        blocks.close().await.unwrap();
-
-        let txes = archiver.target
-            .create(DataKind::Transactions, &Range::Single(100))
-            .await.expect("Create txes");
-        let record = data.fetch_tx(&block100, 0).await.unwrap();
-        txes.append(record).await.unwrap();
-        txes.close().await.unwrap();
+        testing::write_block_and_tx(&archiver, 100, Some(vec![0])).await.unwrap();
 
         let files = testing::list_mem_filenames(mem.clone()).await;
         assert_eq!(files.len(), 2);

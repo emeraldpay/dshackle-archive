@@ -9,6 +9,7 @@ pub mod fix;
 pub mod archiver;
 pub mod verify;
 pub mod archive;
+pub mod compact;
 
 ///
 /// A base trait for Dshackle Archive commands (i.e., for `stream`, `archive`, `compact`, etc.)
@@ -18,12 +19,6 @@ pub trait CommandExecutor {
     ///
     /// Executes the command
     async fn execute(&self) -> Result<()>;
-}
-
-#[derive(Clone)]
-pub enum Blocks {
-    Tail(u64),
-    Range(Range),
 }
 
 ///

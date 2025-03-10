@@ -193,3 +193,13 @@ pub fn to_record<'s>(schema: &'s Schema, value: Value) -> anyhow::Result<Record<
         _ => Err(anyhow!("Expected a record, got {:?}", value))
     }
 }
+
+pub fn get_height(record: &Record) -> anyhow::Result<u64> {
+    let height = record.fields.iter()
+        .find(|f| f.0 == "height")
+        .ok_or(anyhow!("No height in the record"))?;
+    match &height.1 {
+        Value::Long(h) => Ok(h.clone() as u64),
+        _ => Err(anyhow!("Invalid height type: {:?}", height.1))
+    }
+}

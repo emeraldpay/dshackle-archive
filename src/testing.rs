@@ -5,6 +5,12 @@ use object_store::{ObjectMeta, ObjectStore};
 use tracing_subscriber::filter::Targets;
 use tracing_subscriber::Layer;
 use tracing_subscriber::layer::SubscriberExt;
+use crate::blockchain::{BlockReference, BlockchainData};
+use crate::blockchain::mock::{MockType};
+use crate::command::archiver::Archiver;
+use crate::datakind::DataKind;
+use crate::range::Range;
+use crate::storage::{TargetFileWriter, TargetStorage};
 
 static INIT: std::sync::Once = std::sync::Once::new();
 
@@ -44,4 +50,35 @@ pub async fn list_mem_filenames(mem: Arc<InMemory>) -> Vec<String> {
     list_mem_files(mem).await.into_iter()
         .map(|m| m.location.as_ref().to_string())
         .collect()
+}
+
+pub async fn write_block_and_tx<TS: TargetStorage>(
+    archiver: &Archiver<MockType, TS>,
+    height: u64, tx_index: Option<Vec<usize>>
+) -> anyhow::Result<()> {
+    let block = archiver.data_provider.find_block(height).unwrap();
+    let file_block = archiver.target
+        .create(DataKind::Blocks, &Range::Single(height))
+        .await.expect("Create block");
+
+    let record = archiver.data_provider.fetch_block(&BlockReference::Height(height)).await?;
+    file_block.append(record.0).await?;
+    file_block.close().await?;
+
+    let file_txes = archiver.target
+        .create(DataKind::Transactions, &Range::Single(height))
+        .await.expect("Create txes");
+
+    let txes = match tx_index {
+        None => block.transactions.iter().enumerate().map(|(i, _)| i).collect(),
+        Some(v) => v,
+    };
+
+    for i in txes {
+        let record = archiver.data_provider.fetch_tx(&block, i).await?;
+        file_txes.append(record).await?;
+    }
+    file_txes.close().await?;
+
+    Ok(())
 }

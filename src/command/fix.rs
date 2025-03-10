@@ -1,12 +1,10 @@
 use std::marker::PhantomData;
-use std::str::FromStr;
-use anyhow::anyhow;
 use async_trait::async_trait;
 use crate::args::Args;
 use crate::blockchain::{BlockchainTypes};
+use crate::blocks_config::Blocks;
 use crate::command::archiver::Archiver;
-use crate::command::{Blocks, CommandExecutor};
-use crate::range::Range;
+use crate::command::{CommandExecutor};
 use crate::storage::TargetStorage;
 
 ///
@@ -23,18 +21,11 @@ pub struct FixCommand<B: BlockchainTypes, TS: TargetStorage> {
 impl<B: BlockchainTypes, TS: TargetStorage> FixCommand<B, TS> {
     pub fn new(config: &Args,
                archiver: Archiver<B, TS>) -> anyhow::Result<Self> {
-        let blocks = if let Some(tail) = config.tail {
-            Blocks::Tail(tail)
-        } else if let Some(range) = &config.range {
-            Blocks::Range(Range::from_str(range)?)
-        } else {
-            return Err(anyhow!("Either `tail` or `range` should be specified"));
-        };
 
         Ok(Self {
             b: PhantomData,
             archiver,
-            blocks,
+            blocks: Blocks::try_from(config)?,
         })
     }
 }
@@ -43,7 +34,7 @@ impl<B: BlockchainTypes, TS: TargetStorage> FixCommand<B, TS> {
 impl<B: BlockchainTypes, TS: TargetStorage> CommandExecutor for FixCommand<B, TS> {
 
     async fn execute(&self) -> anyhow::Result<()> {
-        let range = self.archiver.get_range(&self.blocks).await?;
+        let range = self.blocks.to_range(self.archiver.data_provider.as_ref()).await?;
         tracing::info!("Fixing range: {}", range);
         self.archiver.ensure_all(range).await
     }

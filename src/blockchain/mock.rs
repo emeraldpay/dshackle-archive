@@ -57,6 +57,13 @@ impl MockData {
         }
     }
 
+    pub fn find_block(&self, height: u64) -> Option<MockBlock> {
+        let blocks = self.blocks.lock().unwrap();
+        blocks.iter()
+            .find(|b| b.height == height)
+            .cloned()
+    }
+
     pub fn add_block(&self, block: MockBlock) {
         let mut blocks = self.blocks.lock().unwrap();
         blocks.push(block);
