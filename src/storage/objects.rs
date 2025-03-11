@@ -20,7 +20,7 @@ use tokio_util::io::{StreamReader, SyncIoBridge};
 use crate::datakind::DataKind;
 use crate::filenames::{Filenames, Level, LevelDouble, LevelSingle};
 use crate::range::Range;
-use crate::storage::{avro_reader, copy, FileReference, TargetFile, TargetFileReader, TargetFileWriter, TargetStorage};
+use crate::storage::{avro_reader, copy, sorted_files, FileReference, TargetFile, TargetFileReader, TargetFileWriter, TargetStorage};
 
 pub struct ObjectsStorage<S: ObjectStore> {
     os: Arc<S>,
@@ -68,24 +68,24 @@ impl<S: ObjectStore> TargetStorage for ObjectsStorage<S> {
     }
 
     fn list(&self, range: Range) -> anyhow::Result<Receiver<FileReference>> {
-        let (tx, rx) = tokio::sync::mpsc::channel(2);
-
+        let (tx_single, rx_single) = tokio::sync::mpsc::channel(2);
         let filenames = self.filenames.clone();
         let os = self.os.clone();
-        let tx_clone = tx.clone();
         let range_clone = range.clone();
         tokio::spawn(async move {
-            Self::list_single(os, tx_clone, filenames, &range_clone).await;
+            Self::list_single(os, tx_single, filenames, &range_clone).await;
         });
 
+        let (tx_range, rx_range) = tokio::sync::mpsc::channel(2);
         let filenames = self.filenames.clone();
         let os = self.os.clone();
-        let tx = tx.clone();
         tokio::spawn(async move {
-            Self::list_ranges(os, tx, filenames, &range).await;
+            Self::list_ranges(os, tx_range, filenames, &range).await;
         });
 
-        Ok(rx)
+        let sorted = sorted_files::merge_sort(rx_single, rx_range);
+
+        Ok(sorted)
     }
 }
 
@@ -504,10 +504,10 @@ mod tests {
         println!("Files: {:?}", files);
 
         assert_eq!(files.len(), 6);
-        assert_eq!(files[0].path, "archive/eth/021000000/021596000/021596362.block.avro");
-        assert_eq!(files[1].path, "archive/eth/021000000/021596000/021596362.txes.avro");
-        assert_eq!(files[2].path, "archive/eth/021000000/range-021596000_021596999.blocks.avro");
-        assert_eq!(files[3].path, "archive/eth/021000000/range-021596000_021596999.txes.avro");
+        assert_eq!(files[0].path, "archive/eth/021000000/range-021596000_021596999.blocks.avro");
+        assert_eq!(files[1].path, "archive/eth/021000000/range-021596000_021596999.txes.avro");
+        assert_eq!(files[2].path, "archive/eth/021000000/021596000/021596362.block.avro");
+        assert_eq!(files[3].path, "archive/eth/021000000/021596000/021596362.txes.avro");
         assert_eq!(files[4].path, "archive/eth/021000000/range-021597000_021597999.blocks.avro");
         assert_eq!(files[5].path, "archive/eth/021000000/range-021597000_021597999.txes.avro");
     }
