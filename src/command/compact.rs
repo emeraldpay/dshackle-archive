@@ -34,7 +34,7 @@ impl<B: BlockchainTypes, TS: TargetStorage + 'static> CommandExecutor for Compac
         let shutdown = global::get_shutdown();
         let range = self.blocks.to_range(self.archiver.data_provider.as_ref()).await?;
         tracing::info!(range = display(&range), "Compacting all in range");
-        let chunks = range.split_chunks(self.chunk_size);
+        let chunks = range.split_chunks(self.chunk_size, self.blocks.is_tail());
 
         let mut files = self.archiver.target.list(range.clone())?;
 
