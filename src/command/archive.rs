@@ -32,7 +32,7 @@ impl<B: BlockchainTypes, TS: TargetStorage> CommandExecutor for ArchiveCommand<B
 
     async fn execute(&self) -> anyhow::Result<()> {
         let shutdown = global::get_shutdown();
-        let ranges = self.range.split_chunks(self.chunk_size);
+        let ranges = self.range.split_chunks(self.chunk_size, false);
 
         for subrange in ranges {
             if shutdown.is_signalled() {

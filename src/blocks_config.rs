@@ -43,4 +43,12 @@ impl Blocks {
         };
         Ok(range)
     }
+
+    pub fn is_tail(&self) -> bool {
+        matches!(self, Blocks::Tail(_))
+    }
+
+    pub fn is_range(&self) -> bool {
+        matches!(self, Blocks::Range(_))
+    }
 }

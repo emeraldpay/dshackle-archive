@@ -135,10 +135,15 @@ impl Range {
     ///
     /// Split this range into chunks of the given size.
     /// Note that the chunks start at 0, not from the start of the range.
-    pub fn split_chunks(&self, chunk_size: usize) -> Vec<Self> {
+    /// @param chunk_size The size of the chunks
+    /// @param aligned If true, returns only chunks starting and ending at the chunk boundary. (i.e., if chunk size is 100, returns 100..199, for initial range 95..201)
+    pub fn split_chunks(&self, chunk_size: usize, aligned: bool) -> Vec<Self> {
 
         match self {
             Range::Single(_) => {
+                if aligned && chunk_size != 1{
+                    return vec![];
+                }
                 vec![self.clone()]
             }
             Range::Multiple(start, end) => {
@@ -147,8 +152,24 @@ impl Range {
                 let chunk_start = (start / chunk_size as u64) * chunk_size as u64;
                 let mut current_start = chunk_start;
 
+                if aligned {
+                    let is_aligned = current_start == *start;
+                    if !is_aligned {
+                        current_start = (start / chunk_size as u64 + 1) * chunk_size as u64;
+                    }
+                }
+
                 while current_start <= *end {
                     let current_end = std::cmp::min(current_start + chunk_size as u64 - 1, *end);
+
+                    if aligned {
+                        let is_aligned = current_end % chunk_size as u64 == chunk_size as u64 - 1;
+                        if !is_aligned {
+                            // reached after the boundary of the initial range
+                            break
+                        }
+                    }
+
                     let adjusted_start = std::cmp::max(current_start, *start);
                     result.push(Range::new(adjusted_start, current_end));
                     current_start = current_end + 1;
@@ -338,57 +359,102 @@ mod tests {
     #[test]
     fn test_split_chunks_large() {
         assert_eq!(
-            Range::new(123, 345).split_chunks(100),
+            Range::new(123, 345).split_chunks(100, false),
             vec![
                 Range::new(123, 199),
                 Range::new(200, 299),
                 Range::new(300, 345),
             ]
-        )
+        );
+        assert_eq!(
+            Range::new(153, 407).split_chunks(100, false),
+            vec![
+                Range::new(153, 199),
+                Range::new(200, 299),
+                Range::new(300, 399),
+                Range::new(400, 407),
+            ]
+        );
+
+        assert_eq!(
+            Range::new(123, 345).split_chunks(100, true),
+            vec![
+                Range::new(200, 299),
+            ]
+        );
+        assert_eq!(
+            Range::new(153, 407).split_chunks(100, true),
+            vec![
+                Range::new(200, 299),
+                Range::new(300, 399),
+            ]
+        );
     }
 
     #[test]
     fn test_split_chunks_already_at_boundaries() {
         assert_eq!(
-            Range::new(200, 999).split_chunks(200),
+            Range::new(200, 999).split_chunks(200, false),
             vec![
                 Range::new(200, 399),
                 Range::new(400, 599),
                 Range::new(600, 799),
                 Range::new(800, 999),
             ]
-        )
+        );
+        assert_eq!(
+            Range::new(200, 999).split_chunks(200, true),
+            vec![
+                Range::new(200, 399),
+                Range::new(400, 599),
+                Range::new(600, 799),
+                Range::new(800, 999),
+            ]
+        );
     }
 
     #[test]
     fn test_split_single() {
         assert_eq!(
-            Range::Single(123).split_chunks(100),
+            Range::Single(123).split_chunks(100, false),
             vec![
                 Range::Single(123),
             ]
-        )
+        );
+
+        assert_eq!(
+            Range::Single(123).split_chunks(100, true),
+            vec![]
+        );
     }
 
     #[test]
     fn test_split_middle() {
         assert_eq!(
-            Range::new(150, 250).split_chunks(100),
+            Range::new(150, 250).split_chunks(100, false),
             vec![
                 Range::new(150, 199),
                 Range::new(200, 250),
             ]
-        )
+        );
+        assert_eq!(
+            Range::new(150, 250).split_chunks(100, true),
+            vec![]
+        );
     }
 
     #[test]
     fn test_split_fits() {
         assert_eq!(
-            Range::new(150, 250).split_chunks(1000),
+            Range::new(150, 250).split_chunks(1000, false),
             vec![
                 Range::new(150, 250),
             ]
-        )
+        );
+        assert_eq!(
+            Range::new(150, 250).split_chunks(1000, true),
+            vec![]
+        );
     }
 
     #[test]
