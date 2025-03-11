@@ -13,19 +13,27 @@ pub fn merge_sort<T>(mut left: Receiver<T>, mut right: Receiver<T>) -> Receiver<
             match (&left_val, &right_val) {
                 (Some(l), Some(r)) => {
                     if l <= r {
-                        tx.send(left_val.take().unwrap()).await.unwrap();
+                        if let Err(_) = tx.send(left_val.take().unwrap()).await {
+                            break;
+                        }
                         left_val = left.recv().await;
                     } else {
-                        tx.send(right_val.take().unwrap()).await.unwrap();
+                        if let Err(_) = tx.send(right_val.take().unwrap()).await {
+                            break;
+                        }
                         right_val = right.recv().await;
                     }
                 }
                 (Some(_), None) => {
-                    tx.send(left_val.take().unwrap()).await.unwrap();
+                    if let Err(_) = tx.send(left_val.take().unwrap()).await {
+                        break;
+                    }
                     left_val = left.recv().await;
                 }
                 (None, Some(_)) => {
-                    tx.send(right_val.take().unwrap()).await.unwrap();
+                    if let Err(_) = tx.send(right_val.take().unwrap()).await {
+                        break;
+                    }
                     right_val = right.recv().await;
                 }
                 (None, None) => break,
