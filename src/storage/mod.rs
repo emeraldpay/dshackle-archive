@@ -18,6 +18,7 @@ pub mod fs;
 pub mod objects;
 mod avro_reader;
 mod copy;
+mod sorted_files;
 
 pub fn is_s3(args: &Args) -> bool {
     args.aws.is_some()
@@ -149,9 +150,21 @@ pub trait TargetFileReader: TargetFile {
     fn read(self) -> Result<Receiver<Record<'static>>>;
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FileReference {
     pub path: String,
     pub kind: DataKind,
     pub range: Range,
+}
+
+impl Ord for FileReference {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        self.range.start().cmp(&other.range.start())
+    }
+}
+
+impl PartialOrd for FileReference {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
 }
