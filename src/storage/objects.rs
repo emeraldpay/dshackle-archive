@@ -135,9 +135,6 @@ impl<S: ObjectStore> ObjectsStorage<S> {
                 }
                 let (kind, file_range) = is_archive.unwrap();
                 if file_range.is_intersected_with(&range) {
-
-                    println!("add file {}", meta.location.to_string());
-
                     let r = FileReference {
                         range: file_range,
                         kind,
