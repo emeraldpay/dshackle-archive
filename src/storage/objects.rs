@@ -1,5 +1,6 @@
 use std::io::{Write};
 use std::sync::{Arc, Mutex};
+use std::sync::atomic::{AtomicI64, Ordering};
 use anyhow::anyhow;
 use apache_avro::types::Record;
 use apache_avro::{Codec, Writer};
@@ -190,7 +191,7 @@ impl TargetFileWriter for NewObjectsFile<'_> {
         {
             let mut writer = self.writer.lock().unwrap();
             let _ = writer.flush().map_err(|e| anyhow!("IO Error: {:?}", e))?;
-            let _ = self.pipe.0.send(WriteOp::Close);
+            let _ = self.pipe.channel.send(WriteOp::Close);
         }
 
         let url = self.get_url();
@@ -248,6 +249,8 @@ impl NewObjectsFile<'_> {
 
     fn pipe_start(mut buf: BufWriter, on_close: oneshot::Sender<usize>) -> ObjectWriterPipe {
         let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+        let in_flight = Arc::new(AtomicI64::new(0));
+        let in_flight_inner = in_flight.clone();
         tokio::spawn(async move {
             let mut total_size = 0;
             while let Some(op) = rx.recv().await {
@@ -261,6 +264,7 @@ impl NewObjectsFile<'_> {
                             }
                             Ok(_) => {
                                 total_size += data.len();
+                                in_flight_inner.fetch_sub(data.len() as i64, Ordering::Relaxed);
                             }
                         }
                     }
@@ -282,34 +286,69 @@ impl NewObjectsFile<'_> {
                         let _ = on_close.send(total_size);
                         return;
                     }
+                    WriteOp::Await(tx) => {
+                        let _ = tx.send(());
+                    }
                 }
             }
         });
-        ObjectWriterPipe(Arc::new(tx))
+        ObjectWriterPipe::new(tx, in_flight)
     }
 
 }
 
 enum WriteOp {
+    /// Write data to the object
     Data(Vec<u8>),
+    /// Flush the buffer
     Flush,
+    /// Close the writing, like flush but the writing is not possible after this
     Close,
+    /// Close the writing without flushing any unwritten data
     Abort,
+    /// a dummy operation to wait until all the current operation in queue are applied
+    Await(std::sync::mpsc::Sender<()>)
 }
 
 #[derive(Clone)]
-struct ObjectWriterPipe(Arc<tokio::sync::mpsc::UnboundedSender<WriteOp>>);
+struct ObjectWriterPipe {
+    channel: Arc<tokio::sync::mpsc::UnboundedSender<WriteOp>>,
+    // use i64 as a counter just to avoid any ordering related issues; we just care if at
+    // some point it was too large, and it doesn't matter if at other times it may subtract before adding
+    in_flight: Arc<AtomicI64>,
+}
+
+impl ObjectWriterPipe {
+    fn new(channel: tokio::sync::mpsc::UnboundedSender<WriteOp>, in_flight: Arc<AtomicI64>) -> Self {
+        Self {
+            channel: Arc::new(channel),
+            in_flight,
+        }
+    }
+}
 
 impl Write for ObjectWriterPipe {
     fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
-        self.0.send(WriteOp::Data(buf.to_vec()))
+        self.channel.send(WriteOp::Data(buf.to_vec()))
             .map_err(|_| std::io::Error::new(std::io::ErrorKind::BrokenPipe, "Already closed"))?;
+        let buffer_size = self.in_flight.fetch_add(buf.len() as i64, Ordering::Relaxed);
+
+        if buffer_size > 4 * 1024 * 1024 {
+            let (tx, rx) = std::sync::mpsc::channel();
+            self.channel.send(WriteOp::Await(tx))
+                .map_err(|_| std::io::Error::new(std::io::ErrorKind::BrokenPipe, "Already closed"))?;
+            rx.recv().unwrap();
+        }
         Ok(buf.len())
     }
 
     fn flush(&mut self) -> std::io::Result<()> {
-        self.0.send(WriteOp::Flush)
+        self.channel.send(WriteOp::Flush)
             .map_err(|_| std::io::Error::new(std::io::ErrorKind::BrokenPipe, "Already closed"))?;
+        let (tx, rx) = std::sync::mpsc::channel();
+        self.channel.send(WriteOp::Await(tx))
+            .map_err(|_| std::io::Error::new(std::io::ErrorKind::BrokenPipe, "Already closed"))?;
+        rx.recv().unwrap();
         Ok(())
     }
 }
