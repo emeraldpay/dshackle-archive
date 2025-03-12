@@ -7,6 +7,7 @@ use anyhow::{anyhow, Result};
 use apache_avro::types::{Record, Value};
 use async_trait::async_trait;
 use shutdown::Shutdown;
+use tokio::task::JoinSet;
 use crate::args::Args;
 use crate::blockchain::{BlockDetails, BlockchainTypes};
 use crate::command::archiver::Archiver;
@@ -70,6 +71,7 @@ impl<B: BlockchainTypes, TS: TargetStorage + 'static> CommandExecutor for Compac
                                 // keep feels that are not fully copied, for the next chunk
                                 // i.e., if a file covers multiple chunks
                                 let mut next_files = vec![];
+                                let mut deleting = JoinSet::new();
                                 for c in current_files.into_iter() {
                                     let is_fully_read = current_chunk.contains(&c.range) || c.range.end() < current_chunk.end();
                                     if !is_fully_read {
@@ -77,11 +79,12 @@ impl<B: BlockchainTypes, TS: TargetStorage + 'static> CommandExecutor for Compac
                                     } else if compact { // delete only if the file is fully copied
                                         let c = c.clone();
                                         let target = self.archiver.target.clone();
-                                        tokio::spawn(async move {
+                                        deleting.spawn(async move {
                                             let _ = target.delete(&c).await;
                                         });
                                     }
                                 }
+                                let _ = deleting.join_all().await;
                                 current_files = next_files;
                             }
 
