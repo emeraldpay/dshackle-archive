@@ -85,7 +85,7 @@ fun main(args: Array<String>) {
             log.warn("Some threads ({}) are still running and prevent application to exit: \n{}", runningThreads.size, runningThreads.map { it.toString() })
             // make sure it exits after the completion even if there are still running threads
             thread(isDaemon = true) {
-                val waitTime = Duration.ofSeconds(10)
+                val waitTime = Duration.ofSeconds(600)
                 log.warn("Wait for {} before calling exit", waitTime.toKotlinDuration().toString())
                 Thread.sleep(waitTime.toMillis())
                 log.warn("Calling exit")

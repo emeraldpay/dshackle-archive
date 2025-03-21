@@ -32,6 +32,22 @@ abstract class BaseAvroWriter<T>(
 
     override fun close() {
         try {
+            log.debug("Closing file: {}", path)
+            if (log.isDebugEnabled) {
+                val blockCount = DataFileWriter::class.java.getDeclaredField("blockCount")
+                blockCount.isAccessible = true
+                blockCount.get(dataFileWriter)?.let {
+                    log.debug("DataFileWriter {} blockCount before flush: {}", path, it)
+                }
+            }
+            dataFileWriter.flush()
+            if (log.isDebugEnabled) {
+                val blockCount = DataFileWriter::class.java.getDeclaredField("blockCount")
+                blockCount.isAccessible = true
+                blockCount.get(dataFileWriter)?.let {
+                    log.debug("DataFileWriter {} blockCount after flush: {}", path, it)
+                }
+            }
             dataFileWriter.close()
             currentStorage.remove(path)
         } catch (e: ClosedChannelException) {

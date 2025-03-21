@@ -58,10 +58,12 @@ class CompleteWriter(
                             block.transactions.forEach { tx ->
                                 txWrt.append(block, tx)
                             }
+                            log.debug("Saved {} transactions for block {} to {}", block.transactions.size, block.height, txFile)
                             1
                         }.subscribeOn(Schedulers.boundedElastic()),
                         Mono.fromCallable {
                             blockWrt.append(block)
+                            log.debug("Saved block {} to {}", block.height, blockFile)
                             1
                         }.subscribeOn(Schedulers.boundedElastic()),
                     ).then(Mono.just(1))
@@ -72,6 +74,7 @@ class CompleteWriter(
                 progress.onNext()
             }
             .doFinally {
+                log.debug("Closing writers: {}, {}", txFile, blockFile)
                 txWrt.close()
                 blockWrt.close()
             }

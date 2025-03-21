@@ -22,8 +22,8 @@ plugins {
     id 'maven-publish'
     id 'application'
 
-    id "org.jetbrains.kotlin.jvm" version '1.7.10'
-    id 'org.jetbrains.kotlin.plugin.spring' version '1.7.10'
+    id "org.jetbrains.kotlin.jvm" version '1.9.20'
+    id 'org.jetbrains.kotlin.plugin.spring' version '1.9.20'
 
     id 'org.springframework.boot' version '2.5.6'
 
@@ -67,7 +67,7 @@ dependencies {
     implementation "io.emeraldpay.etherjar:etherjar-hex:$etherjarVersion"
     implementation "io.emeraldpay.etherjar:etherjar-rpc-api:$etherjarVersion"
     implementation "io.emeraldpay.etherjar:etherjar-rpc-emerald:$etherjarVersion"
-    implementation "io.emeraldpay:emerald-api:0.12-alpha.5"
+    implementation "io.emeraldpay:emerald-api:0.13.0"
 
     implementation "io.grpc:grpc-stub:$grpcVersion"
     implementation "io.grpc:grpc-protobuf:$grpcVersion"

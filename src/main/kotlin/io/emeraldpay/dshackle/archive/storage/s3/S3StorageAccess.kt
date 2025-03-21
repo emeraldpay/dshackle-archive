@@ -25,9 +25,9 @@ import software.amazon.awssdk.services.s3.model.PutObjectRequest
 import software.amazon.awssdk.services.s3.model.S3Exception
 import software.amazon.awssdk.services.s3.model.S3Object
 import java.io.OutputStream
-import java.io.PipedInputStream
-import java.io.PipedOutputStream
 import java.net.URI
+import java.nio.channels.Channels
+import java.nio.channels.Pipe
 import java.nio.file.Path
 import java.util.concurrent.Executors
 import kotlin.io.path.name
@@ -122,9 +122,11 @@ open class S3StorageAccess(
 
     override fun createWriter(path: String): OutputStream {
         // S3 client needs an InputStream, so here are the Pipes
-        val output = PipedOutputStream()
-        val pipe = PipedInputStream(4096)
-        output.connect(pipe)
+        // multiple reading/writing threads are not properly supported by PipedOutputStream https://bugs.openjdk.org/browse/JDK-7016956
+        // so channels are used instead
+        val pipe = Pipe.open()
+        val output = Channels.newOutputStream(pipe.sink())
+        val input = Channels.newInputStream(pipe.source())
         // because after making a request it locks the input stream there is no way to continue with writing to it,
         // so we need to run it in a separate thread
         threads.execute {
@@ -133,13 +135,18 @@ open class S3StorageAccess(
                     .bucket(s3Config.bucket)
                     .key(s3Config.bucketPath.fullPathFor(path))
                     .build()
-                val body = RequestBody.fromContentProvider({ pipe }, "application/avro")
+                val body = RequestBody.fromContentProvider({ input }, "application/avro")
                 s3Config.storage.putObject(request, body)
+                log.debug("S3 storage putObject done: $path")
             } catch (t: Throwable) {
-                log.warn("Failed to write to S3", t)
+                log.warn("Failed to write to S3: $path", t)
             } finally {
-                output.close()
-                pipe.close()
+                try {
+                    output.close()
+                    input.close()
+                } catch (t: Throwable) {
+                    log.warn("Failed to close S3 writer", t)
+                }
             }
         }
         return output
