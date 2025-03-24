@@ -1,4 +1,5 @@
 use std::sync::{Arc};
+use std::time::Duration;
 use apache_avro::types::{Record, Value};
 use async_trait::async_trait;
 use crate::avros::{BLOCK_SCHEMA, TX_SCHEMA};
@@ -11,6 +12,8 @@ use alloy::{
 };
 use crate::blockchain::{BlockDetails, BlockReference, BlockchainData, EthereumType, JsonString};
 use anyhow::{Result, anyhow};
+use tokio_retry2::{Retry, RetryError};
+use tokio_retry2::strategy::{jitter, ExponentialFactorBackoff};
 
 #[derive(Clone)]
 pub struct EthereumData {
@@ -69,6 +72,53 @@ impl EthereumData {
         hex::decode(data_as_hex).map_err(|_| anyhow!("Invalid hex"))
     }
 
+    async fn get_tx_expected(&self, hash: &TxHash) -> Result<Vec<u8>> {
+        let retry_strategy = ExponentialFactorBackoff::from_millis(50, 1.5)
+            .max_delay(Duration::from_secs(1))
+            .map(jitter)
+            .take(10);
+        Retry::spawn(retry_strategy, async || {
+            self.get_tx(hash).await
+                .and_then(|value| if value == b"null" {
+                    Err(anyhow!("Transaction not found: 0x{:x}", hash))
+                } else {
+                    Ok(value)
+                })
+                .map_err(|e| RetryError::transient(e))
+        }).await
+    }
+
+    async fn get_tx_receipt_expected(&self, hash: &TxHash) -> Result<Vec<u8>> {
+        let retry_strategy = ExponentialFactorBackoff::from_millis(50, 1.5)
+            .max_delay(Duration::from_secs(1))
+            .map(jitter)
+            .take(10);
+        Retry::spawn(retry_strategy, async || {
+            self.get_tx_receipt(hash).await
+                .and_then(|value| if value == b"null" {
+                    Err(anyhow!("Transaction Receipt not found: 0x{:x}", hash))
+                } else {
+                    Ok(value)
+                })
+                .map_err(|e| RetryError::transient(e))
+        }).await
+    }
+
+    async fn get_tx_raw_expected(&self, hash: &TxHash) -> Result<Vec<u8>> {
+        let retry_strategy = ExponentialFactorBackoff::from_millis(50, 1.5)
+            .max_delay(Duration::from_secs(1))
+            .map(jitter)
+            .take(10);
+        Retry::spawn(retry_strategy, async || {
+            self.get_tx_raw(hash).await
+                .and_then(|value| if value == b"null" {
+                    Err(anyhow!("Transaction Raw not found: 0x{:x}", hash))
+                } else {
+                    Ok(value)
+                })
+                .map_err(|e| RetryError::transient(e))
+        }).await
+    }
 }
 
 #[async_trait]
@@ -119,9 +169,9 @@ impl BlockchainData<EthereumType> for EthereumData {
             .ok_or_else(|| anyhow!("Transaction not found"))?;
 
         let (tx_json_bytes, tx_raw, tx_receipt) = tokio::join!(
-            self.get_tx(&tx_hash),
-            self.get_tx_raw(&tx_hash),
-            self.get_tx_receipt(&tx_hash),
+            self.get_tx_expected(&tx_hash),
+            self.get_tx_raw_expected(&tx_hash),
+            self.get_tx_receipt_expected(&tx_hash),
         );
         let tx_json_bytes = tx_json_bytes?;
 
