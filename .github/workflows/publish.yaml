@@ -14,6 +14,7 @@ jobs:
       - uses: actions/checkout@master
         with:
           ref: ${{ github.ref }}
+
       - name: Install Rust
         uses: actions-rs/toolchain@v1
         with:
@@ -26,10 +27,26 @@ jobs:
         with:
           repo-token: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Build
+        uses: actions-rs/cargo@v1
+        with:
+          command: build
+          args: --release
+
+      - name: Find target file
+        id: set-target-file
+        run: |
+          echo buildFile=$(cargo build --release --message-format json | jq -r 'select(.reason=="compiler-artifact") | select(.target.kind==["bin"]) | .filenames[0]') >> "$GITHUB_OUTPUT"
+          if [ ${{ runner.os }} == 'Windows' ]; then
+            echo "fileExtension=.exe" >> "$GITHUB_OUTPUT"
+          else
+            echo "fileExtension=" >> "$GITHUB_OUTPUT"
+          fi          
+
       - name: Set output file
         id: set-artifact-file
         run: |
-          echo "filename=dshackle-archive-${RUNNER_OS@L}-${RUNNER_ARCH@L}${{ steps.set-target-file.outputs.fileExtension }}" >> "$GITHUB_OUTPUT"
+          echo "filename=dshackle-archive-${RUNNER_OS,,}-${RUNNER_ARCH,,}${{ steps.set-target-file.outputs.fileExtension }}" >> "$GITHUB_OUTPUT"
         env:
           RUNNER_OS: ${{ runner.os }}
           RUNNER_ARCH: ${{ runner.arch }}

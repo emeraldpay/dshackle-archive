@@ -84,7 +84,7 @@ jobs:
       - name: Set output file
         id: set-artifact-file
         run: |
-          echo "filename=dshackle-archive-${RUNNER_OS@L}-${RUNNER_ARCH@L}${{ steps.set-target-file.outputs.fileExtension }}" >> "$GITHUB_OUTPUT"
+          echo "filename=dshackle-archive-${RUNNER_OS,,}-${RUNNER_ARCH,,}${{ steps.set-target-file.outputs.fileExtension }}" >> "$GITHUB_OUTPUT"
         env:
           RUNNER_OS: ${{ runner.os }}
           RUNNER_ARCH: ${{ runner.arch }}
