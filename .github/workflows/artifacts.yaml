@@ -78,14 +78,14 @@ jobs:
           echo "buildFile=<<EOF"
           cargo build --release --message-format json | jq -r 'select(.reason=="compiler-artifact") | select(.target.kind==["bin"]) | .filenames[0]'
           echo "EOF"
-          } >> "$GITHUB_ENV"
-          if [ ${{  runner.os }} == 'Windows' ]; then
+          } >> "$GITHUB_OUTPUT"
+          if [ ${{ runner.os }} == 'Windows' ]; then
             echo "fileExtension=.exe" >> "$GITHUB_OUTPUT"
           else
             echo "fileExtension=" >> "$GITHUB_OUTPUT"
           fi
 
-      - name: Find target file
+      - name: Set output file
         id: set-artifact-file
         run: |
           echo "filename=dshackle-archive-${{ runner.os }}-${{ runner.arch }}${{ steps.set-target-file.outputs.fileExtension }}" >> "$GITHUB_OUTPUT"
