@@ -18,7 +18,7 @@ jobs:
     name: Publish ${{ matrix.os }}
     strategy:
       matrix:
-        os: [ "windows-latest", "macos-latest", "ubuntu-latest", "macos-13" ]
+        os: [ "macos-latest", "ubuntu-latest", "macos-13" ]
     runs-on: ${{ matrix.os }}
     continue-on-error: true
     steps:
@@ -84,7 +84,10 @@ jobs:
       - name: Set output file
         id: set-artifact-file
         run: |
-          echo "filename=dshackle-archive-${{ runner.os }}-${{ runner.arch }}${{ steps.set-target-file.outputs.fileExtension }}" >> "$GITHUB_OUTPUT"
+          echo "filename=dshackle-archive-${RUNNER_OS@L}-${RUNNER_ARCH@L}${{ steps.set-target-file.outputs.fileExtension }}" >> "$GITHUB_OUTPUT"
+        env:
+          RUNNER_OS: ${{ runner.os }}
+          RUNNER_ARCH: ${{ runner.arch }}
 
       - name: Rename file
         run: |
