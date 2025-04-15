@@ -15,7 +15,7 @@ on:
 jobs:
 
   publish-gcp:
-    name: Згидшыр ${{ matrix.os }}
+    name: Publish ${{ matrix.os }}
     strategy:
       matrix:
         os: [ "windows-latest", "macos-latest", "ubuntu-latest", "macos-13" ]
@@ -31,12 +31,15 @@ jobs:
           toolchain: stable
           override: true
 
+      - name: Auth for GCP
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.GCP_ARTIFACTS_KEY }}
+
       - name: Setup GCP
-        uses: google-github-actions/setup-gcloud@v0
+        uses: google-github-actions/setup-gcloud@v2
         with:
           project_id: ${{ secrets.GCP_PROJECT_ID }}
-          service_account_key: ${{ secrets.GCP_ARTIFACTS_KEY }}
-          export_default_credentials: true
 
         # needed for GitVersion
       - name: Fetch all history
