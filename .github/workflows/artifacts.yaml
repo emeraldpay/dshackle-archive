@@ -74,11 +74,7 @@ jobs:
       - name: Find target file
         id: set-target-file
         run: |
-          {
-          echo "buildFile=<<EOF"
-          cargo build --release --message-format json | jq -r 'select(.reason=="compiler-artifact") | select(.target.kind==["bin"]) | .filenames[0]'
-          echo "EOF"
-          } >> "$GITHUB_OUTPUT"
+          echo "buildFile=$(cargo build --release --message-format json | jq -r 'select(.reason=="compiler-artifact") | select(.target.kind==["bin"]) | .filenames[0]') >> "$GITHUB_OUTPUT"
           if [ ${{ runner.os }} == 'Windows' ]; then
             echo "fileExtension=.exe" >> "$GITHUB_OUTPUT"
           else
