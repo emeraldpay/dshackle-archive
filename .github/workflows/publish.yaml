@@ -43,13 +43,19 @@ jobs:
             echo "fileExtension=" >> "$GITHUB_OUTPUT"
           fi          
 
+      - id: runner-os
+        uses: vishalmamidi/lowercase-action@v1
+        with:
+          string: ${{ runner.os }}
+      - id: runner-arch
+        uses: vishalmamidi/lowercase-action@v1
+        with:
+          string: ${{ runner.arch }}
+
       - name: Set output file
         id: set-artifact-file
         run: |
-          echo "filename=dshackle-archive-${RUNNER_OS,,}-${RUNNER_ARCH,,}${{ steps.set-target-file.outputs.fileExtension }}" >> "$GITHUB_OUTPUT"
-        env:
-          RUNNER_OS: ${{ runner.os }}
-          RUNNER_ARCH: ${{ runner.arch }}
+          echo "filename=dshackle-archive-${{ steps.runner-os.outputs.lowercase }}-${{ steps.runner-arch.outputs.lowercase }}${{ steps.set-target-file.outputs.fileExtension }}" >> "$GITHUB_OUTPUT"
 
       - name: Rename file
         run: |
