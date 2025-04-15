@@ -98,7 +98,7 @@ jobs:
       - name: Links to published artifacts
         run: |
           echo "Publishing artifacts to:"  >> $GITHUB_STEP_SUMMARY
-          echo "  https://artifacts.emerald.cash/builds/dshackle-archive/${{ steps.date.outputs.time }}/${{ steps.time.outputs.time }}-${{ github.sha }}/${{ steps.set-artifact-file.outputs.filename }}  >> $GITHUB_STEP_SUMMARY
+          echo "  https://artifacts.emerald.cash/builds/dshackle-archive/${{ steps.date.outputs.time }}/${{ steps.time.outputs.time }}-${{ github.sha }}/${{ steps.set-artifact-file.outputs.filename }}"  >> $GITHUB_STEP_SUMMARY
 
       - name: Attach artifacts
         uses: actions/upload-artifact@v4
