@@ -72,26 +72,22 @@ jobs:
 
       - name: Set filename
         id: set-filename
-        run: echo "TARGET_FILE=dshackle-archive" >> "$GITHUB_OUTPUT"
+        run: echo "targetFile=dshackle-archive" >> "$GITHUB_OUTPUT"
         if: runner.os != 'Windows'
 
       - name: Set filename
         id: set-filename
-        run: echo "TARGET_FILE=dshackle-archive.exe" >> "$GITHUB_OUTPUT"
+        run: echo "targetFile=dshackle-archive.exe" >> "$GITHUB_OUTPUT"
         if: runner.os == 'Windows'
 
       - name: Upload to GCP
         run: |
-          gsutil cp -n ${{TARGET_FILE}} gs://artifacts.emerald.cash/builds/dshackle-archive/${{ steps.gitversion.outputs.commitDate }}/${{ steps.time.outputs.time }}-${{ steps.gitversion.outputs.shortSha }}/
-        env:
-          TARGET_FILE: ${{ steps.set-filename.outputs.TARGET_FILE }}
+          gsutil cp -n ${{ steps.set-filename.outputs.targetFile }} gs://artifacts.emerald.cash/builds/dshackle-archive/${{ steps.gitversion.outputs.commitDate }}/${{ steps.time.outputs.time }}-${{ steps.gitversion.outputs.shortSha }}/
 
       - name: Links to published artifacts
         run: |
           echo "Publishing artifacts to:"
-          echo "  https://artifacts.emerald.cash/builds/dshackle-archive/${{ steps.gitversion.outputs.commitDate }}/${{ steps.time.outputs.time }}-${{ steps.gitversion.outputs.shortSha }}/${{TARGET_FILE}}"
-        env:
-          TARGET_FILE: ${{ steps.set-filename.outputs.TARGET_FILE }}
+          echo "  https://artifacts.emerald.cash/builds/dshackle-archive/${{ steps.gitversion.outputs.commitDate }}/${{ steps.time.outputs.time }}-${{ steps.gitversion.outputs.shortSha }}/${{ steps.set-filename.outputs.targetFile }}"
 
       - name: Attach artifacts
         uses: actions/upload-artifact@v4
