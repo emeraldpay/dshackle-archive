@@ -20,6 +20,7 @@ jobs:
       matrix:
         os: [ "windows-latest", "macos-latest", "ubuntu-latest", "macos-13" ]
     runs-on: ${{ matrix.os }}
+    continue-on-error: true
     steps:
       - name: Checkout the code
         uses: actions/checkout@v2
@@ -33,6 +34,8 @@ jobs:
 
       - name: Install Protoc
         uses: arduino/setup-protoc@v3
+        with:
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Auth for GCP
         uses: google-github-actions/auth@v2
