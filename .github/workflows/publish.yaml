@@ -103,9 +103,9 @@ jobs:
       - name: Build and push
         uses: docker/build-push-action@v6
         with:
-          push: false
-          # - "emeraldpay/dshackle-archive:${{ github.ref_name }}"
+          push: github.event_name == 'release'
           tags: |
             emeraldpay/dshackle-archive:snapshot
+            emeraldpay/dshackle-archive:${{ github.ref_name }}
             emeraldpay/dshackle-archive:${{ steps.time.outputs.time }}
             emeraldpay/dshackle-archive:${{ github.sha }}
