@@ -103,8 +103,8 @@ jobs:
         uses: docker/build-push-action@v6
         with:
           push: false
-          tags:
-            - "emeraldpay/dshackle-archive:snapshot"
-            - "emeraldpay/dshackle-archive:${{ steps.time.outputs.time }}"
-            - "emeraldpay/dshackle-archive:${{ github.sha }}"
-            # - "emeraldpay/dshackle-archive:${{ github.ref_name }}"
+          # - "emeraldpay/dshackle-archive:${{ github.ref_name }}"
+          tags: |
+            emeraldpay/dshackle-archive:snapshot
+            emeraldpay/dshackle-archive:${{ steps.time.outputs.time }}
+            emeraldpay/dshackle-archive:${{ github.sha }}
