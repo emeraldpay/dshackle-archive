@@ -13,7 +13,7 @@ jobs:
       matrix:
         os: [ "macos-latest", "ubuntu-latest", "macos-13" ]
     runs-on: ${{ matrix.os }}
-    if: github.event_name == 'release'
+    if: ${{ github.event_name == 'release' }}
     steps:
       - uses: actions/checkout@master
         with:
@@ -103,7 +103,7 @@ jobs:
       - name: Build and push
         uses: docker/build-push-action@v6
         with:
-          push: github.event_name == 'release'
+          push: ${{ github.event_name == 'release' }}
           tags: |
             emeraldpay/dshackle-archive:snapshot
             emeraldpay/dshackle-archive:${{ github.ref_name }}
