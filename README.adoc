@@ -1,6 +1,6 @@
 = Dshackle Archive
-:version: 0.2.0
-:version-short: 0.2
+:version: 0.4.0
+:version-short: 0.4
 
 image:https://github.com/emeraldpay/dshackle-archive/workflows/Tests/badge.svg["Unit Tests"]
 image:https://codecov.io/gh/emeraldpay/dshackle-archive/branch/master/graph/badge.svg["Coverage",link="https://codecov.io/gh/emeraldpay/dshackle-archive"]
