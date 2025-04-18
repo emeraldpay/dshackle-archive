@@ -10,6 +10,7 @@ jobs:
       matrix:
         os: [ "macos-latest", "ubuntu-latest", "macos-13" ]
     runs-on: ${{ matrix.os }}
+    continue-on-error: true
     steps:
       - uses: actions/checkout@master
         with:
@@ -69,6 +70,8 @@ jobs:
           repo_token: ${{ secrets.GITHUB_TOKEN }}
           tag: ${{ github.ref }}
           file: upload/${{ steps.set-artifact-file.outputs.filename }}
+          asset_name: ${{ steps.set-artifact-file.outputs.filename }}
+          overwrite: true
 
   publish-docker:
     runs-on: ubuntu-latest
