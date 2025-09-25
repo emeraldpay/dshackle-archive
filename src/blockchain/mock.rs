@@ -5,7 +5,7 @@ use async_trait::async_trait;
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use crate::avros::{BLOCK_SCHEMA, TX_SCHEMA};
-use crate::blockchain::{BlockDetails, BlockReference, BlockchainData, BlockchainTypes};
+use crate::blockchain::{BlockDetails, BlockReference, BlockchainData, BlockchainTypes, TxOptions};
 use crate::blockchain::connection::Blockchain;
 
 pub struct MockType {}
@@ -106,7 +106,7 @@ impl BlockchainData<MockType> for MockData {
         Ok((record, block, txes))
     }
 
-    async fn fetch_tx(&self, block: &MockBlock, index: usize) -> anyhow::Result<Record> {
+    async fn fetch_tx(&self, block: &MockBlock, index: usize, _tx_options: &TxOptions) -> anyhow::Result<Record> {
         let txes = self.txes.lock().unwrap();
         let tx = txes.iter()
             .find(|t| t.hash == block.transactions[index])

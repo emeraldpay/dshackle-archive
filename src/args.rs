@@ -46,6 +46,14 @@ pub struct Args {
     /// Range chunk size (default 1000)
     #[arg(long = "rangeChunk")]
     pub range_chunk: Option<usize>,
+
+    /// (Ethereum Geth specific) Enable trace extraction (debug_traceTransaction with `callTracer` tracing)
+    #[arg(long = "includeTrace")]
+    pub include_trace: bool,
+
+    /// (Ethereum Geth specific) Enable stateDiff extraction (debug_traceTransaction with `prestateTracer` tracing)
+    #[arg(long = "includeStateDiff")]
+    pub include_state_diff: bool,
 }
 
 impl Default for Args {
@@ -62,6 +70,8 @@ impl Default for Args {
             tail: None,
             range: None,
             range_chunk: Some(1000),
+            include_trace: false,
+            include_state_diff: false,
         }
     }
 }

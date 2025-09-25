@@ -15,6 +15,14 @@ use crate::blockchain::bitcoin::BitcoinData;
 use crate::blockchain::connection::Blockchain;
 use crate::blockchain::ethereum::EthereumData;
 
+#[derive(Debug, Clone, Default)]
+pub struct TxOptions {
+    /// if tx-archive should include callTracer JSON
+    pub include_trace: bool,
+    /// if tx-archive should include prestateTracer JSON
+    pub include_state_diff: bool,
+}
+
 ///
 /// Defined the data types for a blockchain
 pub trait BlockchainTypes: Send + Sync + Sized {
@@ -80,7 +88,7 @@ pub trait BlockchainData<T: BlockchainTypes>: Send + Sync {
 
     ///
     /// Get the details for the transaction
-    async fn fetch_tx(&self, block: &T::BlockParsed, index: usize) -> Result<Record>;
+    async fn fetch_tx(&self, block: &T::BlockParsed, index: usize, tx_options: &TxOptions) -> Result<Record>;
 
     ///
     /// Get the current height

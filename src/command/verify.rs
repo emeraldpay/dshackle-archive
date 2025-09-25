@@ -262,6 +262,7 @@ mod tests {
     use object_store::{ObjectMeta, ObjectStore};
     use crate::args::Args;
     use crate::blockchain::mock::{MockBlock, MockData, MockTx, MockType};
+    use crate::blockchain::TxOptions;
     use crate::command::archiver::Archiver;
     use crate::command::CommandExecutor;
     use crate::command::verify::VerifyCommand;
@@ -329,7 +330,8 @@ mod tests {
         write.close().await.unwrap();
 
         let write = archiver.target.create(DataKind::Transactions, &Range::Single(101)).await.unwrap();
-        let record = data.fetch_tx(&block101, 0).await.unwrap();
+        let tx_options = TxOptions::default();
+        let record = data.fetch_tx(&block101, 0, &tx_options).await.unwrap();
         write.append(record).await.unwrap();
         write.close().await.unwrap();
 
@@ -405,12 +407,14 @@ mod tests {
         write.close().await.unwrap();
 
         let write = archiver.target.create(DataKind::Transactions, &Range::Single(101)).await.unwrap();
-        let record = data.fetch_tx(&block101, 0).await.unwrap();
+        let tx_options = TxOptions::default();
+        let record = data.fetch_tx(&block101, 0, &tx_options).await.unwrap();
         write.append(record).await.unwrap();
         write.close().await.unwrap();
 
         let write = archiver.target.create(DataKind::Transactions, &Range::Single(102)).await.unwrap();
-        let record = data.fetch_tx(&block102, 0).await.unwrap();
+        let tx_options = TxOptions::default();
+        let record = data.fetch_tx(&block102, 0, &tx_options).await.unwrap();
         write.append(record).await.unwrap();
         write.close().await.unwrap();
 
@@ -468,7 +472,8 @@ mod tests {
         let txes = archiver.target
             .create(DataKind::Transactions, &Range::Single(100))
             .await.expect("Create txes");
-        let record = data.fetch_tx(&block100, 0).await.unwrap();
+        let tx_options = TxOptions::default();
+        let record = data.fetch_tx(&block100, 0, &tx_options).await.unwrap();
         txes.append(record).await.unwrap();
         txes.close().await.unwrap();
 

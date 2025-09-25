@@ -10,7 +10,7 @@ use alloy::{
     primitives::{TxHash, BlockHash},
     rpc::types::{Transaction as TransactionJson, Block as BlockJson, Block, TransactionTrait}
 };
-use crate::blockchain::{BlockDetails, BlockReference, BlockchainData, EthereumType, JsonString};
+use crate::blockchain::{BlockDetails, BlockReference, BlockchainData, EthereumType, JsonString, TxOptions};
 use anyhow::{Result, anyhow};
 use tokio_retry2::{Retry, RetryError};
 use tokio_retry2::strategy::{jitter, ExponentialFactorBackoff};
@@ -119,6 +119,29 @@ impl EthereumData {
                 .map_err(|e| RetryError::transient(e))
         }).await
     }
+
+    async fn get_tx_trace(&self, hash: &TxHash) -> Result<Vec<u8>> {
+        // See https://geth.ethereum.org/docs/developers/evm-tracing/built-in-tracers#call-tracer
+        let tracer = r#"{
+            "tracer": "callTracer"
+        }"#;
+        let params = format!("[\"0x{:x}\", {}]", hash, tracer).as_bytes().to_vec();
+        let data = self.blockchain.native_call("debug_traceTransaction", params).await?;
+        Ok(data)
+    }
+
+    async fn get_tx_state_diff(&self, hash: &TxHash) -> Result<Vec<u8>> {
+        // See https://geth.ethereum.org/docs/developers/evm-tracing/built-in-tracers#prestate-tracer
+        let tracer = r#"{
+            "tracer": "prestateTracer",
+            "tracerConfig": {
+                "diffMode": true
+            }
+        }"#;
+        let params = format!("[\"0x{:x}\", {}]", hash, tracer).as_bytes().to_vec();
+        let data = self.blockchain.native_call("debug_traceTransaction", params).await?;
+        Ok(data)
+    }
 }
 
 #[async_trait]
@@ -164,14 +187,29 @@ impl BlockchainData<EthereumType> for EthereumData {
         Ok((record, parsed_block, transactions))
     }
 
-    async fn fetch_tx(&self, block: &Block<TxHash>, index: usize) -> Result<Record> {
+    async fn fetch_tx(&self, block: &Block<TxHash>, index: usize, tx_options: &TxOptions) -> Result<Record> {
         let tx_hash = block.transactions.as_transactions().map(|txes| txes[index])
             .ok_or_else(|| anyhow!("Transaction not found"))?;
 
-        let (tx_json_bytes, tx_raw, tx_receipt) = tokio::join!(
+        // Fetch all transaction data in parallel
+        let (tx_json_bytes, tx_raw, tx_receipt, trace_data, state_diff_data) = tokio::join!(
             self.get_tx_expected(&tx_hash),
             self.get_tx_raw_expected(&tx_hash),
             self.get_tx_receipt_expected(&tx_hash),
+            async {
+                if tx_options.include_trace {
+                    Some(self.get_tx_trace(&tx_hash).await)
+                } else {
+                    None
+                }
+            },
+            async {
+                if tx_options.include_state_diff {
+                    Some(self.get_tx_state_diff(&tx_hash).await)
+                } else {
+                    None
+                }
+            }
         );
         let tx_json_bytes = tx_json_bytes?;
 
@@ -197,6 +235,21 @@ impl BlockchainData<EthereumType> for EthereumData {
             record.put("to", Value::Union(0, Box::new(Value::Null)));
         }
         record.put("receiptJson", Value::Union(1, Box::new(Value::Bytes(tx_receipt?))));
+
+        // Set trace data fields - handle results from parallel execution
+        if let Some(trace_result) = trace_data {
+            let trace_bytes = trace_result?;
+            record.put("traceJson", Value::Union(1, Box::new(Value::Bytes(trace_bytes))));
+        } else {
+            record.put("traceJson", Value::Union(0, Box::new(Value::Null)));
+        }
+
+        if let Some(state_diff_result) = state_diff_data {
+            let state_diff_bytes = state_diff_result?;
+            record.put("stateDiffJson", Value::Union(1, Box::new(Value::Bytes(state_diff_bytes))));
+        } else {
+            record.put("stateDiffJson", Value::Union(0, Box::new(Value::Null)));
+        }
 
         Ok(record)
     }

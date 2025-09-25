@@ -5,7 +5,7 @@ use async_trait::async_trait;
 use chrono::Utc;
 use shutdown::Shutdown;
 use crate::args::Args;
-use crate::blockchain::{BlockchainData, BlockchainTypes};
+use crate::blockchain::{BlockchainData, BlockchainTypes, TxOptions};
 use crate::command::archiver::Archiver;
 use crate::command::{CommandExecutor};
 use crate::datakind::DataKind;
@@ -25,6 +25,7 @@ pub struct ArchiveCommand<B: BlockchainTypes, TS: TargetStorage> {
 
     range: Range,
     chunk_size: usize,
+    tx_options: TxOptions,
 }
 
 #[async_trait]
@@ -55,11 +56,17 @@ impl<B: BlockchainTypes, TS: TargetStorage> ArchiveCommand<B, TS> {
             .ok_or(anyhow!("Provide range to archive --range"))??;
         let chunk_size = config.range_chunk.unwrap_or(1000);
 
+        let tx_options = TxOptions {
+            include_trace: config.include_trace,
+            include_state_diff: config.include_state_diff,
+        };
+
         Ok(Self {
             b: PhantomData,
             archiver,
             range,
             chunk_size,
+            tx_options,
         })
     }
 
@@ -85,7 +92,7 @@ impl<B: BlockchainTypes, TS: TargetStorage> ArchiveCommand<B, TS> {
             }
             let (block, txes) = self.archiver.append_block(&block_file, &height.into())
                 .await.context(format!("Block at {}", height))?;
-            let _ = self.archiver.append_txes(&tx_file, &block, &txes)
+            let _ = self.archiver.append_txes(&tx_file, &block, &txes, &self.tx_options)
                 .await.context(format!("Texes at {}", height))?;
         }
         let _ = block_file.close().await?;

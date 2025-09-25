@@ -5,7 +5,7 @@ use crate::{range::Range, command::CommandExecutor, args::Args, blockchain::{
     connection::{Blockchain}
 }, global};
 use anyhow::{Result};
-use crate::blockchain::BlockchainTypes;
+use crate::blockchain::{BlockchainTypes, TxOptions};
 use crate::command::archiver::Archiver;
 use crate::storage::TargetStorage;
 
@@ -19,6 +19,7 @@ pub struct StreamCommand<B: BlockchainTypes, TS: TargetStorage> {
     blockchain: Arc<Blockchain>,
     continue_blocks: Option<u64>,
     archiver: Archiver<B, TS>,
+    tx_options: TxOptions,
 }
 
 impl<B: BlockchainTypes, TS: TargetStorage> StreamCommand<B, TS> {
@@ -33,11 +34,17 @@ impl<B: BlockchainTypes, TS: TargetStorage> StreamCommand<B, TS> {
             None
         };
 
+        let tx_options = TxOptions {
+            include_trace: config.include_trace,
+            include_state_diff: config.include_state_diff,
+        };
+
         Ok(Self {
             b: PhantomData,
             blockchain,
             continue_blocks,
-            archiver
+            archiver,
+            tx_options
         })
     }
 }
@@ -60,12 +67,13 @@ impl<B: BlockchainTypes, TS: TargetStorage> CommandExecutor for StreamCommand<B,
                     if let Some(height) = next {
                         if !cotinued {
                             self.archiver.ensure_all(
-                                Range::up_to(self.continue_blocks.unwrap(), &Range::Single(height.height))
+                                Range::up_to(self.continue_blocks.unwrap(), &Range::Single(height.height)),
+                                &self.tx_options
                             ).await?;
                             cotinued = true;
                         }
                         tracing::info!("Archive block: {} {:?}", height.height, height.hash);
-                        self.archiver.archive_single(height).await?;
+                        self.archiver.archive_single(height, &self.tx_options).await?;
                     } else {
                         stop = true;
                     }

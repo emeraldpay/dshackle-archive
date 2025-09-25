@@ -86,6 +86,10 @@ Options:
           Blocks Range (`N...M`)
       --rangeChunk <RANGE_CHUNK>
           Range chunk size (default 1000)
+      --includeTrace
+          (Ethereum Geth specific) Enable trace extraction (debug_traceTransaction with `callTracer` tracing)
+      --includeStateDiff
+          (Ethereum Geth specific) Enable stateDiff extraction (debug_traceTransaction with `prestateTracer` tracing)
   -h, --help
           Print help
 ----
@@ -239,8 +243,8 @@ Milliseconds since epoch
 - `from` - from address
 - `to` - to address
 - `receiptJson` - JSON response for `eth_getTransactionReceipt`
-- `traceJson` - JSON response for `trace_replayTransaction(trace)`
-- `stateDiffJson` - JSON response for `trace_replayTransaction(stateDiff)`
+- `traceJson` - JSON response for `debug_traceTransaction({tracer: "callTracer"})`
+- `stateDiffJson` - JSON response for `debug_traceTransaction({tracer: "prestateTracer"})`
 
 .Bitcoin specific fields
 - none

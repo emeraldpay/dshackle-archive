@@ -5,7 +5,7 @@ use anyhow::anyhow;
 use chrono::Utc;
 use futures_util::future::join_all;
 use tokio::sync::mpsc::Sender;
-use crate::blockchain::{BlockReference, BlockchainData, BlockchainTypes};
+use crate::blockchain::{BlockReference, BlockchainData, BlockchainTypes, TxOptions};
 use crate::blockchain::connection::{Height};
 use crate::command::{ArchivesList};
 use crate::datakind::DataKind;
@@ -60,9 +60,9 @@ impl<B: BlockchainTypes, TS: TargetStorage> Archiver<B, TS> {
         Ok((block, txes))
     }
 
-    pub async fn append_txes(&self, tx_file: &TS::Writer, block: &B::BlockParsed, txes: &Vec<B::TxId>) -> anyhow::Result<()> {
+    pub async fn append_txes(&self, tx_file: &TS::Writer, block: &B::BlockParsed, txes: &Vec<B::TxId>, tx_options: &TxOptions) -> anyhow::Result<()> {
         for tx_index in 0..txes.len() {
-            let data = self.data_provider.fetch_tx(&block, tx_index).await?;
+            let data = self.data_provider.fetch_tx(&block, tx_index, tx_options).await?;
             let _ = tx_file.append(data).await?;
         }
         Ok(())
@@ -70,7 +70,7 @@ impl<B: BlockchainTypes, TS: TargetStorage> Archiver<B, TS> {
 
     ///
     /// Archive a single block with all the transactions
-    pub async fn archive_single(&self, height: Height) -> anyhow::Result<()> {
+    pub async fn archive_single(&self, height: Height, tx_options: &TxOptions) -> anyhow::Result<()> {
         let start_time = Utc::now();
         let range = Range::Single(height.height);
         let block_file = self.target.create(DataKind::Blocks, &range)
@@ -101,7 +101,7 @@ impl<B: BlockchainTypes, TS: TargetStorage> Archiver<B, TS> {
             .map_err(|e| anyhow!("Unable to create file: {}", e))?;
         let tx_file_url = tx_file.get_url();
 
-        self.append_txes(&tx_file, &block, &txes).await?;
+        self.append_txes(&tx_file, &block, &txes, tx_options).await?;
 
         let _ = tx_file.close().await?;
         let notification_tx = Notification {
@@ -117,7 +117,7 @@ impl<B: BlockchainTypes, TS: TargetStorage> Archiver<B, TS> {
         Ok(())
     }
 
-    pub async fn ensure_all(&self, blocks: Range) -> anyhow::Result<()> {
+    pub async fn ensure_all(&self, blocks: Range, tx_options: &TxOptions) -> anyhow::Result<()> {
         tracing::info!("Check if blocks are fully archived in range: {}", blocks);
         let mut existing = self.target.list(blocks.clone())?;
         let mut archived = ArchivesList::new();
@@ -146,7 +146,7 @@ impl<B: BlockchainTypes, TS: TargetStorage> Archiver<B, TS> {
         while let Some(heights_next) = heights.next() {
             let mut jobs = Vec::new();
             for height in heights_next {
-                jobs.push(self.archive_single(Height { height: *height, hash: None }));
+                jobs.push(self.archive_single(Height { height: *height, hash: None }, tx_options));
             }
             tokio::select! {
                 _ = shutdown.signalled() => {
