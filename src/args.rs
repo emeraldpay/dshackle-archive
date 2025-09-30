@@ -54,6 +54,12 @@ pub struct Args {
     /// (Ethereum Geth specific) Enable stateDiff extraction (debug_traceTransaction with `prestateTracer` tracing)
     #[arg(long = "includeStateDiff")]
     pub include_state_diff: bool,
+
+    /// Put Transaction traces into a separate file (with `trace` suffix). Traces could be very large, sometimes gigabytes per transaction and in some cases it makes sense to store and process them separately.
+    /// By default, traces are stored inline with the transaction data.
+    /// If not trances are included, this flag has no effect.
+    #[arg(long = "separateTraces")]
+    pub tx_trace_separate: bool,
 }
 
 impl Default for Args {
@@ -72,6 +78,7 @@ impl Default for Args {
             range_chunk: Some(1000),
             include_trace: false,
             include_state_diff: false,
+            tx_trace_separate: false,
         }
     }
 }

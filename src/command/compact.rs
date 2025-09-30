@@ -9,7 +9,7 @@ use async_trait::async_trait;
 use shutdown::Shutdown;
 use tokio::task::JoinSet;
 use crate::args::Args;
-use crate::blockchain::{BlockDetails, BlockchainTypes};
+use crate::blockchain::{BlockDetails, BlockchainTypes, TxOptions};
 use crate::command::archiver::Archiver;
 use crate::command::{ArchiveGroup, ArchivesList, CommandExecutor};
 use crate::datakind::DataKind;
@@ -23,9 +23,10 @@ use crate::storage::{FileReference, TargetFileReader, TargetFileWriter, TargetSt
 pub struct CompactCommand<B: BlockchainTypes, TS: TargetStorage> {
     b: PhantomData<B>,
     archiver: Archiver<B, TS>,
-
+    
     blocks: Blocks,
     chunk_size: usize,
+    tx_options: TxOptions,
 }
 
 #[async_trait]
@@ -112,12 +113,13 @@ impl<B: BlockchainTypes, TS: TargetStorage> CompactCommand<B, TS> {
             archiver,
             blocks: Blocks::try_from(config)?,
             chunk_size: config.range_chunk.unwrap_or(1000),
+            tx_options: TxOptions::from(config),
         })
     }
 
     async fn compact_range(&self, shutdown: Shutdown, range: &Range, files: Vec<FileReference>) -> Result<bool> {
         tracing::info!(range = display(range), "Compacting range chunk");
-        let complete = match Self::verify_files(range, files) {
+        let complete = match Self::verify_files(range, files, &self.tx_options) {
             Err(e) => {
                 tracing::warn!(range = display(range), "{}", e);
                 return Ok(false);
@@ -197,11 +199,11 @@ impl<B: BlockchainTypes, TS: TargetStorage> CompactCommand<B, TS> {
         Ok(())
     }
 
-    fn verify_files(range: &Range, files: Vec<FileReference>) -> Result<ArchivesList> {
+    fn verify_files(range: &Range, files: Vec<FileReference>, tx_options: &TxOptions) -> Result<ArchivesList> {
         //
         // fist make sure it has complete data for every height in group
         //
-        let mut complete = ArchivesList::new();
+        let mut complete = ArchivesList::new(tx_options.separate_traces);
         for file in files {
             complete.append(file)?;
         }

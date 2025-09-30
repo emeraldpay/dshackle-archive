@@ -54,6 +54,7 @@ impl Filenames {
                 Range::Multiple(_, _) => "blocks"
             },
             DataKind::Transactions => "txes",
+            DataKind::TransactionTraces => "traces"
         };
 
         match range {
@@ -238,6 +239,14 @@ mod tests {
     }
 
     #[test]
+    fn single_block_tx_traces_file() {
+        let filenames = Filenames::default();
+        let kind = DataKind::TransactionTraces;
+        let range = Range::Single(12000000);
+        assert_eq!(filenames.filename(&kind, &range), "012000000.traces.avro");
+    }
+
+    #[test]
     fn single_block_path() {
         let filenames = Filenames::default();
         let kind = DataKind::Blocks;
@@ -260,6 +269,13 @@ mod tests {
         let filenames = Filenames::default();
         let kind = DataKind::Transactions;
         assert_eq!(filenames.path(&kind, &Range::Multiple(12000000, 12000999)), "012000000/range-012000000_012000999.txes.avro");
+    }
+
+    #[test]
+    fn multi_tx_traces_path() {
+        let filenames = Filenames::default();
+        let kind = DataKind::TransactionTraces;
+        assert_eq!(filenames.path(&kind, &Range::Multiple(12000000, 12000999)), "012000000/range-012000000_012000999.traces.avro");
     }
 
     #[test]
@@ -334,6 +350,13 @@ mod tests {
     fn parse_single_tx_file() {
         let (kind, range) = Filenames::parse("021625139.txes.avro".to_string()).unwrap();
         assert_eq!(kind, DataKind::Transactions);
+        assert_eq!(range, Range::Single(21625139));
+    }
+
+    #[test]
+    fn parse_single_tx_traces_file() {
+        let (kind, range) = Filenames::parse("021625139.traces.avro".to_string()).unwrap();
+        assert_eq!(kind, DataKind::TransactionTraces);
         assert_eq!(range, Range::Single(21625139));
     }
 }

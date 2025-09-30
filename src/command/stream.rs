@@ -34,10 +34,7 @@ impl<B: BlockchainTypes, TS: TargetStorage> StreamCommand<B, TS> {
             None
         };
 
-        let tx_options = TxOptions {
-            include_trace: config.include_trace,
-            include_state_diff: config.include_state_diff,
-        };
+        let tx_options = TxOptions::from(config);
 
         Ok(Self {
             b: PhantomData,

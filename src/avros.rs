@@ -179,6 +179,77 @@ lazy_static! {
           ]
         }
     "#).unwrap();
+
+    pub static ref TX_TRACE_SCHEMA: Schema = Schema::parse_str(r#"
+        {
+          "name": "TransactionTrace",
+          "namespace": "io.emeraldpay.dshackle.archive.avro",
+          "type": "record",
+          "fields": [
+            {
+              "name": "blockchainType",
+              "type": {
+                "name": "BlockchainType",
+                "type": "enum",
+                "symbols": [
+                  "ETHEREUM",
+                  "BITCOIN"
+                ]
+              }
+            },
+            {
+              "name": "blockchainId",
+              "type": "string"
+            },
+            {
+              "name": "archiveTimestamp",
+              "type": {
+                "type": "long",
+                "logicalType": "timestamp-millis"
+              }
+            },
+            {
+              "name": "height",
+              "type": "long"
+            },
+            {
+              "name": "blockId",
+              "type": "string"
+            },
+            {
+              "name": "timestamp",
+              "type": {
+                "type": "long",
+                "logicalType": "timestamp-millis"
+              }
+            },
+            {
+              "name": "index",
+              "type": "long"
+            },
+            {
+              "name": "txid",
+              "type": "string"
+            },
+            {
+              "name": "traceJson",
+              "type": [
+                "null",
+                "bytes"
+              ],
+              "default": null
+            },
+            {
+              "name": "stateDiffJson",
+              "type": [
+                "null",
+                "bytes"
+              ],
+              "default": null
+            }
+          ]
+        }
+    "#).unwrap();
 }
 
 pub fn to_record<'s>(schema: &'s Schema, value: Value) -> anyhow::Result<Record<'s>> {

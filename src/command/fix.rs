@@ -23,10 +23,7 @@ impl<B: BlockchainTypes, TS: TargetStorage> FixCommand<B, TS> {
     pub fn new(config: &Args,
                archiver: Archiver<B, TS>) -> anyhow::Result<Self> {
 
-        let tx_options = TxOptions {
-            include_trace: config.include_trace,
-            include_state_diff: config.include_state_diff,
-        };
+        let tx_options = TxOptions::from(config);
 
         Ok(Self {
             b: PhantomData,

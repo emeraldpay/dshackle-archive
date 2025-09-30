@@ -9,7 +9,7 @@ use async_trait::async_trait;
 use chrono::Utc;
 use serde::{Deserialize, Deserializer};
 use crate::avros::{BLOCK_SCHEMA, TX_SCHEMA};
-use crate::blockchain::{BitcoinType, BlockDetails, BlockReference, BlockchainData, JsonString, TxOptions};
+use crate::blockchain::{BitcoinType, BlockDetails, BlockReference, BlockchainData, JsonString, TxRecordOptions};
 
 #[derive(Clone)]
 pub struct BitcoinData {
@@ -145,7 +145,7 @@ impl BlockchainData<BitcoinType> for BitcoinData {
         Ok((record, parsed_block, transactions))
     }
 
-    async fn fetch_tx(&self, block: &BitcoinBlock, index: usize, _tx_options: &TxOptions) -> Result<Record> {
+    async fn fetch_tx(&self, block: &BitcoinBlock, index: usize, _tx_options: &TxRecordOptions) -> Result<Record> {
         let tx_hash = block.transactions.get(index).ok_or_else(|| anyhow!("Transaction not found"))?;
 
         let (tx, tx_raw) = tokio::join!(

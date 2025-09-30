@@ -27,16 +27,32 @@ pub trait CommandExecutor {
 #[derive(Clone, Debug)]
 pub struct ArchiveGroup {
     pub range: Range,
+    pub expect_trace_files: bool,
     pub blocks: Option<FileReference>,
     pub txes: Option<FileReference>,
+    pub traces: Option<FileReference>,
 }
 
 impl ArchiveGroup {
-    pub fn new(range: Range) -> Self {
+
+    ///
+    /// @expect_trace_files - if true, the group is considered complete only if trace files are present
+    pub fn new(range: Range, expect_trace_files: bool) -> Self {
         Self {
             range,
+            expect_trace_files,
             blocks: None,
             txes: None,
+            traces: None,
+        }
+    }
+
+    ///
+    /// Set the group to expect trace files
+    pub fn expecting_traces(self) -> Self {
+        Self {
+            expect_trace_files: true,
+            ..self
         }
     }
 
@@ -56,6 +72,10 @@ impl ArchiveGroup {
                 txes: Some(file),
                 ..self
             },
+            crate::datakind::DataKind::TransactionTraces => Self {
+                traces: Some(file),
+                ..self
+            },
         };
         Ok(merged)
     }
@@ -64,7 +84,7 @@ impl ArchiveGroup {
     /// Checks if all the data kinds are present
     ///
     pub fn is_complete(&self) -> bool {
-        self.blocks.is_some() && self.txes.is_some()
+        self.blocks.is_some() && self.txes.is_some() && (!self.expect_trace_files || self.traces.is_some())
     }
 
     ///
@@ -77,6 +97,9 @@ impl ArchiveGroup {
         if let Some(txes) = &self.txes {
             files.push(txes);
         }
+        if let Some(traces) = &self.traces {
+            files.push(traces);
+        }
         files
     }
 }
@@ -84,12 +107,17 @@ impl ArchiveGroup {
 ///
 /// A list of archive groups. Supposed to be used for checking a range to find out what data is in the archive
 pub struct ArchivesList {
+    expect_trace_files: bool,
     current: HashMap<Range, ArchiveGroup>,
 }
 
 impl ArchivesList {
-    pub fn new() -> Self {
+
+    ///
+    /// expect_trace_files - if true, the groups are considered complete only if trace files are present
+    pub fn new(expect_trace_files: bool) -> Self {
         Self {
+            expect_trace_files,
             current: HashMap::new(),
         }
     }
@@ -100,7 +128,7 @@ impl ArchivesList {
         let range = file.range.clone();
 
         let current = self.current.remove(&range)
-            .unwrap_or(ArchiveGroup::new(range.clone()));
+            .unwrap_or(ArchiveGroup::new(range.clone(), self.expect_trace_files));
 
         let updated = current.with_file(file)?;
         let is_complete = updated.is_complete();
@@ -130,7 +158,7 @@ mod tests {
 
     #[test]
     fn test_append_new_file() {
-        let mut archives_list = ArchivesList::new();
+        let mut archives_list = ArchivesList::new(false);
         let range = Range::new(0, 10);
         let file = FileReference {
             range: range.clone(),
@@ -145,7 +173,7 @@ mod tests {
 
     #[test]
     fn test_append_complete_group() {
-        let mut archives_list = ArchivesList::new();
+        let mut archives_list = ArchivesList::new(false);
         let range = Range::new(0, 10);
         let file_blocks = FileReference {
             range: range.clone(),
@@ -165,8 +193,37 @@ mod tests {
     }
 
     #[test]
+    fn test_append_complete_with_traces_group() {
+        let mut archives_list = ArchivesList::new(true);
+        let range = Range::new(0, 10);
+        let file_blocks = FileReference {
+            range: range.clone(),
+            kind: DataKind::Blocks,
+            path: "file1".to_string(),
+        };
+        let file_txes = FileReference {
+            range: range.clone(),
+            kind: DataKind::Transactions,
+            path: "file2".to_string(),
+        };
+
+        archives_list.append(file_blocks).unwrap();
+        let is_complete = archives_list.append(file_txes).unwrap();
+        assert!(!is_complete);
+
+        let file_traces = FileReference {
+            range: range.clone(),
+            kind: DataKind::TransactionTraces,
+            path: "file3".to_string(),
+        };
+        let is_complete = archives_list.append(file_traces).unwrap();
+        assert!(is_complete);
+        assert_eq!(archives_list.current.len(), 1);
+    }
+
+    #[test]
     fn test_remove_group() {
-        let mut archives_list = ArchivesList::new();
+        let mut archives_list = ArchivesList::new(false);
         let range = Range::new(0, 10);
         let file = FileReference {
             range: range.clone(),
@@ -182,7 +239,7 @@ mod tests {
 
     #[test]
     fn test_iter() {
-        let mut archives_list = ArchivesList::new();
+        let mut archives_list = ArchivesList::new(false);
         let range1 = Range::new(0, 10);
         let range2 = Range::new(11, 20);
         let file1 = FileReference {

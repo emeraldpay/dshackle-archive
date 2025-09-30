@@ -56,10 +56,7 @@ impl<B: BlockchainTypes, TS: TargetStorage> ArchiveCommand<B, TS> {
             .ok_or(anyhow!("Provide range to archive --range"))??;
         let chunk_size = config.range_chunk.unwrap_or(1000);
 
-        let tx_options = TxOptions {
-            include_trace: config.include_trace,
-            include_state_diff: config.include_state_diff,
-        };
+        let tx_options = TxOptions::from(config);
 
         Ok(Self {
             b: PhantomData,
@@ -79,10 +76,21 @@ impl<B: BlockchainTypes, TS: TargetStorage> ArchiveCommand<B, TS> {
             .await
             .map_err(|e| anyhow!("Unable to create file: {}", e))?;
         let block_file_url = block_file.get_url();
+
         let tx_file = self.archiver.target.create(DataKind::Transactions, &range)
             .await
             .map_err(|e| anyhow!("Unable to create file: {}", e))?;
         let tx_file_url = tx_file.get_url();
+
+        let tx_trace_file = if self.tx_options.separate_traces {
+            let file = self.archiver.target.create(DataKind::TransactionTraces, &range)
+                .await
+                .map_err(|e| anyhow!("Unable to create file: {}", e))?;
+            Some(file)
+        } else {
+            None
+        };
+        let tx_trace_file_url = tx_trace_file.as_ref().map(|f| f.get_url());
 
         let heights: Vec<u64> = range.iter().collect();
 
@@ -92,12 +100,18 @@ impl<B: BlockchainTypes, TS: TargetStorage> ArchiveCommand<B, TS> {
             }
             let (block, txes) = self.archiver.append_block(&block_file, &height.into())
                 .await.context(format!("Block at {}", height))?;
-            let _ = self.archiver.append_txes(&tx_file, &block, &txes, &self.tx_options)
-                .await.context(format!("Texes at {}", height))?;
+            let _ = self.archiver.append_txes(&tx_file, &block, &txes, &self.tx_options.for_record(DataKind::Transactions).unwrap())
+                .await.context(format!("Txes at {}", height))?;
+            if let Some(trace_file) = &tx_trace_file {
+                let _ = self.archiver.append_txes(&trace_file, &block, &txes, &self.tx_options.for_record(DataKind::TransactionTraces).unwrap())
+                    .await.context(format!("Txes at {}", height))?;
+            }
         }
         let _ = block_file.close().await?;
         let _ = tx_file.close().await?;
-
+        if let Some(trace_file) = tx_trace_file {
+            let _ = trace_file.close().await?;
+        }
 
         let notification_block = Notification {
             // common fields
@@ -118,9 +132,19 @@ impl<B: BlockchainTypes, TS: TargetStorage> ArchiveCommand<B, TS> {
             file_type: DataKind::Transactions,
             location: tx_file_url,
 
-            ..notification_block
+            ..notification_block.clone()
         };
         let _ = self.archiver.notifications.send(notification_tx).await;
+
+        if let Some(url) = tx_trace_file_url {
+            let notification_tx_trace = Notification {
+                file_type: DataKind::TransactionTraces,
+                location: url,
+
+                ..notification_block
+            };
+            let _ = self.archiver.notifications.send(notification_tx_trace).await;
+        }
 
         let duration = Utc::now().signed_duration_since(start_time);
         if duration.num_seconds() > 2 {

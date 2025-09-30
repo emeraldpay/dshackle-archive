@@ -8,7 +8,7 @@ use async_trait::async_trait;
 use shutdown::Shutdown;
 use tokio::sync::Semaphore;
 use tokio::task::JoinSet;
-use crate::blockchain::{BlockDetails, BlockchainTypes};
+use crate::blockchain::{BlockDetails, BlockchainTypes, TxOptions};
 use crate::command::archiver::Archiver;
 use crate::command::{ArchiveGroup, ArchivesList, CommandExecutor};
 use crate::{avros, global};
@@ -27,6 +27,7 @@ pub struct VerifyCommand<B: BlockchainTypes, TS: TargetStorage> {
     b: PhantomData<B>,
     blocks: Blocks,
     archiver: Arc<Archiver<B, TS>>,
+    tx_options: TxOptions,
 }
 
 impl<B: BlockchainTypes + 'static, TS: TargetStorage + 'static> VerifyCommand<B, TS> {
@@ -38,6 +39,7 @@ impl<B: BlockchainTypes + 'static, TS: TargetStorage + 'static> VerifyCommand<B,
             b: PhantomData,
             blocks: Blocks::try_from(config)?,
             archiver: Arc::new(archiver),
+            tx_options: TxOptions::from(config),
         })
     }
 
@@ -51,7 +53,7 @@ impl<B: BlockchainTypes + 'static, FR: TargetStorage + 'static> CommandExecutor 
         tracing::info!(range = %range, "Verifying range");
 
         let mut existing = self.archiver.target.list(range)?;
-        let mut archived = ArchivesList::new();
+        let mut archived = ArchivesList::new(self.tx_options.separate_traces);
         let shutdown = global::get_shutdown();
 
         while !shutdown.is_signalled() {
@@ -330,7 +332,7 @@ mod tests {
         write.close().await.unwrap();
 
         let write = archiver.target.create(DataKind::Transactions, &Range::Single(101)).await.unwrap();
-        let tx_options = TxOptions::default();
+        let tx_options = TxOptions::default().for_record(DataKind::Transactions).unwrap();
         let record = data.fetch_tx(&block101, 0, &tx_options).await.unwrap();
         write.append(record).await.unwrap();
         write.close().await.unwrap();
@@ -407,13 +409,12 @@ mod tests {
         write.close().await.unwrap();
 
         let write = archiver.target.create(DataKind::Transactions, &Range::Single(101)).await.unwrap();
-        let tx_options = TxOptions::default();
+        let tx_options = TxOptions::default().for_record(DataKind::Transactions).unwrap();
         let record = data.fetch_tx(&block101, 0, &tx_options).await.unwrap();
         write.append(record).await.unwrap();
         write.close().await.unwrap();
 
         let write = archiver.target.create(DataKind::Transactions, &Range::Single(102)).await.unwrap();
-        let tx_options = TxOptions::default();
         let record = data.fetch_tx(&block102, 0, &tx_options).await.unwrap();
         write.append(record).await.unwrap();
         write.close().await.unwrap();
@@ -472,7 +473,7 @@ mod tests {
         let txes = archiver.target
             .create(DataKind::Transactions, &Range::Single(100))
             .await.expect("Create txes");
-        let tx_options = TxOptions::default();
+        let tx_options = TxOptions::default().for_record(DataKind::Transactions).unwrap();
         let record = data.fetch_tx(&block100, 0, &tx_options).await.unwrap();
         txes.append(record).await.unwrap();
         txes.close().await.unwrap();

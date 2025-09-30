@@ -75,7 +75,7 @@ pub async fn write_block_and_tx<TS: TargetStorage>(
     };
 
     for i in txes {
-        let record = archiver.data_provider.fetch_tx(&block, i, &TxOptions::default()).await?;
+        let record = archiver.data_provider.fetch_tx(&block, i, &TxOptions::default().for_record(DataKind::Transactions).unwrap()).await?;
         file_txes.append(record).await?;
     }
     file_txes.close().await?;
