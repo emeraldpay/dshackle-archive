@@ -86,10 +86,10 @@ Options:
           Blocks Range (`N...M`)
       --rangeChunk <RANGE_CHUNK>
           Range chunk size (default 1000)
-      --includeTrace
-          (Ethereum Geth specific) Enable trace extraction (debug_traceTransaction with `callTracer` tracing)
-      --includeStateDiff
-          (Ethereum Geth specific) Enable stateDiff extraction (debug_traceTransaction with `prestateTracer` tracing)
+  -f, --files <FILES>
+          Types of files to archive (comma-separated list of `blocks`, `txes`, `traces`). Default: blocks,txes
+      --includeTrace <INCLUDE_TRACE>
+          List of data types to include into tracing archives (comma-separated list of `calls`, `stateDiff`). Default: calls,stateDiff; Used only if `traces` are included into the archived files (see `--files` option); Details: `calls` - debug_traceTransaction with `callTracer` tracing; `stateDiff` - debug_traceTransaction with `prestateTracer` tracing
   -h, --help
           Print help
 ----
@@ -149,12 +149,12 @@ WARNING: This command is destructive, it deletes files from the archive.
 Dshackle Archive copies and stored data as JSON responses from blockchain nodes the resulting archive is much larger that the node database size, which keeps data in a compact format.
 It uses Snappy compression for Avro files, which give a good compression ratio, but still the resulting archive is large.
 
-Average size of a 1000 blocks range (w/o expensive JSON such as `stateDiff` and `trace`):
+Average size of a 1000 blocks range (w/o expensive JSON such as `stateDiff` and `calls`):
 
 - ~300Mb for Ethereum
 - ~400Mb for Bitcoin
 
-And the whole archive (w/o expensive JSON such as `stateDiff` and `trace`):
+And the whole archive (w/o expensive JSON such as `stateDiff` and `calls`):
 
 - ~2.5Tb for Ethereum
 - ~1.9Tb for Bitcoin
@@ -243,11 +243,27 @@ Milliseconds since epoch
 - `from` - from address
 - `to` - to address
 - `receiptJson` - JSON response for `eth_getTransactionReceipt`
-- `traceJson` - JSON response for `debug_traceTransaction({tracer: "callTracer"})`
-- `stateDiffJson` - JSON response for `debug_traceTransaction({tracer: "prestateTracer"})`
 
 .Bitcoin specific fields
 - none
+
+==== Transaction Trace
+
+NOTE: Applicable only for Ethereum-compatible blockchains.
+
+.Fields same as in Transaction:
+- `blockchainType` - _type of blockchain_, as a definitions of what fields to expect. One of `ETHEREUM` or `BITCOIN`
+- `blockchainId` - blockchain id (`ETH`, `BTC`, etc)
+- `archiveTimestamp` - when the archive record was created. Milliseconds since epoch
+- `height` - block height
+- `blockId` - block hash
+- `timestamp` - block timestamp. Milliseconds since epoch
+- `index` - index of the transaction in block
+- `txid` - hash or transaction id of the transaction
+
+.Trade data:
+- `traceJson` - JSON response for `debug_traceTransaction({tracer: "callTracer"})`
+- `stateDiffJson` - JSON response for `debug_traceTransaction({tracer: "prestateTracer"})`
 
 [[notification-format]]
 === Notification format
@@ -270,7 +286,7 @@ Milliseconds since epoch
 - `version` id of the current JSON format
 - `ts` timestamp of the archive event
 - `blockchain` blockchain
-- `type` type of file (`transactions` or `blocks`)
+- `type` type of file (`transactions`, `blocks`, or `traces`)
 - `run` mode in which the Dshackle Archive is run (`archive`, `stream`, `copy` or `compact`)
 - `heightStart` and `heightEnd` range of blocks in the archived files
 - `location` a URL to the archived file
@@ -291,7 +307,7 @@ Please contact splix@emerald.cash to discuss the possibility.
 
 == License
 
-Copyright 2025 EmeraldPay
+Copyright 2025 EmeraldPay Ltd
 
 Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except in compliance with the License.
 You may obtain a copy of the License at
