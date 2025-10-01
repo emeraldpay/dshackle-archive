@@ -159,22 +159,6 @@ lazy_static! {
                 "bytes"
               ],
               "default": null
-            },
-            {
-              "name": "traceJson",
-              "type": [
-                "null",
-                "bytes"
-              ],
-              "default": null
-            },
-            {
-              "name": "stateDiffJson",
-              "type": [
-                "null",
-                "bytes"
-              ],
-              "default": null
             }
           ]
         }

@@ -1,10 +1,11 @@
 use std::marker::PhantomData;
 use async_trait::async_trait;
 use crate::args::Args;
-use crate::blockchain::{BlockchainTypes, TxOptions};
+use crate::blockchain::{BlockchainTypes};
 use crate::blocks_config::Blocks;
 use crate::command::archiver::Archiver;
 use crate::command::{CommandExecutor};
+use crate::datakind::DataOptions;
 use crate::storage::TargetStorage;
 
 ///
@@ -16,14 +17,14 @@ pub struct FixCommand<B: BlockchainTypes, TS: TargetStorage> {
     b: PhantomData<B>,
     blocks: Blocks,
     archiver: Archiver<B, TS>,
-    tx_options: TxOptions,
+    tx_options: DataOptions,
 }
 
 impl<B: BlockchainTypes, TS: TargetStorage> FixCommand<B, TS> {
     pub fn new(config: &Args,
                archiver: Archiver<B, TS>) -> anyhow::Result<Self> {
 
-        let tx_options = TxOptions::from(config);
+        let tx_options = DataOptions::from(config);
 
         Ok(Self {
             b: PhantomData,

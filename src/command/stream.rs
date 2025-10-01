@@ -5,8 +5,9 @@ use crate::{range::Range, command::CommandExecutor, args::Args, blockchain::{
     connection::{Blockchain}
 }, global};
 use anyhow::{Result};
-use crate::blockchain::{BlockchainTypes, TxOptions};
+use crate::blockchain::{BlockchainTypes};
 use crate::command::archiver::Archiver;
+use crate::datakind::DataOptions;
 use crate::storage::TargetStorage;
 
 ///
@@ -19,7 +20,7 @@ pub struct StreamCommand<B: BlockchainTypes, TS: TargetStorage> {
     blockchain: Arc<Blockchain>,
     continue_blocks: Option<u64>,
     archiver: Archiver<B, TS>,
-    tx_options: TxOptions,
+    tx_options: DataOptions,
 }
 
 impl<B: BlockchainTypes, TS: TargetStorage> StreamCommand<B, TS> {
@@ -34,7 +35,7 @@ impl<B: BlockchainTypes, TS: TargetStorage> StreamCommand<B, TS> {
             None
         };
 
-        let tx_options = TxOptions::from(config);
+        let tx_options = DataOptions::from(config);
 
         Ok(Self {
             b: PhantomData,

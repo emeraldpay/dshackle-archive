@@ -8,11 +8,12 @@ use async_trait::async_trait;
 use shutdown::Shutdown;
 use tokio::sync::Semaphore;
 use tokio::task::JoinSet;
-use crate::blockchain::{BlockDetails, BlockchainTypes, TxOptions};
+use crate::blockchain::{BlockDetails, BlockchainTypes};
 use crate::command::archiver::Archiver;
 use crate::command::{ArchiveGroup, ArchivesList, CommandExecutor};
 use crate::{avros, global};
 use crate::blocks_config::Blocks;
+use crate::datakind::DataOptions;
 use crate::range::Range;
 use crate::storage::TargetStorage;
 use crate::storage::TargetFileReader;
@@ -27,7 +28,7 @@ pub struct VerifyCommand<B: BlockchainTypes, TS: TargetStorage> {
     b: PhantomData<B>,
     blocks: Blocks,
     archiver: Arc<Archiver<B, TS>>,
-    tx_options: TxOptions,
+    tx_options: DataOptions,
 }
 
 impl<B: BlockchainTypes + 'static, TS: TargetStorage + 'static> VerifyCommand<B, TS> {
@@ -39,7 +40,7 @@ impl<B: BlockchainTypes + 'static, TS: TargetStorage + 'static> VerifyCommand<B,
             b: PhantomData,
             blocks: Blocks::try_from(config)?,
             archiver: Arc::new(archiver),
-            tx_options: TxOptions::from(config),
+            tx_options: DataOptions::from(config),
         })
     }
 
@@ -53,7 +54,7 @@ impl<B: BlockchainTypes + 'static, FR: TargetStorage + 'static> CommandExecutor 
         tracing::info!(range = %range, "Verifying range");
 
         let mut existing = self.archiver.target.list(range)?;
-        let mut archived = ArchivesList::new(self.tx_options.separate_traces);
+        let mut archived = ArchivesList::new(self.tx_options.files.clone());
         let shutdown = global::get_shutdown();
 
         while !shutdown.is_signalled() {
@@ -264,8 +265,7 @@ mod tests {
     use object_store::{ObjectMeta, ObjectStore};
     use crate::args::Args;
     use crate::blockchain::mock::{MockBlock, MockData, MockTx, MockType};
-    use crate::blockchain::TxOptions;
-    use crate::command::archiver::Archiver;
+   use crate::command::archiver::Archiver;
     use crate::command::CommandExecutor;
     use crate::command::verify::VerifyCommand;
     use crate::filenames::Filenames;
@@ -332,8 +332,7 @@ mod tests {
         write.close().await.unwrap();
 
         let write = archiver.target.create(DataKind::Transactions, &Range::Single(101)).await.unwrap();
-        let tx_options = TxOptions::default().for_record(DataKind::Transactions).unwrap();
-        let record = data.fetch_tx(&block101, 0, &tx_options).await.unwrap();
+        let record = data.fetch_tx(&block101, 0).await.unwrap();
         write.append(record).await.unwrap();
         write.close().await.unwrap();
 
@@ -409,13 +408,12 @@ mod tests {
         write.close().await.unwrap();
 
         let write = archiver.target.create(DataKind::Transactions, &Range::Single(101)).await.unwrap();
-        let tx_options = TxOptions::default().for_record(DataKind::Transactions).unwrap();
-        let record = data.fetch_tx(&block101, 0, &tx_options).await.unwrap();
+        let record = data.fetch_tx(&block101, 0).await.unwrap();
         write.append(record).await.unwrap();
         write.close().await.unwrap();
 
         let write = archiver.target.create(DataKind::Transactions, &Range::Single(102)).await.unwrap();
-        let record = data.fetch_tx(&block102, 0, &tx_options).await.unwrap();
+        let record = data.fetch_tx(&block102, 0).await.unwrap();
         write.append(record).await.unwrap();
         write.close().await.unwrap();
 
@@ -473,8 +471,7 @@ mod tests {
         let txes = archiver.target
             .create(DataKind::Transactions, &Range::Single(100))
             .await.expect("Create txes");
-        let tx_options = TxOptions::default().for_record(DataKind::Transactions).unwrap();
-        let record = data.fetch_tx(&block100, 0, &tx_options).await.unwrap();
+        let record = data.fetch_tx(&block100, 0).await.unwrap();
         txes.append(record).await.unwrap();
         txes.close().await.unwrap();
 

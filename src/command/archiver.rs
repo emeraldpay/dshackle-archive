@@ -5,10 +5,10 @@ use anyhow::anyhow;
 use chrono::Utc;
 use futures_util::future::join_all;
 use tokio::sync::mpsc::Sender;
-use crate::blockchain::{BlockReference, BlockchainData, BlockchainTypes, TxOptions, TxRecordOptions};
+use crate::blockchain::{BlockReference, BlockchainData, BlockchainTypes};
 use crate::blockchain::connection::{Height};
 use crate::command::{ArchivesList};
-use crate::datakind::DataKind;
+use crate::datakind::{DataKind, DataOptions, TraceOptions};
 use crate::global;
 use crate::notify::{Notification, Notifier, RunMode};
 use crate::notify::empty::EmptyNotifier;
@@ -60,17 +60,25 @@ impl<B: BlockchainTypes, TS: TargetStorage> Archiver<B, TS> {
         Ok((block, txes))
     }
 
-    pub async fn append_txes(&self, tx_file: &TS::Writer, block: &B::BlockParsed, txes: &Vec<B::TxId>, tx_options: &TxRecordOptions) -> anyhow::Result<()> {
+    pub async fn append_txes(&self, tx_file: &TS::Writer, block: &B::BlockParsed, txes: &Vec<B::TxId>) -> anyhow::Result<()> {
         for tx_index in 0..txes.len() {
-            let data = self.data_provider.fetch_tx(&block, tx_index, tx_options).await?;
+            let data = self.data_provider.fetch_tx(&block, tx_index).await?;
             let _ = tx_file.append(data).await?;
+        }
+        Ok(())
+    }
+
+    pub async fn append_traces(&self, trace_file: &TS::Writer, block: &B::BlockParsed, txes: &Vec<B::TxId>, tx_options: &TraceOptions) -> anyhow::Result<()> {
+        for tx_index in 0..txes.len() {
+            let data = self.data_provider.fetch_traces(&block, tx_index, tx_options).await?;
+            let _ = trace_file.append(data).await?;
         }
         Ok(())
     }
 
     ///
     /// Archive a single block with all the transactions
-    pub async fn archive_single(&self, height: Height, tx_options: &TxOptions) -> anyhow::Result<()> {
+    pub async fn archive_single(&self, height: Height, options: &DataOptions) -> anyhow::Result<()> {
         let start_time = Utc::now();
         let range = Range::Single(height.height);
         let block_file = self.target.create(DataKind::Blocks, &range)
@@ -96,34 +104,48 @@ impl<B: BlockchainTypes, TS: TargetStorage> Archiver<B, TS> {
         };
         let _ = self.notifications.send(notification_block.clone()).await;
 
-        for data_kind in [DataKind::Transactions, DataKind::TransactionTraces] {
-            if let Some(opts) = tx_options.for_record(data_kind) {
-                let tx_file = self.target.create(data_kind.clone(), &range)
-                    .await
-                    .map_err(|e| anyhow!("Unable to create file: {}", e))?;
-                let tx_file_url = tx_file.get_url();
-                self.append_txes(&tx_file, &block, &txes, &opts).await?;
+        let tx_file = self.target.create(DataKind::Transactions, &range)
+            .await
+            .map_err(|e| anyhow!("Unable to create file: {}", e))?;
+        let tx_file_url = tx_file.get_url();
+        self.append_txes(&tx_file, &block, &txes).await?;
 
-                let _ = tx_file.close().await?;
-                let notification_tx = Notification {
-                    file_type: data_kind,
-                    location: tx_file_url,
+        let _ = tx_file.close().await?;
+        let notification_tx = Notification {
+            file_type: DataKind::Transactions,
+            location: tx_file_url,
 
-                    ..notification_block.clone()
-                };
-                let _ = self.notifications.send(notification_tx).await;
-            }
+            ..notification_block.clone()
+        };
+        let _ = self.notifications.send(notification_tx).await;
+
+        if let Some(traces_options) = &options.trace {
+            let traces_file = self.target.create(DataKind::TransactionTraces, &range)
+                .await
+                .map_err(|e| anyhow!("Unable to create file: {}", e))?;
+            let traces_file_url = traces_file.get_url();
+            self.append_traces(&traces_file, &block, &txes, traces_options).await?;
+
+            let _ = traces_file.close().await?;
+            let notification_tx = Notification {
+                file_type: DataKind::TransactionTraces,
+                location: traces_file_url,
+
+                ..notification_block.clone()
+            };
+            let _ = self.notifications.send(notification_tx).await;
         }
+
 
         let duration = Utc::now().signed_duration_since(start_time);
         tracing::info!("Block {} is archived in {}ms", height.height, duration.num_milliseconds());
         Ok(())
     }
 
-    pub async fn ensure_all(&self, blocks: Range, tx_options: &TxOptions) -> anyhow::Result<()> {
+    pub async fn ensure_all(&self, blocks: Range, tx_options: &DataOptions) -> anyhow::Result<()> {
         tracing::info!("Check if blocks are fully archived in range: {}", blocks);
         let mut existing = self.target.list(blocks.clone())?;
-        let mut archived = ArchivesList::new(tx_options.separate_traces);
+        let mut archived = ArchivesList::new(tx_options.files.clone());
         let shutdown = global::get_shutdown();
         while let Some(file) = existing.recv().await {
             archived.append(file)?;

@@ -10,74 +10,11 @@ use std::str::FromStr;
 use apache_avro::types::Record;
 use async_trait::async_trait;
 use anyhow::{anyhow, Error, Result};
-use apache_avro::Schema;
 use serde::Deserialize;
-use crate::args::Args;
-use crate::avros::{TX_SCHEMA, TX_TRACE_SCHEMA};
 use crate::blockchain::bitcoin::BitcoinData;
 use crate::blockchain::connection::Blockchain;
 use crate::blockchain::ethereum::EthereumData;
-use crate::datakind::DataKind;
-
-#[derive(Debug, Clone)]
-pub struct TxOptions {
-    /// when traces should be stored in separate files
-    pub separate_traces: bool,
-    /// if tx-archive should include callTracer JSON
-    pub include_trace: bool,
-    /// if tx-archive should include prestateTracer JSON
-    pub include_state_diff: bool,
-}
-
-impl Default for TxOptions {
-    fn default() -> Self {
-        Self {
-            include_trace: false,
-            include_state_diff: false,
-            separate_traces: false,
-        }
-    }
-}
-
-#[derive(Debug, Clone)]
-pub struct TxRecordOptions {
-    pub schema: &'static Schema,
-    pub include_base: bool,
-    pub include_trace: bool,
-    pub include_state_diff: bool,
-}
-
-
-impl From<&Args> for TxOptions {
-    fn from(value: &Args) -> Self {
-        Self {
-            include_trace: value.include_trace,
-            include_state_diff: value.include_state_diff,
-            separate_traces: value.tx_trace_separate,
-        }
-    }
-
-}
-
-impl TxOptions {
-    pub fn for_record(&self, data_kind: DataKind) -> Option<TxRecordOptions> {
-        match data_kind {
-            DataKind::Transactions => Some(TxRecordOptions {
-                schema: &TX_SCHEMA,
-                include_base: true,
-                include_trace: self.include_trace && !self.separate_traces,
-                include_state_diff: self.include_state_diff && !self.separate_traces,
-            }),
-            DataKind::TransactionTraces if self.separate_traces && (self.include_trace || self.include_state_diff) => Some(TxRecordOptions {
-                schema: &TX_TRACE_SCHEMA,
-                include_base: false,
-                include_trace: self.include_trace,
-                include_state_diff: self.include_state_diff,
-            }),
-            _ => None,
-        }
-    }
-}
+use crate::datakind::TraceOptions;
 
 ///
 /// Defined the data types for a blockchain
@@ -144,7 +81,11 @@ pub trait BlockchainData<T: BlockchainTypes>: Send + Sync {
 
     ///
     /// Get the details for the transaction
-    async fn fetch_tx(&self, block: &T::BlockParsed, index: usize, tx_options: &TxRecordOptions) -> Result<Record>;
+    async fn fetch_tx(&self, block: &T::BlockParsed, index: usize) -> Result<Record>;
+
+    ///
+    /// Get the details for the transaction
+    async fn fetch_traces(&self, block: &T::BlockParsed, index: usize, options: &TraceOptions) -> Result<Record>;
 
     ///
     /// Get the current height

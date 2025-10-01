@@ -47,19 +47,17 @@ pub struct Args {
     #[arg(long = "rangeChunk")]
     pub range_chunk: Option<usize>,
 
-    /// (Ethereum Geth specific) Enable trace extraction (debug_traceTransaction with `callTracer` tracing)
+    /// Types of files to archive (comma-separated list of `blocks`, `txes`, `traces`). Default: blocks,txes
+    #[arg(long = "files", short = 'f')]
+    pub files: Option<String>,
+
+    /// List of data types to include into tracing archives (comma-separated list of `calls`, `stateDiff`). Default: calls,stateDiff;
+    /// Used only if `traces` are included into the archived files (see `--files` option);
+    /// Details:
+    /// `calls` - debug_traceTransaction with `callTracer` tracing;
+    /// `stateDiff` - debug_traceTransaction with `prestateTracer` tracing
     #[arg(long = "includeTrace")]
-    pub include_trace: bool,
-
-    /// (Ethereum Geth specific) Enable stateDiff extraction (debug_traceTransaction with `prestateTracer` tracing)
-    #[arg(long = "includeStateDiff")]
-    pub include_state_diff: bool,
-
-    /// Put Transaction traces into a separate file (with `trace` suffix). Traces could be very large, sometimes gigabytes per transaction and in some cases it makes sense to store and process them separately.
-    /// By default, traces are stored inline with the transaction data.
-    /// If not trances are included, this flag has no effect.
-    #[arg(long = "separateTraces")]
-    pub tx_trace_separate: bool,
+    pub include_trace: Option<String>,
 }
 
 impl Default for Args {
@@ -76,9 +74,8 @@ impl Default for Args {
             tail: None,
             range: None,
             range_chunk: Some(1000),
-            include_trace: false,
-            include_state_diff: false,
-            tx_trace_separate: false,
+            files: Some("blocks,txes".to_string()),
+            include_trace: Some("calls,stateDiff".to_string()),
         }
     }
 }

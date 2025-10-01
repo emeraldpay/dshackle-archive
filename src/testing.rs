@@ -5,7 +5,7 @@ use object_store::{ObjectMeta, ObjectStore};
 use tracing_subscriber::filter::Targets;
 use tracing_subscriber::Layer;
 use tracing_subscriber::layer::SubscriberExt;
-use crate::blockchain::{BlockReference, BlockchainData, TxOptions};
+use crate::blockchain::{BlockReference, BlockchainData};
 use crate::blockchain::mock::{MockType};
 use crate::command::archiver::Archiver;
 use crate::datakind::DataKind;
@@ -75,7 +75,7 @@ pub async fn write_block_and_tx<TS: TargetStorage>(
     };
 
     for i in txes {
-        let record = archiver.data_provider.fetch_tx(&block, i, &TxOptions::default().for_record(DataKind::Transactions).unwrap()).await?;
+        let record = archiver.data_provider.fetch_tx(&block, i).await?;
         file_txes.append(record).await?;
     }
     file_txes.close().await?;

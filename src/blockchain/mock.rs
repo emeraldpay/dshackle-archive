@@ -5,8 +5,9 @@ use async_trait::async_trait;
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use crate::avros::{BLOCK_SCHEMA, TX_SCHEMA};
-use crate::blockchain::{BlockDetails, BlockReference, BlockchainData, BlockchainTypes, TxRecordOptions};
+use crate::blockchain::{BlockDetails, BlockReference, BlockchainData, BlockchainTypes};
 use crate::blockchain::connection::Blockchain;
+use crate::datakind::TraceOptions;
 
 pub struct MockType {}
 
@@ -106,7 +107,7 @@ impl BlockchainData<MockType> for MockData {
         Ok((record, block, txes))
     }
 
-    async fn fetch_tx(&self, block: &MockBlock, index: usize, _tx_options: &TxRecordOptions) -> anyhow::Result<Record> {
+    async fn fetch_tx(&self, block: &MockBlock, index: usize) -> anyhow::Result<Record> {
         let txes = self.txes.lock().unwrap();
         let tx = txes.iter()
             .find(|t| t.hash == block.transactions[index])
@@ -126,6 +127,10 @@ impl BlockchainData<MockType> for MockData {
         record.put("raw", serde_json::to_vec(&tx).unwrap());
 
         Ok(record)
+    }
+    
+    async fn fetch_traces(&self, _block: &MockBlock, _index: usize, _options: &TraceOptions) -> anyhow::Result<Record> {
+        Err(anyhow!("Traces not implemented in MockData"))
     }
 
     async fn height(&self) -> anyhow::Result<(u64, String)> {
