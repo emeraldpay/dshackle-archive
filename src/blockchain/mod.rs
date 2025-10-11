@@ -12,9 +12,10 @@ use async_trait::async_trait;
 use anyhow::{anyhow, Error, Result};
 use serde::Deserialize;
 use crate::blockchain::bitcoin::BitcoinData;
-use crate::blockchain::connection::Blockchain;
+use crate::blockchain::connection::{Blockchain, Height};
 use crate::blockchain::ethereum::EthereumData;
 use crate::datakind::TraceOptions;
+use crate::range::Range;
 
 ///
 /// Defined the data types for a blockchain
@@ -99,6 +100,25 @@ pub enum BlockReference<T> where T: FromStr {
     Hash(T),
     /// Byt its height
     Height(u64),
+}
+
+
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum MultiBlockReference {
+    /// Just single block optionally referenced by its hash
+    Single(Height),
+    /// Multiple blocks in the range
+    Range(Range),
+}
+
+impl Into<Range> for MultiBlockReference {
+    fn into(self) -> Range {
+        match self {
+            MultiBlockReference::Single(h) => Range::Single(h.height),
+            MultiBlockReference::Range(r) => r,
+        }
+    }
 }
 
 impl<T> FromStr for BlockReference<T> where T: FromStr {

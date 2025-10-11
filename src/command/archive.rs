@@ -1,19 +1,20 @@
 use std::marker::PhantomData;
 use std::str::FromStr;
-use anyhow::{anyhow, Context};
+use anyhow::{anyhow};
 use async_trait::async_trait;
-use chrono::Utc;
-use shutdown::Shutdown;
-use crate::args::Args;
-use crate::blockchain::{BlockchainData, BlockchainTypes};
-use crate::datakind::DataOptions;
-use crate::command::archiver::Archiver;
-use crate::command::{CommandExecutor};
-use crate::datakind::DataKind;
-use crate::global;
-use crate::notify::{Notification, RunMode};
-use crate::range::Range;
-use crate::storage::{TargetFile, TargetFileWriter, TargetStorage};
+use crate::{
+    args::Args,
+    blockchain::{BlockchainTypes},
+    datakind::DataOptions,
+    command::{
+        archiver::{ArchiveAll, Archiver},
+        CommandExecutor
+    },
+    global,
+    notify::{RunMode},
+    range::Range,
+    storage::{TargetStorage}
+};
 
 ///
 /// Provides `archive` command.
@@ -40,7 +41,7 @@ impl<B: BlockchainTypes, TS: TargetStorage> CommandExecutor for ArchiveCommand<B
             if shutdown.is_signalled() {
                 break;
             }
-            self.archive_range(shutdown.clone(), subrange).await?;
+            self.archiver.archive(subrange, RunMode::Archive, &self.data_options).await?;
         }
 
         Ok(())
@@ -68,111 +69,4 @@ impl<B: BlockchainTypes, TS: TargetStorage> ArchiveCommand<B, TS> {
         })
     }
 
-    ///
-    /// Archive a specific subrange into one file
-    async fn archive_range(&self, shutdown: Shutdown, range: Range) -> anyhow::Result<()> {
-        let start_time = Utc::now();
-        tracing::info!("Archiving range: {:?}", range);
-
-        if !self.data_options.include_block() {
-            return Err(anyhow!("Archiving without blocks is not supported"));
-        }
-        let block_file = self.archiver.target.create(DataKind::Blocks, &range)
-                .await
-                .map_err(|e| anyhow!("Unable to create file: {}", e))?;
-        let block_file_url = block_file.get_url();
-
-        let tx_file = if self.data_options.include_tx() {
-            let file = self.archiver.target.create(DataKind::Transactions, &range)
-                .await
-                .map_err(|e| anyhow!("Unable to create file: {}", e))?;
-            Some(file)
-        } else {
-            None
-        };
-        let tx_file_url = tx_file.as_ref().map(|f| f.get_url());
-
-        let tx_trace_file = if self.data_options.include_trace() {
-            let file = self.archiver.target.create(DataKind::TransactionTraces, &range)
-                .await
-                .map_err(|e| anyhow!("Unable to create file: {}", e))?;
-            Some(file)
-        } else {
-            None
-        };
-        let tx_trace_file_url = tx_trace_file.as_ref().map(|f| f.get_url());
-
-        let heights: Vec<u64> = range.iter().collect();
-
-        for height in heights {
-            if shutdown.is_signalled() {
-                return Ok(());
-            }
-            let (block, txes) = self.archiver.append_block(&block_file, &height.into())
-                .await.context(format!("Block at {}", height))?;
-            if let Some(tx_file) = &tx_file {
-                let _ = self.archiver.append_txes(&tx_file, &block, &txes)
-                    .await.context(format!("Txes at {}", height))?;
-            }
-            if let Some(trace_file) = &tx_trace_file {
-                if let Some(traces_options) = &self.data_options.trace {
-                    let _ = self.archiver.append_traces(&trace_file, &block, &txes, traces_options)
-                        .await.context(format!("Txes at {}", height))?;
-                } else {
-                    return Err(anyhow!("Trace options are not set"));
-                }
-            }
-        }
-        let _ = block_file.close().await?;
-        if let Some(tx_file) = tx_file {
-            let _ = tx_file.close().await?;
-        }
-        if let Some(trace_file) = tx_trace_file {
-            let _ = trace_file.close().await?;
-        }
-
-        let notification_block = Notification {
-            // common fields
-            version: Notification::version(),
-            ts: Utc::now(),
-            blockchain: self.archiver.data_provider.blockchain_id(),
-            run: RunMode::Stream,
-            height_start: range.start(),
-            height_end: range.end(),
-
-            // specific fields
-            file_type: DataKind::Blocks,
-            location: block_file_url,
-        };
-        let _ = self.archiver.notifications.send(notification_block.clone()).await;
-
-        if let Some(url) = tx_file_url {
-            let notification_tx = Notification {
-                file_type: DataKind::Transactions,
-                location: url,
-
-                ..notification_block.clone()
-            };
-            let _ = self.archiver.notifications.send(notification_tx).await;
-        }
-
-        if let Some(url) = tx_trace_file_url {
-            let notification_tx_trace = Notification {
-                file_type: DataKind::TransactionTraces,
-                location: url,
-
-                ..notification_block
-            };
-            let _ = self.archiver.notifications.send(notification_tx_trace).await;
-        }
-
-        let duration = Utc::now().signed_duration_since(start_time);
-        if duration.num_seconds() > 2 {
-            tracing::info!("Range {:?} is archived in {}sec", range, duration.num_seconds());
-        } else {
-            tracing::info!("Range {:?} is archived in {}ms", range, duration.num_milliseconds());
-        }
-
-        Ok(())
-    }
 }

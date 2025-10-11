@@ -92,6 +92,9 @@ impl Args {
         Ok(chain_ref as i32)
     }
 
+    pub fn get_chunk_size(&self) -> usize {
+        self.range_chunk.or(Args::default().range_chunk).unwrap()
+    }
 }
 
 #[derive(Deserialize, clap::ValueEnum, Debug, Display, Clone, PartialEq)]

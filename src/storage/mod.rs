@@ -3,15 +3,18 @@ use std::sync::Arc;
 use apache_avro::types::Record;
 use async_trait::async_trait;
 use crate::args::Args;
-use crate::datakind::DataKind;
+use crate::datakind::{DataKind, DataOptions};
 use crate::filenames::Filenames;
 use crate::range::Range;
+use crate::range_bag::RangeBag;
 use crate::storage::fs::FsStorage;
 use anyhow::{anyhow, Result};
 use object_store::aws::{AmazonS3, AmazonS3Builder};
 use object_store::ClientOptions;
 use tokio::sync::mpsc::Receiver;
 use url::Url;
+use crate::command::ArchivesList;
+use crate::global;
 use crate::storage::objects::ObjectsStorage;
 
 pub mod fs;
@@ -127,6 +130,72 @@ pub trait TargetStorage: Send + Sync {
     ///
     /// List all files in the range
     fn list(&self, range: Range) -> Result<Receiver<FileReference>>;
+
+    async fn find_incomplete_tables(&self, blocks: Range, tx_options: &DataOptions) -> Result<Vec<(Range, Vec<DataKind>)>> {
+        tracing::info!("Check if blocks are fully archived in range: {}", blocks);
+        let mut existing = self.list(blocks.clone())?;
+        let mut archived = ArchivesList::new(tx_options.files().clone());
+
+        // Track which ranges have no files at all
+        let mut missing_ranges = RangeBag::new();
+        missing_ranges.append(blocks.clone());
+
+        let shutdown = global::get_shutdown();
+        while let Some(file) = existing.recv().await {
+            // Remove this file's range from the missing ranges
+            missing_ranges.remove(&file.range);
+            archived.append(file)?;
+            if shutdown.is_signalled() {
+                tracing::info!("Shutdown signal received");
+                return Ok(vec![]);
+            }
+        }
+
+        let incomplete = archived.list_incomplete();
+        let mut result: Vec<(Range, Vec<DataKind>)> = Vec::new();
+
+        // Add ranges that have incomplete files (some files present but not all)
+        if !incomplete.is_empty() {
+            // We do not process ranges here (like joining them) because we don't want to break any existing layout (i.e, chunk size, alignment, etc)
+            let ranges = incomplete.iter()
+                .map(|g| g.range.clone())
+                .collect::<Vec<Range>>();
+
+            tracing::debug!("Incomplete blocks {} (sample: {:?},...)",
+                ranges.len(),
+                ranges.iter().take(5)
+            );
+
+            let incomplete_by_range: Vec<(Range, Vec<DataKind>)> = ranges.iter()
+                .filter_map(|r| {
+                    // we clone all file groups here b/c if it split by different ranges each range would download its part
+                    incomplete.iter()
+                        .find(|g| g.range.eq(r))
+                        .map(|g| (r.clone(), g.get_incomplete_kinds()))
+                })
+                .collect();
+            result.extend(incomplete_by_range);
+        }
+
+        // Add completely missing ranges (no files at all)
+        if !missing_ranges.is_empty() {
+            let all_kinds = tx_options.files().files.clone();
+            tracing::debug!("Missing blocks (no files at all) {} (sample: {:?},...)",
+                missing_ranges.len(),
+                missing_ranges.ranges.iter().take(5)
+            );
+
+            for range in missing_ranges.ranges {
+                result.push((range, all_kinds.clone()));
+            }
+        }
+
+        if result.is_empty() {
+            tracing::info!("All blocks are fully archived");
+        }
+
+        Ok(result)
+    }
 }
 
 pub trait TargetFile {
@@ -166,5 +235,355 @@ impl Ord for FileReference {
 impl PartialOrd for FileReference {
     fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
         Some(self.cmp(other))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::Arc;
+    use crate::datakind::{DataKind, DataOptions};
+    use crate::filenames::Filenames;
+    use crate::range::Range;
+    use crate::storage::objects::ObjectsStorage;
+    use object_store::memory::InMemory;
+    use object_store::path::Path;
+    use object_store::{ObjectStore, PutPayload};
+
+    /// Helper to create a test storage with specified files
+    async fn create_test_storage(files: Vec<&str>) -> ObjectsStorage<InMemory> {
+        let mem = Arc::new(InMemory::new());
+
+        for path in files {
+            mem.put(
+                &Path::from(path),
+                PutPayload::from_static(&[1]),
+            ).await.unwrap();
+        }
+
+        ObjectsStorage::new(
+            mem.clone(),
+            "test".to_string(),
+            Filenames::with_dir("archive/eth".to_string())
+        )
+    }
+
+    #[tokio::test]
+    async fn test_find_incomplete_tables_all_complete() {
+        let storage = create_test_storage(vec![
+            "archive/eth/021000000/021596000/021596362.block.avro",
+            "archive/eth/021000000/021596000/021596362.txes.avro",
+            "archive/eth/021000000/021596000/021596363.block.avro",
+            "archive/eth/021000000/021596000/021596363.txes.avro",
+        ]).await;
+
+        let range = Range::new(21596362, 21596363);
+        let tx_options = DataOptions::default();
+
+        let incomplete = storage.find_incomplete_tables(range, &tx_options).await.unwrap();
+
+        assert_eq!(incomplete.len(), 0);
+    }
+
+    #[tokio::test]
+    async fn test_find_incomplete_tables_missing_blocks() {
+        let storage = create_test_storage(vec![
+            "archive/eth/021000000/021596000/021596362.txes.avro",
+            "archive/eth/021000000/021596000/021596363.block.avro",
+            "archive/eth/021000000/021596000/021596363.txes.avro",
+        ]).await;
+
+        let range = Range::new(21596362, 21596363);
+        let tx_options = DataOptions::default();
+
+        let incomplete = storage.find_incomplete_tables(range, &tx_options).await.unwrap();
+
+        assert_eq!(incomplete.len(), 1);
+        assert_eq!(incomplete[0].0, Range::Single(21596362));
+        assert_eq!(incomplete[0].1, vec![DataKind::Blocks]);
+    }
+
+    #[tokio::test]
+    async fn test_find_incomplete_tables_missing_txes() {
+        let storage = create_test_storage(vec![
+            "archive/eth/021000000/021596000/021596362.block.avro",
+            "archive/eth/021000000/021596000/021596363.block.avro",
+            "archive/eth/021000000/021596000/021596363.txes.avro",
+        ]).await;
+
+        let range = Range::new(21596362, 21596363);
+        let tx_options = DataOptions::default();
+
+        let incomplete = storage.find_incomplete_tables(range, &tx_options).await.unwrap();
+
+        assert_eq!(incomplete.len(), 1);
+        assert_eq!(incomplete[0].0, Range::Single(21596362));
+        assert_eq!(incomplete[0].1, vec![DataKind::Transactions]);
+    }
+
+    #[tokio::test]
+    async fn test_find_incomplete_tables_missing_both() {
+        let storage = create_test_storage(vec![
+            "archive/eth/021000000/021596000/021596363.block.avro",
+            "archive/eth/021000000/021596000/021596363.txes.avro",
+        ]).await;
+
+        let range = Range::new(21596362, 21596363);
+        let tx_options = DataOptions::default();
+
+        let incomplete = storage.find_incomplete_tables(range, &tx_options).await.unwrap();
+
+        // 21596362 has no files at all, so it's reported as completely missing
+        assert_eq!(incomplete.len(), 1);
+        assert_eq!(incomplete[0].0, Range::Single(21596362));
+        assert!(incomplete[0].1.contains(&DataKind::Blocks));
+        assert!(incomplete[0].1.contains(&DataKind::Transactions));
+    }
+
+    #[tokio::test]
+    async fn test_find_incomplete_tables_multiple_ranges() {
+        let storage = create_test_storage(vec![
+            "archive/eth/021000000/021596000/021596362.block.avro",
+            // missing 021596362.txes.avro
+            "archive/eth/021000000/021596000/021596363.block.avro",
+            "archive/eth/021000000/021596000/021596363.txes.avro",
+            // missing 021596364.block.avro
+            "archive/eth/021000000/021596000/021596364.txes.avro",
+        ]).await;
+
+        let range = Range::new(21596362, 21596364);
+        let tx_options = DataOptions::default();
+
+        let incomplete = storage.find_incomplete_tables(range, &tx_options).await.unwrap();
+
+        assert_eq!(incomplete.len(), 2);
+
+        // Sort for consistent testing
+        let mut sorted_incomplete = incomplete.clone();
+        sorted_incomplete.sort_by_key(|(r, _)| r.start());
+
+        assert_eq!(sorted_incomplete[0].0, Range::Single(21596362));
+        assert_eq!(sorted_incomplete[0].1, vec![DataKind::Transactions]);
+
+        assert_eq!(sorted_incomplete[1].0, Range::Single(21596364));
+        assert_eq!(sorted_incomplete[1].1, vec![DataKind::Blocks]);
+    }
+
+    #[tokio::test]
+    async fn test_find_incomplete_tables_with_traces_complete() {
+        let storage = create_test_storage(vec![
+            "archive/eth/021000000/021596000/021596362.block.avro",
+            "archive/eth/021000000/021596000/021596362.txes.avro",
+            "archive/eth/021000000/021596000/021596362.traces.avro",
+        ]).await;
+
+        let range = Range::new(21596362, 21596362);
+        let tx_options = DataOptions {
+            block: Some(()),
+            tx: Some(Default::default()),
+            trace: Some(Default::default()),
+        };
+
+        let incomplete = storage.find_incomplete_tables(range, &tx_options).await.unwrap();
+
+        assert_eq!(incomplete.len(), 0);
+    }
+
+    #[tokio::test]
+    async fn test_find_incomplete_tables_with_traces_missing_traces() {
+        let storage = create_test_storage(vec![
+            "archive/eth/021000000/021596000/021596362.block.avro",
+            "archive/eth/021000000/021596000/021596362.txes.avro",
+            // missing traces
+        ]).await;
+
+        let range = Range::new(21596362, 21596362);
+        let tx_options = DataOptions {
+            block: Some(()),
+            tx: Some(Default::default()),
+            trace: Some(Default::default()),
+        };
+
+        let incomplete = storage.find_incomplete_tables(range, &tx_options).await.unwrap();
+
+        assert_eq!(incomplete.len(), 1);
+        assert_eq!(incomplete[0].0, Range::Single(21596362));
+        assert_eq!(incomplete[0].1, vec![DataKind::TransactionTraces]);
+    }
+
+    #[tokio::test]
+    async fn test_find_incomplete_tables_only_blocks_requested() {
+        let storage = create_test_storage(vec![
+            "archive/eth/021000000/021596000/021596362.block.avro",
+            // missing txes, but not requested
+            "archive/eth/021000000/021596000/021596363.block.avro",
+        ]).await;
+
+        let range = Range::new(21596362, 21596363);
+        let tx_options = DataOptions {
+            block: Some(()),
+            tx: None,
+            trace: None,
+        };
+
+        let incomplete = storage.find_incomplete_tables(range, &tx_options).await.unwrap();
+
+        assert_eq!(incomplete.len(), 0);
+    }
+
+    #[tokio::test]
+    async fn test_find_incomplete_tables_empty_range() {
+        let storage = create_test_storage(vec![]).await;
+
+        let range = Range::new(21596362, 21596363);
+        let tx_options = DataOptions::default();
+
+        let incomplete = storage.find_incomplete_tables(range, &tx_options).await.unwrap();
+
+        // When there are no files at all, the entire range is reported as missing
+        assert_eq!(incomplete.len(), 1);
+        assert_eq!(incomplete[0].0, Range::new(21596362, 21596363));
+        assert!(incomplete[0].1.contains(&DataKind::Blocks));
+        assert!(incomplete[0].1.contains(&DataKind::Transactions));
+    }
+
+    #[tokio::test]
+    async fn test_find_incomplete_tables_with_range_files() {
+        let storage = create_test_storage(vec![
+            "archive/eth/021000000/range-021596000_021596999.blocks.avro",
+            "archive/eth/021000000/range-021596000_021596999.txes.avro",
+        ]).await;
+
+        let range = Range::new(21596000, 21596999);
+        let tx_options = DataOptions::default();
+
+        let incomplete = storage.find_incomplete_tables(range, &tx_options).await.unwrap();
+
+        assert_eq!(incomplete.len(), 0);
+    }
+
+    #[tokio::test]
+    async fn test_find_incomplete_tables_range_files_missing_txes() {
+        let storage = create_test_storage(vec![
+            "archive/eth/021000000/range-021596000_021596999.blocks.avro",
+            // missing range txes
+        ]).await;
+
+        let range = Range::new(21596000, 21596999);
+        let tx_options = DataOptions::default();
+
+        let incomplete = storage.find_incomplete_tables(range, &tx_options).await.unwrap();
+
+        assert_eq!(incomplete.len(), 1);
+        assert_eq!(incomplete[0].0, Range::new(21596000, 21596999));
+        assert_eq!(incomplete[0].1, vec![DataKind::Transactions]);
+    }
+
+    #[tokio::test]
+    async fn test_find_incomplete_tables_mixed_single_and_range() {
+        let storage = create_test_storage(vec![
+            // Range files for some blocks
+            "archive/eth/021000000/range-021596000_021596099.blocks.avro",
+            "archive/eth/021000000/range-021596000_021596099.txes.avro",
+            // Individual files for others
+            "archive/eth/021000000/021596000/021596100.block.avro",
+            "archive/eth/021000000/021596000/021596100.txes.avro",
+            // Missing 021596101
+        ]).await;
+
+        let range = Range::new(21596000, 21596101);
+        let tx_options = DataOptions::default();
+
+        let incomplete = storage.find_incomplete_tables(range, &tx_options).await.unwrap();
+
+        // 21596101 is completely missing, so it's reported
+        assert_eq!(incomplete.len(), 1);
+        assert_eq!(incomplete[0].0, Range::Single(21596101));
+        assert!(incomplete[0].1.contains(&DataKind::Blocks));
+        assert!(incomplete[0].1.contains(&DataKind::Transactions));
+    }
+
+    #[tokio::test]
+    async fn test_find_incomplete_tables_gap_in_middle() {
+        let storage = create_test_storage(vec![
+            // Files at start
+            "archive/eth/021000000/021596000/021596362.block.avro",
+            "archive/eth/021000000/021596000/021596362.txes.avro",
+            "archive/eth/021000000/021596000/021596363.block.avro",
+            "archive/eth/021000000/021596000/021596363.txes.avro",
+            // Gap: 021596364-021596366 missing
+            // Files at end
+            "archive/eth/021000000/021596000/021596367.block.avro",
+            "archive/eth/021000000/021596000/021596367.txes.avro",
+        ]).await;
+
+        let range = Range::new(21596362, 21596367);
+        let tx_options = DataOptions::default();
+
+        let incomplete = storage.find_incomplete_tables(range, &tx_options).await.unwrap();
+
+        // The gap should be reported as a missing range
+        assert_eq!(incomplete.len(), 1);
+        assert_eq!(incomplete[0].0, Range::new(21596364, 21596366));
+        assert!(incomplete[0].1.contains(&DataKind::Blocks));
+        assert!(incomplete[0].1.contains(&DataKind::Transactions));
+    }
+
+    #[tokio::test]
+    async fn test_find_incomplete_tables_mixed_incomplete_and_missing() {
+        let storage = create_test_storage(vec![
+            // Complete files
+            "archive/eth/021000000/021596000/021596362.block.avro",
+            "archive/eth/021000000/021596000/021596362.txes.avro",
+            // Incomplete: missing txes
+            "archive/eth/021000000/021596000/021596363.block.avro",
+            // Completely missing: 021596364
+            // Complete files again
+            "archive/eth/021000000/021596000/021596365.block.avro",
+            "archive/eth/021000000/021596000/021596365.txes.avro",
+        ]).await;
+
+        let range = Range::new(21596362, 21596365);
+        let tx_options = DataOptions::default();
+
+        let incomplete = storage.find_incomplete_tables(range, &tx_options).await.unwrap();
+
+        // Should report both incomplete (363) and missing (364)
+        assert_eq!(incomplete.len(), 2);
+
+        // Sort for consistent testing
+        let mut sorted = incomplete.clone();
+        sorted.sort_by_key(|(r, _)| r.start());
+
+        // 21596363 is incomplete (missing txes)
+        assert_eq!(sorted[0].0, Range::Single(21596363));
+        assert_eq!(sorted[0].1, vec![DataKind::Transactions]);
+
+        // 21596364 is completely missing
+        assert_eq!(sorted[1].0, Range::Single(21596364));
+        assert!(sorted[1].1.contains(&DataKind::Blocks));
+        assert!(sorted[1].1.contains(&DataKind::Transactions));
+    }
+
+    #[tokio::test]
+    async fn test_find_incomplete_tables_large_missing_gap() {
+        let storage = create_test_storage(vec![
+            "archive/eth/021000000/021596000/021596362.block.avro",
+            "archive/eth/021000000/021596000/021596362.txes.avro",
+            // Large gap: 021596363-021596999 all missing
+            "archive/eth/021000000/021597000/021597000.block.avro",
+            "archive/eth/021000000/021597000/021597000.txes.avro",
+        ]).await;
+
+        let range = Range::new(21596362, 21597000);
+        let tx_options = DataOptions::default();
+
+        let incomplete = storage.find_incomplete_tables(range, &tx_options).await.unwrap();
+
+        // Should report the large gap as a single missing range
+        assert_eq!(incomplete.len(), 1);
+        assert_eq!(incomplete[0].0, Range::new(21596363, 21596999));
+        assert!(incomplete[0].1.contains(&DataKind::Blocks));
+        assert!(incomplete[0].1.contains(&DataKind::Transactions));
     }
 }

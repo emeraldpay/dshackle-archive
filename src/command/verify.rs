@@ -8,20 +8,25 @@ use async_trait::async_trait;
 use shutdown::Shutdown;
 use tokio::sync::Semaphore;
 use tokio::task::JoinSet;
-use crate::blockchain::{BlockDetails, BlockchainTypes};
-use crate::command::archiver::Archiver;
-use crate::command::{ArchiveGroup, ArchivesList, CommandExecutor};
-use crate::{avros, global};
-use crate::blocks_config::Blocks;
-use crate::datakind::DataOptions;
-use crate::range::Range;
-use crate::storage::TargetStorage;
-use crate::storage::TargetFileReader;
+use crate::{
+    blockchain::{BlockDetails, BlockchainTypes},
+    command::archiver::Archiver,
+    command::{ArchiveGroup, ArchivesList, CommandExecutor},
+    avros,
+    global,
+    blocks_config::Blocks,
+    datakind::DataOptions,
+    range::Range,
+    storage::{
+        TargetStorage,
+        TargetFileReader
+    }
+};
 
 ///
 /// Provides `verify` command.
 ///
-/// Checks the range of block in the current archive and deleted files with missing or incorrect data (which is supposed to be reloaded back with `fix` command)
+/// Checks the range of block in the current archive and deletes the files with missing or incorrect data (which is supposed to be reloaded back with `fix` command)
 ///
 #[derive(Clone)]
 pub struct VerifyCommand<B: BlockchainTypes, TS: TargetStorage> {
@@ -54,7 +59,7 @@ impl<B: BlockchainTypes + 'static, FR: TargetStorage + 'static> CommandExecutor 
         tracing::info!(range = %range, "Verifying range");
 
         let mut existing = self.archiver.target.list(range)?;
-        let mut archived = ArchivesList::new(self.tx_options.files.clone());
+        let mut archived = ArchivesList::new(self.tx_options.files());
         let shutdown = global::get_shutdown();
 
         while !shutdown.is_signalled() {

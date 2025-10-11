@@ -1,3 +1,4 @@
+use std::fmt::{Display, Formatter};
 use std::str::FromStr;
 use emerald_api::{
     blockchain,
@@ -162,6 +163,16 @@ impl From<u64> for Height {
         Height {
             height,
             hash: None,
+        }
+    }
+}
+
+impl Display for Height {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        if let Some(hash) = &self.hash {
+            write!(f, "{} ({})", self.height, hash)
+        } else {
+            write!(f, "{}", self.height)
         }
     }
 }

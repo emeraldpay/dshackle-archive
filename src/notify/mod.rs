@@ -40,6 +40,7 @@ pub enum RunMode {
     Stream,
     Copy,
     Compact,
+    Fix,
 }
 
 impl Notification {

@@ -8,16 +8,23 @@ use apache_avro::types::{Record, Value};
 use async_trait::async_trait;
 use shutdown::Shutdown;
 use tokio::task::JoinSet;
-use crate::args::Args;
-use crate::blockchain::{BlockDetails, BlockchainTypes};
-use crate::command::archiver::Archiver;
-use crate::command::{ArchiveGroup, ArchivesList, CommandExecutor};
-use crate::datakind::{DataKind, DataOptions};
-use crate::{avros, global};
-use crate::blocks_config::Blocks;
-use crate::range::Range;
-use crate::range_bag::RangeBag;
-use crate::storage::{FileReference, TargetFileReader, TargetFileWriter, TargetStorage};
+use crate::{
+    blockchain::{BlockDetails, BlockchainTypes},
+    args::Args,
+    command::{
+        archiver::Archiver,
+        ArchiveGroup,
+        ArchivesList,
+        CommandExecutor
+    },
+    datakind::{DataKind, DataOptions},
+    avros,
+    global,
+    blocks_config::Blocks,
+    range::Range,
+    range_bag::RangeBag,
+    storage::{FileReference, TargetFileReader, TargetFileWriter, TargetStorage}
+};
 
 #[derive(Clone)]
 pub struct CompactCommand<B: BlockchainTypes, TS: TargetStorage> {
@@ -203,7 +210,7 @@ impl<B: BlockchainTypes, TS: TargetStorage> CompactCommand<B, TS> {
         //
         // fist make sure it has complete data for every height in group
         //
-        let mut complete = ArchivesList::new(tx_options.files.clone());
+        let mut complete = ArchivesList::new(tx_options.files());
         for file in files {
             complete.append(file)?;
         }

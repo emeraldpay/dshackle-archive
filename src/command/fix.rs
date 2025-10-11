@@ -1,12 +1,15 @@
 use std::marker::PhantomData;
 use async_trait::async_trait;
-use crate::args::Args;
-use crate::blockchain::{BlockchainTypes};
-use crate::blocks_config::Blocks;
-use crate::command::archiver::Archiver;
-use crate::command::{CommandExecutor};
-use crate::datakind::DataOptions;
-use crate::storage::TargetStorage;
+use crate::{
+    blockchain::{BlockchainTypes},
+    args::Args,
+    blocks_config::Blocks,
+    command::archiver::{ArchiveAll, Archiver},
+    command::{CommandExecutor},
+    datakind::DataOptions,
+    notify::RunMode,
+    storage::TargetStorage
+};
 
 ///
 /// Provides `fix` command.
@@ -16,6 +19,7 @@ use crate::storage::TargetStorage;
 pub struct FixCommand<B: BlockchainTypes, TS: TargetStorage> {
     b: PhantomData<B>,
     blocks: Blocks,
+    chunk_size: usize,
     archiver: Archiver<B, TS>,
     tx_options: DataOptions,
 }
@@ -30,6 +34,7 @@ impl<B: BlockchainTypes, TS: TargetStorage> FixCommand<B, TS> {
             b: PhantomData,
             archiver,
             blocks: Blocks::try_from(config)?,
+            chunk_size: config.get_chunk_size(),
             tx_options,
         })
     }
@@ -41,6 +46,17 @@ impl<B: BlockchainTypes, TS: TargetStorage> CommandExecutor for FixCommand<B, TS
     async fn execute(&self) -> anyhow::Result<()> {
         let range = self.blocks.to_range(self.archiver.data_provider.as_ref()).await?;
         tracing::info!("Fixing range: {}", range);
-        self.archiver.ensure_all(range, &self.tx_options).await
+
+        let options = self.tx_options.clone();
+        let missing = self.archiver.target.find_incomplete_tables(range, &options).await?;
+        for (range, kinds) in missing {
+            tracing::info!("Found missing data in range {}: {:?}", range, kinds);
+            let chunks = range.split_chunks(self.chunk_size, true);
+            let options = self.tx_options.clone().only_include(&kinds);
+            for chunk in chunks {
+                self.archiver.archive(chunk, RunMode::Fix, &options).await?;
+            }
+        }
+        Ok(())
     }
 }

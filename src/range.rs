@@ -64,6 +64,8 @@ impl Range {
         }
     }
 
+    ///
+    /// Check if this range fully contains another range (i.e., inside the current or equal)
     pub fn contains(&self, other: &Range) -> bool {
         match self {
             Range::Single(h) => match other {
@@ -122,6 +124,8 @@ impl Range {
         }
     }
 
+    ///
+    /// Join two ranges into one if they have any intersection or go next to each other.
     pub fn join(self, another: Range) -> anyhow::Result<Self> {
         if self.is_intersected_with(&another) || self.is_connected_to(&another) {
             let start = std::cmp::min(self.start(), another.start());
@@ -130,6 +134,29 @@ impl Range {
         } else {
             Err(anyhow!("Ranges do not intersect"))
         }
+    }
+
+    ///
+    /// Cut the current range by another range, returning 0, 1 or 2 ranges.
+    /// Ex:
+    /// - if another range covers the current - return empty
+    /// - if it intersected anywhere - return the remaining parts (could head, tal, or both)
+    pub fn cut(self, another: &Self) -> Vec<Self> {
+        if !self.is_intersected_with(another) {
+            return vec![self];
+        }
+        if another.contains(&self) {
+            return vec![];
+        }
+
+        let mut result = Vec::new();
+        if self.start() < another.start() {
+            result.push(Range::new(self.start(), another.start() - 1));
+        }
+        if self.end() > another.end() {
+            result.push(Range::new(another.end() + 1, self.end()));
+        }
+        result
     }
 
     ///
@@ -479,5 +506,61 @@ mod tests {
             "1999".parse::<Range>().unwrap(),
             Range::Single(1999)
         );
+    }
+
+    #[test]
+    fn test_cut_no_intersection() {
+        let base = Range::new(10, 20);
+        let other = Range::new(21, 30);
+        let result = base.cut(&other);
+        assert_eq!(result, vec![Range::new(10, 20)]);
+    }
+
+    #[test]
+    fn test_cut_fully_covered() {
+        let base = Range::new(10, 20);
+        let other = Range::new(10, 20);
+        let result = base.cut(&other);
+        assert_eq!(result, vec![]);
+    }
+
+    #[test]
+    fn test_cut_partial_head() {
+        let base = Range::new(10, 20);
+        let other = Range::new(10, 15);
+        let result = base.cut(&other);
+        assert_eq!(result, vec![Range::new(16, 20)]);
+    }
+
+    #[test]
+    fn test_cut_partial_tail() {
+        let base = Range::new(10, 20);
+        let other = Range::new(16, 20);
+        let result = base.cut(&other);
+        assert_eq!(result, vec![Range::new(10, 15)]);
+    }
+
+    #[test]
+    fn test_cut_middle() {
+        let base = Range::new(10, 20);
+        let other = Range::new(13, 17);
+        let result = base.cut(&other);
+        assert_eq!(result, vec![Range::new(10, 12), Range::new(18, 20)]);
+    }
+
+    #[test]
+    fn test_cut_single_from_multiple() {
+        let base = Range::new(10, 20);
+        let other = Range::Single(15);
+        let result = base.cut(&other);
+        assert_eq!(result, vec![Range::new(10, 14), Range::new(16, 20)]);
+    }
+
+    #[test]
+    fn test_cut_multiple_from_single() {
+        let base = Range::Single(15);
+        let other = Range::new(10, 20);
+        let result = base.cut(&other);
+        assert_eq!(result, vec![]);
     }
 }

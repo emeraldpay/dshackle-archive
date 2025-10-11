@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use async_trait::async_trait;
 use anyhow::Result;
-use crate::datakind::{DataFile, DataFiles};
+use crate::datakind::{DataFiles, DataKind};
 use crate::range::Range;
 use crate::storage::FileReference;
 
@@ -56,15 +56,15 @@ impl ArchiveGroup {
             return Err(anyhow::anyhow!("File range mismatch: expected {:?}, got {:?}", self.range, file.range));
         }
         let merged = match file.kind {
-            crate::datakind::DataKind::Blocks => Self {
+            DataKind::Blocks => Self {
                 blocks: Some(file),
                 ..self
             },
-            crate::datakind::DataKind::Transactions => Self {
+            DataKind::Transactions => Self {
                 txes: Some(file),
                 ..self
             },
-            crate::datakind::DataKind::TransactionTraces => Self {
+            DataKind::TransactionTraces => Self {
                 traces: Some(file),
                 ..self
             },
@@ -76,16 +76,33 @@ impl ArchiveGroup {
     /// Checks if all the data kinds are present
     ///
     pub fn is_complete(&self) -> bool {
-        if self.expect_files.include(DataFile::Blocks) && self.blocks.is_none() {
+        if self.expect_files.include(DataKind::Blocks) && self.blocks.is_none() {
             return false;
         }
-        if self.expect_files.include(DataFile::Transactions) && self.txes.is_none() {
+        if self.expect_files.include(DataKind::Transactions) && self.txes.is_none() {
             return false;
         }
-        if self.expect_files.include(DataFile::TransactionTraces) && self.traces.is_none() {
+        if self.expect_files.include(DataKind::TransactionTraces) && self.traces.is_none() {
             return false;
         }
         true
+    }
+
+    ///
+    /// List all missing data kinds
+    ///
+    pub fn get_incomplete_kinds(&self) -> Vec<DataKind> {
+        let mut missing = Vec::new();
+        if self.expect_files.include(DataKind::Blocks) && self.blocks.is_none() {
+            missing.push(DataKind::Blocks);
+        }
+        if self.expect_files.include(DataKind::Transactions) && self.txes.is_none() {
+            missing.push(DataKind::Transactions);
+        }
+        if self.expect_files.include(DataKind::TransactionTraces) && self.traces.is_none() {
+            missing.push(DataKind::TransactionTraces);
+        }
+        missing
     }
 
     ///
@@ -148,6 +165,17 @@ impl ArchivesList {
     pub fn all(self) -> Vec<ArchiveGroup> {
         self.current.into_iter().map(|(_, group)| group).collect()
     }
+
+    ///
+    /// Get all file groups that are missing one or more DataKinds in their range
+    /// Ex., called after appending all the files in the ranges.
+    pub fn list_incomplete(&self) -> Vec<ArchiveGroup> {
+        self.current.values()
+            .filter(|g| !g.is_complete())
+            .cloned()
+            .collect()
+    }
+
 }
 
 impl Default for ArchivesList {
@@ -201,7 +229,7 @@ mod tests {
 
     #[test]
     fn test_append_complete_with_traces_group() {
-        let mut archives_list = ArchivesList::new(DataFiles::new(vec![DataFile::Blocks, DataFile::Transactions, DataFile::TransactionTraces]));
+        let mut archives_list = ArchivesList::new(DataFiles::new(vec![DataKind::Blocks, DataKind::Transactions, DataKind::TransactionTraces]));
         let range = Range::new(0, 10);
         let file_blocks = FileReference {
             range: range.clone(),
@@ -276,5 +304,60 @@ mod tests {
         assert!(all.contains(&range1));
         assert!(all.contains(&range2));
         assert_eq!(all.len(), 2);
+    }
+
+    #[test]
+    fn test_list_incomplete_empty() {
+        let archives_list = ArchivesList::default();
+        let incomplete = archives_list.list_incomplete();
+        assert!(incomplete.is_empty());
+    }
+
+    #[test]
+    fn test_list_incomplete_all_complete() {
+        let mut archives_list = ArchivesList::default();
+        let range = Range::new(0, 10);
+        let file_blocks = FileReference {
+            range: range.clone(),
+            kind: DataKind::Blocks,
+            path: "file1".to_string(),
+        };
+        let file_txes = FileReference {
+            range: range.clone(),
+            kind: DataKind::Transactions,
+            path: "file2".to_string(),
+        };
+        archives_list.append(file_blocks).unwrap();
+        archives_list.append(file_txes).unwrap();
+        let incomplete = archives_list.list_incomplete();
+        assert!(incomplete.is_empty());
+    }
+
+    #[test]
+    fn test_list_incomplete_some_incomplete() {
+        let mut archives_list = ArchivesList::default();
+        let range1 = Range::new(0, 10);
+        let range2 = Range::new(11, 20);
+        let file1 = FileReference {
+            range: range1.clone(),
+            kind: DataKind::Blocks,
+            path: "file1".to_string(),
+        };
+        let file2 = FileReference {
+            range: range2.clone(),
+            kind: DataKind::Blocks,
+            path: "file2".to_string(),
+        };
+        let file3 = FileReference {
+            range: range2.clone(),
+            kind: DataKind::Transactions,
+            path: "file3".to_string(),
+        };
+        archives_list.append(file1).unwrap(); // incomplete
+        archives_list.append(file2).unwrap();
+        archives_list.append(file3).unwrap(); // complete
+        let incomplete = archives_list.list_incomplete();
+        assert_eq!(incomplete.len(), 1);
+        assert_eq!(incomplete[0].range, range1);
     }
 }

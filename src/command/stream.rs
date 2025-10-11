@@ -1,14 +1,22 @@
 use std::marker::PhantomData;
 use std::sync::Arc;
 use async_trait::async_trait;
-use crate::{range::Range, command::CommandExecutor, args::Args, blockchain::{
-    connection::{Blockchain}
-}, global};
+use crate::{
+    range::Range,
+    command::CommandExecutor,
+    args::Args,
+    blockchain::{
+        connection::{Blockchain},
+        BlockchainTypes,
+        connection::Height
+    },
+    global,
+    command::archiver::{ArchiveAll, Archiver},
+    datakind::DataOptions,
+    notify::RunMode,
+    storage::TargetStorage
+};
 use anyhow::{Result};
-use crate::blockchain::{BlockchainTypes};
-use crate::command::archiver::Archiver;
-use crate::datakind::DataOptions;
-use crate::storage::TargetStorage;
 
 ///
 /// Provides `stream` command.
@@ -45,6 +53,27 @@ impl<B: BlockchainTypes, TS: TargetStorage> StreamCommand<B, TS> {
             tx_options
         })
     }
+
+    ///
+    /// Ensures that the last N blocks are archived, where N is `self.continue_blocks`.
+    async fn ensure_continued(&self, height: Height) -> Result<()> {
+        if let Some(len) = self.continue_blocks {
+            let range = Range::up_to(len, &Range::Single(height.height));
+            let options = self.tx_options.clone();
+            let missing = self.archiver.target.find_incomplete_tables(range, &options).await?;
+            for (range, kinds) in missing {
+                let range_opts= options.clone().only_include(&kinds);
+                for height in range.iter().collect::<Vec<u64>>() {
+                    self.archiver.archive(
+                        Height::from(height),
+                        RunMode::Stream,
+                        &range_opts
+                    ).await?;
+                }
+            }
+        }
+        Ok(())
+    }
 }
 
 #[async_trait]
@@ -53,7 +82,7 @@ impl<B: BlockchainTypes, TS: TargetStorage> CommandExecutor for StreamCommand<B,
     async fn execute(&self) -> Result<()> {
         let mut heights = self.blockchain.subscribe_blocks().await?;
         let mut stop = false;
-        let mut cotinued = self.continue_blocks.is_none();
+        let mut continued = self.continue_blocks.is_none();
         let shutdown = global::get_shutdown();
         while !stop {
             tokio::select! {
@@ -63,22 +92,23 @@ impl<B: BlockchainTypes, TS: TargetStorage> CommandExecutor for StreamCommand<B,
                 }
                 next = heights.recv()  => {
                     if let Some(height) = next {
-                        if !cotinued {
-                            self.archiver.ensure_all(
-                                Range::up_to(self.continue_blocks.unwrap(), &Range::Single(height.height)),
-                                &self.tx_options
-                            ).await?;
-                            cotinued = true;
+                        // when we have learned the latest height, we ensure that the last N blocks are archived; but just once
+                        if !continued {
+                            let up_to_height = height.clone();
+                            // we ignore the error here because the new blocks should be more important
+                            // and if it failed here then the Fix command can fix it later
+                            let _ = self.ensure_continued(up_to_height).await;
+                            continued = true;
                         }
+
                         tracing::info!("Archive block: {} {:?}", height.height, height.hash);
-                        self.archiver.archive_single(height, &self.tx_options).await?;
+                        self.archiver.archive(height, RunMode::Stream, &self.tx_options).await?;
                     } else {
                         stop = true;
                     }
                 }
             }
         }
-
 
         Ok(())
     }

@@ -37,34 +37,31 @@ impl FromStr for DataKind {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub enum DataFile {
-    Blocks,
-    Transactions,
-    TransactionTraces,
-}
-
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DataFiles {
-    pub files: Vec<DataFile>,
+    pub files: Vec<DataKind>,
 }
 
 impl DataFiles {
-    pub fn new(files: Vec<DataFile>) -> Self {
+    pub fn new(files: Vec<DataKind>) -> Self {
         let mut files = files.clone();
         let _ = files.sort();
         let _ = files.dedup();
         Self { files }
     }
-    pub fn include(&self, kind: DataFile) -> bool {
+    pub fn include(&self, kind: DataKind) -> bool {
         self.files.contains(&kind)
+    }
+    pub fn intersect(self, other: DataFiles) -> Self {
+        let files = self.files.into_iter().filter(|f| other.include(*f)).collect();
+        Self::new(files)
     }
 }
 
 impl Default for DataFiles {
     fn default() -> Self {
         Self {
-            files: vec![DataFile::Blocks, DataFile::Transactions],
+            files: vec![DataKind::Blocks, DataKind::Transactions],
         }
     }
 }
@@ -76,9 +73,9 @@ impl FromStr for DataFiles {
         let mut files = Vec::new();
         for part in s.to_lowercase().split(',') {
             match part.trim() {
-                "blocks" | "block" => files.push(DataFile::Blocks),
-                "txes" | "tx" | "transactions" | "transaction" => files.push(DataFile::Transactions),
-                "traces" | "trace" => files.push(DataFile::TransactionTraces),
+                "blocks" | "block" => files.push(DataKind::Blocks),
+                "txes" | "tx" | "transactions" | "transaction" => files.push(DataKind::Transactions),
+                "traces" | "trace" => files.push(DataKind::TransactionTraces),
                 _ => return Err(()),
             }
         }
@@ -109,9 +106,8 @@ impl From<&Args> for DataFiles {
 
 #[derive(Debug, Clone)]
 pub struct DataOptions {
-    pub files: DataFiles,
     pub block: Option<()>,
-    pub tx: Option<()>,
+    pub tx: Option<TxOptions>,
     pub trace: Option<TraceOptions>,
 }
 
@@ -125,14 +121,50 @@ impl DataOptions {
     pub fn include_trace(&self) -> bool {
         self.trace.is_some()
     }
+
+    pub fn only_include(self, kinds: &[DataKind]) -> Self {
+        let block = if self.block.is_some() && kinds.iter().any(|k| *k == DataKind::Blocks) {
+            self.block
+        } else {
+            None
+        };
+        let tx = if self.tx.is_some() && kinds.iter().any(|k| *k == DataKind::Transactions) {
+            self.tx
+        } else {
+            None
+        };
+        let trace = if self.trace.is_some() && kinds.iter().any(|k| *k == DataKind::TransactionTraces) {
+            self.trace
+        } else {
+            None
+        };
+        Self {
+            block,
+            tx,
+            trace,
+        }
+    }
+
+    pub fn files(&self) -> DataFiles {
+        let mut files = Vec::new();
+        if self.include_block() {
+            files.push(DataKind::Blocks);
+        }
+        if self.include_tx() {
+            files.push(DataKind::Transactions);
+        }
+        if self.include_trace() {
+            files.push(DataKind::TransactionTraces);
+        }
+        DataFiles::new(files)
+    }
 }
 
 impl Default for DataOptions {
     fn default() -> Self {
         Self {
-            files: DataFiles::default(),
             block: Some(()),
-            tx: Some(()),
+            tx: Some(TxOptions::default()),
             trace: None,
         }
     }
@@ -142,11 +174,11 @@ impl Default for DataOptions {
 impl From<&Args> for DataOptions {
     fn from(value: &Args) -> Self {
         let files = DataFiles::from(value);
-        let include_block = files.include(DataFile::Blocks);
+        let include_block = files.include(DataKind::Blocks);
         let block = if include_block { Some(()) } else { None };
-        let include_tx = files.include(DataFile::Transactions);
-        let tx = if include_tx { Some(()) } else { None };
-        let include_trace = files.include(DataFile::TransactionTraces);
+        let include_tx = files.include(DataKind::Transactions);
+        let tx = if include_tx { Some(TxOptions::default()) } else { None };
+        let include_trace = files.include(DataKind::TransactionTraces);
         let trace = if include_trace {
             if let Some(trace_str) = &value.include_trace {
                 Some(TraceOptions::from_str(trace_str).expect("Unable to parse include trace option"))
@@ -157,7 +189,6 @@ impl From<&Args> for DataOptions {
             None
         };
         Self {
-            files,
             block,
             tx,
             trace,
@@ -199,6 +230,15 @@ impl FromStr for TraceOptions {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TxOptions {}
+
+impl Default for TxOptions {
+    fn default() -> Self {
+        Self {}
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -206,19 +246,19 @@ mod tests {
     #[test]
     fn test_datafiles_from_str_blocks() {
         let df = DataFiles::from_str("blocks").unwrap();
-        assert_eq!(df.files, vec![DataFile::Blocks]);
+        assert_eq!(df.files, vec![DataKind::Blocks]);
     }
 
     #[test]
     fn test_datafiles_from_str_transactions() {
         let df = DataFiles::from_str("tx,transactions").unwrap();
-        assert_eq!(df.files, vec![DataFile::Transactions]);
+        assert_eq!(df.files, vec![DataKind::Transactions]);
     }
 
     #[test]
     fn test_datafiles_from_str_traces() {
         let df = DataFiles::from_str("trace,traces").unwrap();
-        assert_eq!(df.files, vec![DataFile::TransactionTraces]);
+        assert_eq!(df.files, vec![DataKind::TransactionTraces]);
     }
 
     #[test]
@@ -227,9 +267,9 @@ mod tests {
         assert_eq!(
             df.files,
             vec![
-                DataFile::Blocks,
-                DataFile::Transactions,
-                DataFile::TransactionTraces
+                DataKind::Blocks,
+                DataKind::Transactions,
+                DataKind::TransactionTraces
             ]
         );
     }
@@ -240,9 +280,9 @@ mod tests {
         assert_eq!(
             df.files,
             vec![
-                DataFile::Blocks,
-                DataFile::Transactions,
-                DataFile::TransactionTraces
+                DataKind::Blocks,
+                DataKind::Transactions,
+                DataKind::TransactionTraces
             ]
         );
     }
