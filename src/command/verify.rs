@@ -9,19 +9,22 @@ use shutdown::Shutdown;
 use tokio::sync::Semaphore;
 use tokio::task::JoinSet;
 use crate::{
-    archiver::Archiver,
+    archiver::{
+        datakind::DataOptions,
+        blocks_config::Blocks,
+        Archiver,
+        range::Range,
+        range_group::{ArchiveGroup, ArchivesList}
+    },
     avros,
     blockchain::{BlockDetails, BlockchainTypes},
-    command::{ArchiveGroup, ArchivesList, CommandExecutor},
+    command::{CommandExecutor},
     global,
     storage::{
         TargetFileReader,
         TargetStorage
-    }
+    },
 };
-use crate::archiver::blocks_config::Blocks;
-use crate::archiver::datakind::DataOptions;
-use crate::archiver::range::Range;
 
 ///
 /// Provides `verify` command.
@@ -132,7 +135,7 @@ async fn verify_group<B: BlockchainTypes, TS: TargetStorage>(archiver: Arc<Archi
     }
     if delete {
         tracing::info!(range = %group.range, "Deleting group");
-        for f in group.files() {
+        for f in group.tables() {
             archiver.target.delete(f).await?;
         }
     }

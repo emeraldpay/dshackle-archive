@@ -9,22 +9,26 @@ use async_trait::async_trait;
 use shutdown::Shutdown;
 use tokio::task::JoinSet;
 use crate::{
-    archiver::Archiver,
+    archiver::{
+        Archiver,
+        blocks_config::Blocks,
+        datakind::{DataKind, DataOptions},
+        range::Range,
+        range_bag::RangeBag,
+        range_group::{
+            ArchiveGroup,
+            ArchivesList
+        }
+    },
     args::Args,
     avros,
     blockchain::{BlockDetails, BlockchainTypes},
     command::{
-        ArchiveGroup,
-        ArchivesList,
         CommandExecutor
     },
     global,
-    storage::{FileReference, TargetFileReader, TargetFileWriter, TargetStorage}
+    storage::{FileReference, TargetFileReader, TargetFileWriter, TargetStorage},
 };
-use crate::archiver::blocks_config::Blocks;
-use crate::archiver::datakind::{DataKind, DataOptions};
-use crate::archiver::range::Range;
-use crate::archiver::range_bag::RangeBag;
 
 #[derive(Clone)]
 pub struct CompactCommand<B: BlockchainTypes, TS: TargetStorage> {

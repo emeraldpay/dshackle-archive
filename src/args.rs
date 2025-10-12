@@ -31,11 +31,11 @@ pub struct Args {
     #[arg(long = "dir", short)]
     pub dir: Option<String>,
 
-    /// Continue from the last file if set
+    /// Continue from the last archived block; i.e., not the latest in blockchain. (for `stream` command)
     #[arg(long = "continue")]
     pub continue_last: bool,
 
-    /// Ensure that the latest T are archived (with `fix` command)
+    /// Ensure that the latest T blocks are archived (for `fix` command)
     #[arg(long = "tail")]
     pub tail: Option<u64>,
 
@@ -47,17 +47,17 @@ pub struct Args {
     #[arg(long = "rangeChunk")]
     pub range_chunk: Option<usize>,
 
-    /// Types of files to archive (comma-separated list of `blocks`, `txes`, `traces`). Default: blocks,txes
-    #[arg(long = "files", short = 'f')]
-    pub files: Option<String>,
+    /// Types of tables to archive (comma-separated list of `blocks`, `txes`, `traces`). Default: blocks,txes
+    #[arg(long = "tables", short = 't')]
+    pub tables: Option<String>,
 
-    /// List of data types to include into tracing archives (comma-separated list of `calls`, `stateDiff`). Default: calls,stateDiff;
-    /// Used only if `traces` are included into the archived files (see `--files` option);
+    /// List of data to include into tracing archive table (comma-separated list of `calls`, `stateDiff`). Default: calls,stateDiff;
+    /// Used only if `traces` are included into the archived tables (see `--tables` option);
     /// Details:
     /// `calls` - debug_traceTransaction with `callTracer` tracing;
     /// `stateDiff` - debug_traceTransaction with `prestateTracer` tracing
-    #[arg(long = "includeTrace")]
-    pub include_trace: Option<String>,
+    #[arg(long = "fieldsTrace")]
+    pub fields_trace: Option<String>,
 }
 
 impl Default for Args {
@@ -74,8 +74,8 @@ impl Default for Args {
             tail: None,
             range: None,
             range_chunk: Some(1000),
-            files: Some("blocks,txes".to_string()),
-            include_trace: Some("calls,stateDiff".to_string()),
+            tables: Some("blocks,txes".to_string()),
+            fields_trace: Some("calls,stateDiff".to_string()),
         }
     }
 }

@@ -38,11 +38,11 @@ impl FromStr for DataKind {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct DataFiles {
+pub struct DataTables {
     pub files: Vec<DataKind>,
 }
 
-impl DataFiles {
+impl DataTables {
     pub fn new(files: Vec<DataKind>) -> Self {
         let mut files = files.clone();
         let _ = files.sort();
@@ -52,13 +52,13 @@ impl DataFiles {
     pub fn include(&self, kind: DataKind) -> bool {
         self.files.contains(&kind)
     }
-    pub fn intersect(self, other: DataFiles) -> Self {
+    pub fn intersect(self, other: DataTables) -> Self {
         let files = self.files.into_iter().filter(|f| other.include(*f)).collect();
         Self::new(files)
     }
 }
 
-impl Default for DataFiles {
+impl Default for DataTables {
     fn default() -> Self {
         Self {
             files: vec![DataKind::Blocks, DataKind::Transactions],
@@ -66,7 +66,7 @@ impl Default for DataFiles {
     }
 }
 
-impl FromStr for DataFiles {
+impl FromStr for DataTables {
     type Err = ();
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
@@ -88,10 +88,10 @@ impl FromStr for DataFiles {
     }
 }
 
-impl From<&Args> for DataFiles {
+impl From<&Args> for DataTables {
     fn from(value: &Args) -> Self {
-        if let Some(files_str) = &value.files {
-            match DataFiles::from_str(files_str) {
+        if let Some(files_str) = &value.tables {
+            match DataTables::from_str(files_str) {
                 Ok(files) => {
                     return files;
                 }
@@ -100,7 +100,7 @@ impl From<&Args> for DataFiles {
                 }
             }
         }
-        DataFiles::default()
+        DataTables::default()
     }
 }
 
@@ -145,7 +145,7 @@ impl DataOptions {
         }
     }
 
-    pub fn files(&self) -> DataFiles {
+    pub fn files(&self) -> DataTables {
         let mut files = Vec::new();
         if self.include_block() {
             files.push(DataKind::Blocks);
@@ -156,7 +156,7 @@ impl DataOptions {
         if self.include_trace() {
             files.push(DataKind::TransactionTraces);
         }
-        DataFiles::new(files)
+        DataTables::new(files)
     }
 }
 
@@ -173,14 +173,14 @@ impl Default for DataOptions {
 
 impl From<&Args> for DataOptions {
     fn from(value: &Args) -> Self {
-        let files = DataFiles::from(value);
+        let files = DataTables::from(value);
         let include_block = files.include(DataKind::Blocks);
         let block = if include_block { Some(()) } else { None };
         let include_tx = files.include(DataKind::Transactions);
         let tx = if include_tx { Some(TxOptions::default()) } else { None };
         let include_trace = files.include(DataKind::TransactionTraces);
         let trace = if include_trace {
-            if let Some(trace_str) = &value.include_trace {
+            if let Some(trace_str) = &value.fields_trace {
                 Some(TraceOptions::from_str(trace_str).expect("Unable to parse include trace option"))
             } else {
                 Some(TraceOptions::default())
@@ -245,25 +245,25 @@ mod tests {
 
     #[test]
     fn test_datafiles_from_str_blocks() {
-        let df = DataFiles::from_str("blocks").unwrap();
+        let df = DataTables::from_str("blocks").unwrap();
         assert_eq!(df.files, vec![DataKind::Blocks]);
     }
 
     #[test]
     fn test_datafiles_from_str_transactions() {
-        let df = DataFiles::from_str("tx,transactions").unwrap();
+        let df = DataTables::from_str("tx,transactions").unwrap();
         assert_eq!(df.files, vec![DataKind::Transactions]);
     }
 
     #[test]
     fn test_datafiles_from_str_traces() {
-        let df = DataFiles::from_str("trace,traces").unwrap();
+        let df = DataTables::from_str("trace,traces").unwrap();
         assert_eq!(df.files, vec![DataKind::TransactionTraces]);
     }
 
     #[test]
     fn test_datafiles_from_str_mixed() {
-        let df = DataFiles::from_str("blocks,tx,trace").unwrap();
+        let df = DataTables::from_str("blocks,tx,trace").unwrap();
         assert_eq!(
             df.files,
             vec![
@@ -276,7 +276,7 @@ mod tests {
 
     #[test]
     fn test_datafiles_from_str_duplicates_and_spaces() {
-        let df = DataFiles::from_str("blocks, block, tx, txes, trace, traces").unwrap();
+        let df = DataTables::from_str("blocks, block, tx, txes, trace, traces").unwrap();
         assert_eq!(
             df.files,
             vec![
@@ -289,8 +289,8 @@ mod tests {
 
     #[test]
     fn test_datafiles_from_str_invalid() {
-        assert!(DataFiles::from_str("foo,bar").is_err());
-        assert!(DataFiles::from_str("").is_err());
+        assert!(DataTables::from_str("foo,bar").is_err());
+        assert!(DataTables::from_str("").is_err());
     }
 
     #[test]
@@ -323,8 +323,8 @@ mod tests {
     #[test]
     fn test_dataoptions_from_args_default() {
         let args = Args {
-            files: None,
-            include_trace: None,
+            tables: None,
+            fields_trace: None,
             ..Default::default()
         };
         let opts = DataOptions::from(&args);
@@ -336,8 +336,8 @@ mod tests {
     #[test]
     fn test_dataoptions_from_args_blocks_and_tx() {
         let args = Args {
-            files: Some("blocks,tx".to_string()),
-            include_trace: None,
+            tables: Some("blocks,tx".to_string()),
+            fields_trace: None,
             ..Default::default()
         };
         let opts = DataOptions::from(&args);
@@ -349,8 +349,8 @@ mod tests {
     #[test]
     fn test_dataoptions_from_args_with_trace_default() {
         let args = Args {
-            files: Some("blocks,tx,trace".to_string()),
-            include_trace: None,
+            tables: Some("blocks,tx,trace".to_string()),
+            fields_trace: None,
             ..Default::default()
         };
         let opts = DataOptions::from(&args);
@@ -363,8 +363,8 @@ mod tests {
     #[test]
     fn test_dataoptions_from_args_with_trace_custom() {
         let args = Args {
-            files: Some("trace".to_string()),
-            include_trace: Some("calls".to_string()),
+            tables: Some("trace".to_string()),
+            fields_trace: Some("calls".to_string()),
             ..Default::default()
         };
         let opts = DataOptions::from(&args);
@@ -379,8 +379,8 @@ mod tests {
     #[test]
     fn test_dataoptions_from_args_invalid_files() {
         let args = Args {
-            files: Some("foo,bar".to_string()),
-            include_trace: None,
+            tables: Some("foo,bar".to_string()),
+            fields_trace: None,
             ..Default::default()
         };
         let opts = DataOptions::from(&args);

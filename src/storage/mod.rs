@@ -2,20 +2,28 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use apache_avro::types::Record;
 use async_trait::async_trait;
-use crate::args::Args;
-use crate::archiver::datakind::{DataKind, DataOptions};
-use crate::archiver::filenames::Filenames;
-use crate::archiver::range::Range;
-use crate::archiver::range_bag::RangeBag;
-use crate::storage::fs::FsStorage;
+use crate::{
+    storage::{
+        fs::FsStorage,
+        objects::ObjectsStorage
+    },
+    archiver::{
+        range_bag::RangeBag,
+        range::Range,
+        filenames::Filenames,
+        datakind::{DataKind, DataOptions},
+        range_group::ArchivesList
+    },
+    args::Args,
+    global,
+};
 use anyhow::{anyhow, Result};
-use object_store::aws::{AmazonS3, AmazonS3Builder};
-use object_store::ClientOptions;
+use object_store::{
+    aws::{AmazonS3, AmazonS3Builder},
+    ClientOptions
+};
 use tokio::sync::mpsc::Receiver;
 use url::Url;
-use crate::command::ArchivesList;
-use crate::global;
-use crate::storage::objects::ObjectsStorage;
 
 pub mod fs;
 pub mod objects;

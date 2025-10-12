@@ -8,13 +8,10 @@ image:https://img.shields.io/docker/pulls/emeraldpay/dshackle-archive?style=flat
 image:https://img.shields.io/github/license/emeraldpay/dshackle-archive.svg?style=flat-square&maxAge=2592000["License",link="https://github.com/emeraldpay/dshackle-archive/blob/master/LICENSE"]
 image:https://img.shields.io/discord/1107840420240707704?style=flat-square[Discord,link="https://discord.gg/k9HpF9Jqee"]
 
-Dshackle Archive is a tool that efficiently extracts blockchain data in JSON format and archives it into Avro files for scalable analysis using traditional Big Data tools. It supports Bitcoin and Ethereum-compatible blockchains and can operate in both batch mode for historical data and streaming mode for real-time data extraction.
-
-Dshackle Archive copies JSON data from a blockchain to a plain files archive
+Dshackle Archive copies JSON data from a blockchain to a plain files ("tables") archive
 (i.e., it's the _Extraction_ of data, as in ETL).
-The archive is Avro files which contain blocks and transaction details fetched from blockchain nodes via their API.
-The Avro contain the JSON responses _as is_.
-
+The archive is Avro files which contain blocks and transaction details fetched from blockchain nodes via their APIs.
+The Avro tables contain the JSON responses _as is_.
 
 Features:
 
@@ -79,19 +76,20 @@ Options:
   -d, --dir <DIR>
           Target directory
       --continue
-          Continue from the last file if set
+          Continue from the last archived block; i.e., not the latest in blockchain. (for `stream` command)
       --tail <TAIL>
-          Ensure that the latest T are archived (with `fix` command)
+          Ensure that the latest T blocks are archived (for `fix` command)
   -r, --range <RANGE>
           Blocks Range (`N...M`)
       --rangeChunk <RANGE_CHUNK>
           Range chunk size (default 1000)
-  -f, --files <FILES>
-          Types of files to archive (comma-separated list of `blocks`, `txes`, `traces`). Default: blocks,txes
-      --includeTrace <INCLUDE_TRACE>
-          List of data types to include into tracing archives (comma-separated list of `calls`, `stateDiff`). Default: calls,stateDiff; Used only if `traces` are included into the archived files (see `--files` option); Details: `calls` - debug_traceTransaction with `callTracer` tracing; `stateDiff` - debug_traceTransaction with `prestateTracer` tracing
+  -t, --tables <TABLES>
+          Types of tables to archive (comma-separated list of `blocks`, `txes`, `traces`). Default: blocks,txes
+      --fieldsTrace <FIELDS_TRACE>
+          List of data to include into tracing archive table (comma-separated list of `calls`, `stateDiff`). Default: calls,stateDiff; Used only if `traces` are included into the archived tables (see `--tables` option); Details: `calls` - debug_traceTransaction with `callTracer` tracing; `stateDiff` - debug_traceTransaction with `prestateTracer` tracing
   -h, --help
           Print help
+
 ----
 
 === Commands

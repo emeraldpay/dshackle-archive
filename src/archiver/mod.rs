@@ -6,6 +6,7 @@ pub mod datakind;
 pub mod filenames;
 pub mod range_bag;
 pub mod blocks_config;
+pub mod range_group;
 
 pub use archiver::{ArchiveAll, Archiver};
 pub use table::ArchiveTable;
