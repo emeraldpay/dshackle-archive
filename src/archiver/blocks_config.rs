@@ -2,7 +2,7 @@ use std::str::FromStr;
 use anyhow::anyhow;
 use crate::args::Args;
 use crate::blockchain::{BlockchainData, BlockchainTypes};
-use crate::range::Range;
+use crate::archiver::range::Range;
 
 #[derive(Clone)]
 pub enum Blocks {

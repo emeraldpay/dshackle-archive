@@ -14,8 +14,8 @@ use serde::Deserialize;
 use crate::blockchain::bitcoin::BitcoinData;
 use crate::blockchain::connection::{Blockchain, Height};
 use crate::blockchain::ethereum::EthereumData;
-use crate::datakind::TraceOptions;
-use crate::range::Range;
+use crate::archiver::datakind::TraceOptions;
+use crate::archiver::range::Range;
 
 ///
 /// Defined the data types for a blockchain

@@ -1,20 +1,18 @@
 use std::marker::PhantomData;
 use std::str::FromStr;
-use anyhow::{anyhow};
+use anyhow::anyhow;
 use async_trait::async_trait;
 use crate::{
+    archiver::{ArchiveAll, Archiver},
     args::Args,
-    blockchain::{BlockchainTypes},
-    datakind::DataOptions,
-    command::{
-        archiver::{ArchiveAll, Archiver},
-        CommandExecutor
-    },
+    blockchain::BlockchainTypes,
+    command::CommandExecutor,
     global,
-    notify::{RunMode},
-    range::Range,
-    storage::{TargetStorage}
+    notify::RunMode,
+    storage::TargetStorage
 };
+use crate::archiver::datakind::DataOptions;
+use crate::archiver::range::Range;
 
 ///
 /// Provides `archive` command.

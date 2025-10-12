@@ -3,7 +3,7 @@ pub mod empty;
 pub mod fs;
 
 use serde::{Deserialize, Serialize};
-use crate::datakind::DataKind;
+use crate::archiver::datakind::DataKind;
 use tokio::sync::mpsc::{Sender};
 use crate::args::Args;
 use anyhow::Result;

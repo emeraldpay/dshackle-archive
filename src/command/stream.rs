@@ -2,21 +2,21 @@ use std::marker::PhantomData;
 use std::sync::Arc;
 use async_trait::async_trait;
 use crate::{
-    range::Range,
-    command::CommandExecutor,
+    archiver::{ArchiveAll, Archiver},
     args::Args,
     blockchain::{
-        connection::{Blockchain},
-        BlockchainTypes,
-        connection::Height
+        connection::Height,
+        connection::Blockchain,
+        BlockchainTypes
     },
+    command::CommandExecutor,
     global,
-    command::archiver::{ArchiveAll, Archiver},
-    datakind::DataOptions,
     notify::RunMode,
     storage::TargetStorage
 };
-use anyhow::{Result};
+use anyhow::Result;
+use crate::archiver::datakind::DataOptions;
+use crate::archiver::range::Range;
 
 ///
 /// Provides `stream` command.

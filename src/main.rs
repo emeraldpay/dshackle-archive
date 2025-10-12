@@ -7,32 +7,34 @@ use std::str::FromStr;
 use std::sync::Arc;
 use clap::Parser;
 use tracing_subscriber::{
+    layer::SubscriberExt,
     EnvFilter,
-    Layer,
-    layer::SubscriberExt
-};
-use crate::{
-    blockchain::{BitcoinType, BlockchainTypes, EthereumType},
-    command::{
-        stream::StreamCommand,
-        CommandExecutor
-    },
-    args::{Args},
-    notify::Notifier,
-    storage::TargetStorage
+    Layer
 };
 use blockchain::connection::Blockchain;
 use anyhow::{anyhow, Result};
 use emerald_api::{
-    proto::common::ChainRef,
-    common::blockchain_ref::BlockchainType
+    common::blockchain_ref::BlockchainType,
+    proto::common::ChainRef
 };
-use crate::args::Command;
-use crate::command::archive::ArchiveCommand;
-use crate::command::archiver::Archiver;
-use crate::command::compact::CompactCommand;
-use crate::command::fix::FixCommand;
-use crate::command::verify::VerifyCommand;
+use crate::{
+    command::{
+        archive::ArchiveCommand,
+        stream::StreamCommand,
+        CommandExecutor,
+        compact::CompactCommand,
+        fix::FixCommand,
+        verify::VerifyCommand
+    },
+    args::{
+        Command,
+        Args
+    },
+    blockchain::{BitcoinType, BlockchainTypes, EthereumType},
+    notify::Notifier,
+    storage::TargetStorage,
+    archiver::Archiver,
+};
 
 #[cfg(test)]
 pub mod testing;
@@ -42,14 +44,10 @@ pub mod command;
 pub mod errors;
 pub mod blockchain;
 pub mod storage;
-pub mod range;
-pub mod datakind;
-pub mod filenames;
 pub mod avros;
 pub mod notify;
 mod global;
-mod range_bag;
-mod blocks_config;
+pub mod archiver;
 
 fn init_tracing() {
     let filter = EnvFilter::builder()

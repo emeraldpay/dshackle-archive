@@ -74,7 +74,7 @@ mod tests {
     use testcontainers::{GenericImage, ImageExt};
     use testcontainers::runners::AsyncRunner;
     use tokio::time::Duration;
-    use crate::datakind::DataKind;
+    use crate::archiver::datakind::DataKind;
     use crate::notify::{Notification, RunMode};
     use crate::notify::Notifier;
 

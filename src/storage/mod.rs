@@ -3,10 +3,10 @@ use std::sync::Arc;
 use apache_avro::types::Record;
 use async_trait::async_trait;
 use crate::args::Args;
-use crate::datakind::{DataKind, DataOptions};
-use crate::filenames::Filenames;
-use crate::range::Range;
-use crate::range_bag::RangeBag;
+use crate::archiver::datakind::{DataKind, DataOptions};
+use crate::archiver::filenames::Filenames;
+use crate::archiver::range::Range;
+use crate::archiver::range_bag::RangeBag;
 use crate::storage::fs::FsStorage;
 use anyhow::{anyhow, Result};
 use object_store::aws::{AmazonS3, AmazonS3Builder};
@@ -242,9 +242,9 @@ impl PartialOrd for FileReference {
 mod tests {
     use super::*;
     use std::sync::Arc;
-    use crate::datakind::{DataKind, DataOptions};
-    use crate::filenames::Filenames;
-    use crate::range::Range;
+    use crate::archiver::datakind::{DataKind, DataOptions};
+    use crate::archiver::filenames::Filenames;
+    use crate::archiver::range::Range;
     use crate::storage::objects::ObjectsStorage;
     use object_store::memory::InMemory;
     use object_store::path::Path;

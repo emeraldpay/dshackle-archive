@@ -7,9 +7,9 @@ use tracing_subscriber::Layer;
 use tracing_subscriber::layer::SubscriberExt;
 use crate::blockchain::{BlockReference, BlockchainData};
 use crate::blockchain::mock::{MockType};
-use crate::command::archiver::Archiver;
-use crate::datakind::DataKind;
-use crate::range::Range;
+use crate::archiver::Archiver;
+use crate::archiver::datakind::DataKind;
+use crate::archiver::range::Range;
 use crate::storage::{TargetFileWriter, TargetStorage};
 
 static INIT: std::sync::Once = std::sync::Once::new();

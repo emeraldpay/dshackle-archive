@@ -9,19 +9,19 @@ use shutdown::Shutdown;
 use tokio::sync::Semaphore;
 use tokio::task::JoinSet;
 use crate::{
-    blockchain::{BlockDetails, BlockchainTypes},
-    command::archiver::Archiver,
-    command::{ArchiveGroup, ArchivesList, CommandExecutor},
+    archiver::Archiver,
     avros,
+    blockchain::{BlockDetails, BlockchainTypes},
+    command::{ArchiveGroup, ArchivesList, CommandExecutor},
     global,
-    blocks_config::Blocks,
-    datakind::DataOptions,
-    range::Range,
     storage::{
-        TargetStorage,
-        TargetFileReader
+        TargetFileReader,
+        TargetStorage
     }
 };
+use crate::archiver::blocks_config::Blocks;
+use crate::archiver::datakind::DataOptions;
+use crate::archiver::range::Range;
 
 ///
 /// Provides `verify` command.
@@ -270,15 +270,15 @@ mod tests {
     use object_store::{ObjectMeta, ObjectStore};
     use crate::args::Args;
     use crate::blockchain::mock::{MockBlock, MockData, MockTx, MockType};
-   use crate::command::archiver::Archiver;
+    use crate::archiver::Archiver;
     use crate::command::CommandExecutor;
     use crate::command::verify::VerifyCommand;
-    use crate::filenames::Filenames;
+    use crate::archiver::filenames::Filenames;
     use crate::storage::objects::ObjectsStorage;
     use futures_util::StreamExt;
     use crate::blockchain::{BlockReference, BlockchainData};
-    use crate::datakind::DataKind;
-    use crate::range::Range;
+    use crate::archiver::datakind::DataKind;
+    use crate::archiver::range::Range;
     use crate::storage::{TargetFileWriter, TargetStorage};
     use crate::testing;
 

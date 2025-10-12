@@ -1,4 +1,4 @@
-use std::collections::{HashSet};
+use std::collections::HashSet;
 use std::fmt::Debug;
 use std::hash::Hash;
 use std::marker::PhantomData;
@@ -9,22 +9,22 @@ use async_trait::async_trait;
 use shutdown::Shutdown;
 use tokio::task::JoinSet;
 use crate::{
-    blockchain::{BlockDetails, BlockchainTypes},
+    archiver::Archiver,
     args::Args,
+    avros,
+    blockchain::{BlockDetails, BlockchainTypes},
     command::{
-        archiver::Archiver,
         ArchiveGroup,
         ArchivesList,
         CommandExecutor
     },
-    datakind::{DataKind, DataOptions},
-    avros,
     global,
-    blocks_config::Blocks,
-    range::Range,
-    range_bag::RangeBag,
     storage::{FileReference, TargetFileReader, TargetFileWriter, TargetStorage}
 };
+use crate::archiver::blocks_config::Blocks;
+use crate::archiver::datakind::{DataKind, DataOptions};
+use crate::archiver::range::Range;
+use crate::archiver::range_bag::RangeBag;
 
 #[derive(Clone)]
 pub struct CompactCommand<B: BlockchainTypes, TS: TargetStorage> {
@@ -314,11 +314,11 @@ impl<TXID: Hash + Eq + Debug> CopiedStatus<TXID> {
 mod tests {
     use std::sync::Arc;
     use crate::blockchain::mock::*;
-    use crate::command::archiver::Archiver;
+    use crate::archiver::Archiver;
     use crate::command::CommandExecutor;
     use crate::command::compact::CompactCommand;
     use crate::storage::objects::ObjectsStorage;
-    use crate::filenames::Filenames;
+    use crate::archiver::filenames::Filenames;
     use object_store::memory::InMemory;
     use crate::args::Args;
     use crate::testing;

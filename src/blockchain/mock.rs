@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 use crate::avros::{BLOCK_SCHEMA, TX_SCHEMA};
 use crate::blockchain::{BlockDetails, BlockReference, BlockchainData, BlockchainTypes};
 use crate::blockchain::connection::Blockchain;
-use crate::datakind::TraceOptions;
+use crate::archiver::datakind::TraceOptions;
 
 pub struct MockType {}
 

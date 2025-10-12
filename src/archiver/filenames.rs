@@ -1,8 +1,8 @@
 use std::str::FromStr;
 use lazy_static::lazy_static;
 use regex::Regex;
-use crate::datakind::DataKind;
-use crate::range::Range;
+use crate::archiver::datakind::DataKind;
+use crate::archiver::range::Range;
 
 lazy_static! {
     static ref RE_SINGLE: Regex = Regex::new(r"^(\d+)\.(\w+)\.(\w+\.)?avro$").unwrap();
@@ -220,7 +220,7 @@ impl<'a> Level for LevelSingle<'a> {
 mod tests {
 
     use super::*;
-    use crate::range::Range;
+    use crate::archiver::range::Range;
 
     #[test]
     fn single_block_file() {

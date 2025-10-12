@@ -1,15 +1,15 @@
 use std::marker::PhantomData;
 use async_trait::async_trait;
 use crate::{
-    blockchain::{BlockchainTypes},
+    archiver::{ArchiveAll, Archiver},
     args::Args,
-    blocks_config::Blocks,
-    command::archiver::{ArchiveAll, Archiver},
-    command::{CommandExecutor},
-    datakind::DataOptions,
+    blockchain::BlockchainTypes,
+    command::CommandExecutor,
     notify::RunMode,
     storage::TargetStorage
 };
+use crate::archiver::blocks_config::Blocks;
+use crate::archiver::datakind::DataOptions;
 
 ///
 /// Provides `fix` command.

@@ -1,13 +1,12 @@
 use std::collections::HashMap;
 use async_trait::async_trait;
 use anyhow::Result;
-use crate::datakind::{DataFiles, DataKind};
-use crate::range::Range;
+use crate::archiver::datakind::{DataFiles, DataKind};
+use crate::archiver::range::Range;
 use crate::storage::FileReference;
 
 pub mod stream;
 pub mod fix;
-pub mod archiver;
 pub mod verify;
 pub mod archive;
 pub mod compact;
@@ -188,8 +187,8 @@ impl Default for ArchivesList {
 mod tests {
     use super::*;
     use crate::storage::FileReference;
-    use crate::datakind::DataKind;
-    use crate::range::Range;
+    use crate::archiver::datakind::DataKind;
+    use crate::archiver::range::Range;
 
     #[test]
     fn test_append_new_file() {

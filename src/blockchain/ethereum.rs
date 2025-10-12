@@ -14,7 +14,7 @@ use crate::blockchain::{BlockDetails, BlockReference, BlockchainData, EthereumTy
 use anyhow::{Result, anyhow};
 use tokio_retry2::{Retry, RetryError};
 use tokio_retry2::strategy::{jitter, ExponentialFactorBackoff};
-use crate::datakind::TraceOptions;
+use crate::archiver::datakind::TraceOptions;
 
 #[derive(Clone)]
 pub struct EthereumData {

@@ -10,7 +10,7 @@ use chrono::Utc;
 use serde::{Deserialize, Deserializer};
 use crate::avros::{BLOCK_SCHEMA, TX_SCHEMA};
 use crate::blockchain::{BitcoinType, BlockDetails, BlockReference, BlockchainData, JsonString};
-use crate::datakind::TraceOptions;
+use crate::archiver::datakind::TraceOptions;
 
 #[derive(Clone)]
 pub struct BitcoinData {

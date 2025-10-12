@@ -1,5 +1,5 @@
 use std::ops::Add;
-use crate::range::Range;
+use crate::archiver::range::Range;
 
 ///
 /// Multiple ranges

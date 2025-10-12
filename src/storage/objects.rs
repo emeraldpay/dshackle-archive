@@ -18,9 +18,9 @@ use tokio::{
 };
 use tokio::sync::mpsc::Sender;
 use tokio_util::io::{StreamReader, SyncIoBridge};
-use crate::datakind::DataKind;
-use crate::filenames::{Filenames, Level, LevelDouble, LevelSingle};
-use crate::range::Range;
+use crate::archiver::datakind::DataKind;
+use crate::archiver::filenames::{Filenames, Level, LevelDouble, LevelSingle};
+use crate::archiver::range::Range;
 use crate::storage::{avro_reader, copy, sorted_files, FileReference, TargetFile, TargetFileReader, TargetFileWriter, TargetStorage};
 
 pub struct ObjectsStorage<S: ObjectStore> {
