@@ -387,7 +387,7 @@ mod tests {
 
         let range = Range::new(21596362, 21596362);
         let tx_options = DataOptions {
-            block: Some(()),
+            block: Some(Default::default()),
             tx: Some(Default::default()),
             trace: Some(Default::default()),
         };
@@ -407,7 +407,7 @@ mod tests {
 
         let range = Range::new(21596362, 21596362);
         let tx_options = DataOptions {
-            block: Some(()),
+            block: Some(Default::default()),
             tx: Some(Default::default()),
             trace: Some(Default::default()),
         };
@@ -429,7 +429,7 @@ mod tests {
 
         let range = Range::new(21596362, 21596363);
         let tx_options = DataOptions {
-            block: Some(()),
+            block: Some(Default::default()),
             tx: None,
             trace: None,
         };

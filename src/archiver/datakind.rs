@@ -106,7 +106,7 @@ impl From<&Args> for DataTables {
 
 #[derive(Debug, Clone)]
 pub struct DataOptions {
-    pub block: Option<()>,
+    pub block: Option<BlockOptions>,
     pub tx: Option<TxOptions>,
     pub trace: Option<TraceOptions>,
 }
@@ -163,7 +163,7 @@ impl DataOptions {
 impl Default for DataOptions {
     fn default() -> Self {
         Self {
-            block: Some(()),
+            block: Some(BlockOptions::default()),
             tx: Some(TxOptions::default()),
             trace: None,
         }
@@ -175,7 +175,7 @@ impl From<&Args> for DataOptions {
     fn from(value: &Args) -> Self {
         let files = DataTables::from(value);
         let include_block = files.include(DataKind::Blocks);
-        let block = if include_block { Some(()) } else { None };
+        let block = if include_block { Some(BlockOptions::default()) } else { None };
         let include_tx = files.include(DataKind::Transactions);
         let tx = if include_tx { Some(TxOptions::default()) } else { None };
         let include_trace = files.include(DataKind::TransactionTraces);
@@ -234,6 +234,15 @@ impl FromStr for TraceOptions {
 pub struct TxOptions {}
 
 impl Default for TxOptions {
+    fn default() -> Self {
+        Self {}
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BlockOptions {}
+
+impl Default for BlockOptions {
     fn default() -> Self {
         Self {}
     }
