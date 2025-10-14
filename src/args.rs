@@ -31,11 +31,11 @@ pub struct Args {
     #[arg(long = "dir", short)]
     pub dir: Option<String>,
 
-    /// Continue from the last archived block; i.e., not the latest in blockchain. (for `stream` command)
+    /// [Stream Command] Continue from the last archived block; i.e., not the latest in blockchain
     #[arg(long = "continue")]
     pub continue_last: bool,
 
-    /// Ensure that the latest T blocks are archived (for `fix` command)
+    /// [Fix Command] Ensure that the latest T blocks are archived
     #[arg(long = "tail")]
     pub tail: Option<u64>,
 
@@ -58,6 +58,12 @@ pub struct Args {
     /// `stateDiff` - debug_traceTransaction with `prestateTracer` tracing
     #[arg(long = "fieldsTrace")]
     pub fields_trace: Option<String>,
+
+    ///
+    /// [Fix Command] Set to remove any existing data in whole chunk if any of tables is missing a block in the chunk or has broken values.
+    /// Default is `false`, which deleted only tables with missing / corrupted data.
+    #[arg(long = "fix.clean")]
+    pub fix_clean: bool,
 }
 
 impl Default for Args {
@@ -76,6 +82,7 @@ impl Default for Args {
             range_chunk: Some(1000),
             tables: Some("blocks,txes".to_string()),
             fields_trace: Some("calls,stateDiff".to_string()),
+            fix_clean: false,
         }
     }
 }
