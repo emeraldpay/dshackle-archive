@@ -46,7 +46,8 @@ impl<B: BlockchainTypes, TS: TargetStorage> ArchiveBlock<B> for Archiver<B, TS> 
 
         let mut results = Vec::new();
         for height in heights {
-            let (_record, block, txes) = self.data_provider.fetch_block(&height).await?;
+            let (record, block, txes) = self.data_provider.fetch_block(&height).await?;
+            let _ = file.append(record).await?;
             results.push((block, txes));
         }
 
