@@ -74,6 +74,8 @@ async fn main_inner() -> Result<()> {
     tracing::debug!("debug");
     tracing::trace!("trace");
 
+    global::set_compression(&args);
+
     let chain_ref = ChainRef::from_str(&args.blockchain)
         .map_err(|_| anyhow!("Unsupported blockchain: {}", args.blockchain))?;
     let chain_type = BlockchainType::try_from(chain_ref)

@@ -3,7 +3,7 @@ use std::sync::{Arc, Mutex};
 use std::sync::atomic::{AtomicI64, Ordering};
 use anyhow::anyhow;
 use apache_avro::types::Record;
-use apache_avro::{Codec, Writer};
+use apache_avro::{Writer};
 use async_trait::async_trait;
 use futures_util::{StreamExt};
 use object_store::buffered::BufWriter;
@@ -21,6 +21,7 @@ use tokio_util::io::{StreamReader, SyncIoBridge};
 use crate::archiver::datakind::DataKind;
 use crate::archiver::filenames::{Filenames, Level, LevelDouble, LevelSingle};
 use crate::archiver::range::Range;
+use crate::global;
 use crate::storage::{avro_reader, copy, sorted_files, FileReference, TargetFile, TargetFileReader, TargetFileWriter, TargetStorage};
 
 pub struct ObjectsStorage<S: ObjectStore> {
@@ -237,7 +238,7 @@ impl NewObjectsFile<'_> {
         let buf = BufWriter::new(storage, path.clone());
         let (closed_tx, closed_rx) = oneshot::channel();
         let pipe = Self::pipe_start(buf, closed_tx);
-        let writer = Writer::with_codec(kind.schema(), pipe.clone(), Codec::Snappy);
+        let writer = Writer::with_codec(kind.schema(), pipe.clone(), global::get_avro_codec());
         Self {
             pipe,
             writer: Mutex::new(writer),

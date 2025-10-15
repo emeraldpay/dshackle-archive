@@ -64,6 +64,11 @@ pub struct Args {
     /// Default is `false`, which deleted only tables with missing / corrupted data.
     #[arg(long = "fix.clean")]
     pub fix_clean: bool,
+
+    ///
+    /// Compression algorithm to use when writing new Avro files. Default is `zstd`.
+    #[arg(long = "compression")]
+    pub compression: Option<Compression>
 }
 
 impl Default for Args {
@@ -83,6 +88,7 @@ impl Default for Args {
             tables: Some("blocks,txes".to_string()),
             fields_trace: Some("calls,stateDiff".to_string()),
             fix_clean: false,
+            compression: None,
         }
     }
 }
@@ -203,6 +209,12 @@ impl Default for Aws {
             trust_tls: false,
         }
     }
+}
+
+#[derive(clap::ValueEnum, Debug, Clone, PartialEq)]
+pub enum Compression {
+    Snappy,
+    Zstd,
 }
 
 #[cfg(test)]

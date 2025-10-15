@@ -76,9 +76,9 @@ Options:
   -d, --dir <DIR>
           Target directory
       --continue
-          Continue from the last archived block; i.e., not the latest in blockchain. (for `stream` command)
+          [Stream Command] Continue from the last archived block; i.e., not the latest in blockchain
       --tail <TAIL>
-          Ensure that the latest T blocks are archived (for `fix` command)
+          [Fix Command] Ensure that the latest T blocks are archived
   -r, --range <RANGE>
           Blocks Range (`N...M`)
       --rangeChunk <RANGE_CHUNK>
@@ -87,9 +87,12 @@ Options:
           Types of tables to archive (comma-separated list of `blocks`, `txes`, `traces`). Default: blocks,txes
       --fieldsTrace <FIELDS_TRACE>
           List of data to include into tracing archive table (comma-separated list of `calls`, `stateDiff`). Default: calls,stateDiff; Used only if `traces` are included into the archived tables (see `--tables` option); Details: `calls` - debug_traceTransaction with `callTracer` tracing; `stateDiff` - debug_traceTransaction with `prestateTracer` tracing
+      --fix.clean
+          [Fix Command] Set to remove any existing data in whole chunk if any of tables is missing a block in the chunk or has broken values. Default is `false`, which deleted only tables with missing / corrupted data
+      --compression <COMPRESSION>
+          Compression algorithm to use when writing new Avro files. Default is `zstd` [possible values: snappy, zstd]
   -h, --help
           Print help
-
 ----
 
 === Commands

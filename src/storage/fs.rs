@@ -3,7 +3,7 @@ use std::fs::File;
 use std::path::PathBuf;
 use std::sync::{Mutex};
 use apache_avro::types::Record;
-use apache_avro::{Codec, Writer};
+use apache_avro::{Writer};
 use async_trait::async_trait;
 use crate::archiver::datakind::DataKind;
 use crate::archiver::filenames::{Filenames, Level, LevelDouble};
@@ -11,6 +11,7 @@ use crate::archiver::range::Range;
 use crate::storage::{avro_reader, copy, FileReference, TargetFile, TargetFileReader, TargetFileWriter, TargetStorage};
 use anyhow::{anyhow, Context, Result};
 use tokio::sync::mpsc::Receiver;
+use crate::global;
 
 pub struct FsStorage {
     parent_dir: PathBuf,
@@ -138,7 +139,7 @@ impl FsFileWriter<'_> {
         tracing::debug!("Create file: {:?}", path);
         let _ = fs::create_dir_all(path.parent().unwrap())?;
         let file = File::create(path.clone())?;
-        let writer = Writer::with_codec(kind.schema(), file, Codec::Snappy);
+        let writer = Writer::with_codec(kind.schema(), file, global::get_avro_codec());
         let writer = Mutex::new(writer);
         Ok(Self { path, writer: Some(writer) })
     }

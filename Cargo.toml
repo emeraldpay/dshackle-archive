@@ -17,7 +17,7 @@ futures = "0.3"
 async-trait = "0.1"
 ginepro = "0.8"
 pulsar = "6.3"
-apache-avro = { version = "0.17", features = ["snappy"] }
+apache-avro = { version = "0.17", features = ["snappy", "zstandard"] }
 emerald-api = { git = "https://github.com/emeraldpay/emerald-api-rs", features = ["client-blockchain"] }
 enum-display-derive = "0.1"
 futures-util = "0.3"
