@@ -2,7 +2,6 @@ use std::collections::HashSet;
 use std::marker::PhantomData;
 use std::str::FromStr;
 use std::sync::Arc;
-use anyhow::{anyhow, Result};
 use apache_avro::types::{Record, Value};
 use async_trait::async_trait;
 use tokio::sync::Semaphore;
@@ -40,12 +39,13 @@ pub struct VerifyCommand<B: BlockchainTypes, TS: TargetStorage> {
     data_options: DataOptions,
     delete_chunk: bool,
     chunk: usize,
+    dry_run: bool,
 }
 
 impl<B: BlockchainTypes + 'static, TS: TargetStorage + 'static> VerifyCommand<B, TS> {
     pub fn new(config: &crate::args::Args,
                archiver: Archiver<B, TS>,
-    ) -> Result<Self> {
+    ) -> anyhow::Result<Self> {
 
         Ok(Self {
             b: PhantomData,
@@ -54,12 +54,14 @@ impl<B: BlockchainTypes + 'static, TS: TargetStorage + 'static> VerifyCommand<B,
             data_options: DataOptions::from(config),
             delete_chunk: config.fix_clean,
             chunk: config.get_chunk_size(),
+            dry_run: config.dry_run,
         })
     }
 
-    async fn verify_chunk(&self, archived: ArchivesList) -> Result<()> {
+    async fn verify_chunk(&self, archived: ArchivesList) -> anyhow::Result<()> {
         let shutdown = global::get_shutdown();
         let delete_chunk = self.delete_chunk;
+        let dry_run = self.dry_run;
         let archiver = self.archiver.clone();
         let data_options = self.data_options.clone();
         let mut jobs = JoinSet::new();
@@ -70,7 +72,7 @@ impl<B: BlockchainTypes + 'static, TS: TargetStorage + 'static> VerifyCommand<B,
             let data_options = data_options.clone();
             jobs.spawn(async move {
                 let _permit = parallel.acquire().await;
-                verify_table_group(delete_chunk, archiver, group, data_options).await
+                verify_table_group(delete_chunk, dry_run, archiver, group, data_options).await
             });
         }
         while !shutdown.is_signalled() {
@@ -94,7 +96,7 @@ impl<B: BlockchainTypes + 'static, TS: TargetStorage + 'static> VerifyCommand<B,
 #[async_trait]
 impl<B: BlockchainTypes + 'static, FR: TargetStorage + 'static> CommandExecutor for VerifyCommand<B, FR> {
 
-    async fn execute(&self) -> Result<()> {
+    async fn execute(&self) -> anyhow::Result<()> {
         let full_range = self.blocks.to_range(self.archiver.data_provider.as_ref()).await?;
         tracing::info!(range = %full_range, "Verifying range");
 
@@ -128,7 +130,7 @@ impl<B: BlockchainTypes + 'static, FR: TargetStorage + 'static> CommandExecutor 
     }
 }
 
-async fn verify_table_group<B: BlockchainTypes, TS: TargetStorage>(delete_chunk: bool, archiver: Arc<Archiver<B, TS>>, group: ArchiveGroup, data_options: DataOptions) -> Result<()> {
+async fn verify_table_group<B: BlockchainTypes, TS: TargetStorage>(delete_chunk: bool, dry_run: bool, archiver: Arc<Archiver<B, TS>>, group: ArchiveGroup, data_options: DataOptions) -> anyhow::Result<()> {
     let shutdown = global::get_shutdown();
     let incomplete = !group.is_complete();
     let mut for_deletion: Vec<&FileReference> = vec![];
@@ -153,18 +155,26 @@ async fn verify_table_group<B: BlockchainTypes, TS: TargetStorage>(delete_chunk:
     }
 
     for f in for_deletion {
-        archiver.target.delete(&f).await?;
+        tracing::info!(range = %group.range, file = %f.path, "Deleting corrupted or incomplete file");
+        if !dry_run {
+            archiver.target.delete(&f).await?;
+        }
     }
     Ok(())
 }
 
-async fn verify_content<B: BlockchainTypes, TS: TargetStorage>(archiver: Arc<Archiver<B, TS>>, group: &ArchiveGroup, data_options: DataOptions) -> Result<Vec<&FileReference>> {
+async fn verify_content<B: BlockchainTypes, TS: TargetStorage>(archiver: Arc<Archiver<B, TS>>, group: &ArchiveGroup, data_options: DataOptions) -> anyhow::Result<Vec<&FileReference>> {
     tracing::trace!(range = %group.range, "Verify table data");
     let shutdown = global::get_shutdown();
     let mut broken_files = vec![];
 
-    let block_file = group.blocks.as_ref().unwrap();
-    let block_verification = VerifyTable::<BlockOptions, B, TS>::verify_table(block_file, archiver.target.as_ref(), data_options.block.as_ref().unwrap(), &group.range, &()).await;
+    let block_verification = if let Some(block_file) = group.blocks.as_ref() {
+        VerifyTable::<BlockOptions, B, TS>::verify_table(block_file, archiver.target.as_ref(), data_options.block.as_ref().unwrap(), &group.range, &()).await
+    } else {
+        tracing::error!(range = %group.range, "No block file. Skip verification and delete other tables in the range");
+        return Ok(group.tables())
+    };
+
     if shutdown.is_signalled() {
         return Ok(vec![]);
     }
@@ -204,19 +214,19 @@ async fn verify_content<B: BlockchainTypes, TS: TargetStorage>(archiver: Arc<Arc
     Ok(broken_files)
 }
 
-fn verify_field_exist(record: &Record, field: &str) -> Result<()> {
+fn verify_field_exist(record: &Record, field: &str) -> Result<(), String> {
     let value = record.fields.iter()
         .find(|f| f.0 == field)
-        .ok_or(anyhow!("No {} in the record", field))?;
+        .ok_or(format!("No {} in the record", field))?;
     match &value.1 {
-        Value::Null => Err(anyhow!("Null {} in the record", field)),
+        Value::Null => Err(format!("Null {} in the record", field)),
         Value::Bytes(v) => if v.is_empty() {
-            Err(anyhow!("Empty {} in the record", field))
+            Err(format!("Empty {} in the record", field))
         } else {
             Ok(())
         },
         Value::String(s) => if s.is_empty() {
-            Err(anyhow!("Empty {} in the record", field))
+            Err(format!("Empty {} in the record", field))
         } else {
             Ok(())
         },
@@ -229,7 +239,7 @@ trait VerifyTable<T, B: BlockchainTypes, TS: TargetStorage> {
     type Returns;
     type Params;
 
-    async fn verify_table(&self, storage: &TS, table: &T, range: &Range, params: &Self::Params) -> Result<Self::Returns>;
+    async fn verify_table(&self, storage: &TS, table: &T, range: &Range, params: &Self::Params) -> Result<Self::Returns, String>;
 }
 
 #[async_trait]
@@ -237,13 +247,13 @@ impl<B: BlockchainTypes, TS: TargetStorage> VerifyTable<TxOptions, B, TS> for Fi
     type Returns = ();
     type Params = Vec<B::TxId>;
 
-    async fn verify_table(&self, storage: &TS, _table: &TxOptions, range: &Range, params: &Self::Params) -> Result<Self::Returns> {
+    async fn verify_table(&self, storage: &TS, _table: &TxOptions, range: &Range, params: &Self::Params) -> Result<Self::Returns, String> {
         tracing::trace!(range = %range, "Verify txes");
         let shutdown = global::get_shutdown();
         let expected_txes = params;
         let mut txes = storage.open(&self)
-            .await?
-            .read()?;
+            .await.map_err(|e| format!("Failed to open txes storage: {}", e))?
+            .read().map_err(|e| format!("Failed to read txes storage: {}", e))?;
         let mut existing_txes = HashSet::new();
         while !shutdown.is_signalled() {
             tokio::select! {
@@ -258,16 +268,16 @@ impl<B: BlockchainTypes, TS: TargetStorage> VerifyTable<TxOptions, B, TS> for Fi
                     let record = record.unwrap();
                     let txid = record.fields.iter()
                         .find(|f| f.0 == "txid")
-                        .ok_or(anyhow!("No txid in the record"))?;
+                        .ok_or(format!("No txid in the record"))?;
                     let txid_str = match &txid.1 {
                         Value::String(s) => s.clone(),
-                        _ => return Err(anyhow!("Invalid txid type: {:?}", txid.1))
+                        _ => return Err(format!("Invalid txid type: {:?}", txid.1))
                     };
 
                     let txid = B::TxId::from_str(&txid_str)
-                        .map_err(|_| anyhow!("Invalid txid: {}", txid_str))?;
+                        .map_err(|_| format!("Invalid txid: {}", txid_str))?;
                     if !expected_txes.contains(&txid) {
-                        return Err(anyhow!("Unexpected txid: {}", txid_str));
+                        return Err(format!("Unexpected txid: {}", txid_str));
                     }
 
                     verify_field_exist(&record, "json")?;
@@ -276,13 +286,13 @@ impl<B: BlockchainTypes, TS: TargetStorage> VerifyTable<TxOptions, B, TS> for Fi
 
                     let first = existing_txes.insert(txid);
                     if !first {
-                        return Err(anyhow!("Duplicate txid: {}", txid_str));
+                        return Err(format!("Duplicate txid: {}", txid_str));
                     }
                 }
             }
         }
         if existing_txes.len() != expected_txes.len() {
-            return Err(anyhow!("Missing txes in the table"));
+            return Err(format!("Missing txes in the table"));
         }
         Ok(())
     }
@@ -293,13 +303,13 @@ impl<B: BlockchainTypes, TS: TargetStorage> VerifyTable<TraceOptions, B, TS> for
     type Returns = ();
     type Params = Vec<B::TxId>;
 
-    async fn verify_table(&self, storage: &TS, table: &TraceOptions, range: &Range, params: &Self::Params) -> Result<Self::Returns> {
+    async fn verify_table(&self, storage: &TS, table: &TraceOptions, range: &Range, params: &Self::Params) -> Result<Self::Returns, String> {
         tracing::trace!(range = %range, "Verify traces");
         let shutdown = global::get_shutdown();
         let expected_txes = params;
         let mut traces = storage.open(&self)
-            .await?
-            .read()?;
+            .await.map_err(|e| format!("Failed to open traces storage: {}", e))?
+            .read().map_err(|e| format!("Failed to read traces storage: {}", e))?;
         let mut existing_txes = HashSet::new();
         while !shutdown.is_signalled() {
             tokio::select! {
@@ -314,16 +324,16 @@ impl<B: BlockchainTypes, TS: TargetStorage> VerifyTable<TraceOptions, B, TS> for
                     let record = record.unwrap();
                     let txid = record.fields.iter()
                         .find(|f| f.0 == "txid")
-                        .ok_or(anyhow!("No txid in the record"))?;
+                        .ok_or("No txid in the record".to_string())?;
                     let txid_str = match &txid.1 {
                         Value::String(s) => s.clone(),
-                        _ => return Err(anyhow!("Invalid txid type: {:?}", txid.1))
+                        _ => return Err(format!("Invalid txid type: {:?}", txid.1))
                     };
 
                     let txid = B::TxId::from_str(&txid_str)
-                        .map_err(|_| anyhow!("Invalid txid: {}", txid_str))?;
+                        .map_err(|_| format!("Invalid txid: {}", txid_str))?;
                     if !expected_txes.contains(&txid) {
-                        return Err(anyhow!("Unexpected txid: {}", txid_str));
+                        return Err(format!("Unexpected txid: {}", txid_str));
                     }
 
                     if table.include_trace {
@@ -335,13 +345,13 @@ impl<B: BlockchainTypes, TS: TargetStorage> VerifyTable<TraceOptions, B, TS> for
 
                     let first = existing_txes.insert(txid);
                     if !first {
-                        return Err(anyhow!("Duplicate txid: {}", txid_str));
+                        return Err(format!("Duplicate txid: {}", txid_str));
                     }
                 }
             }
         }
         if existing_txes.len() != expected_txes.len() {
-            return Err(anyhow!("Missing txes in the table"));
+            return Err("Missing txes in the table".to_string());
         }
         Ok(())
     }
@@ -352,11 +362,11 @@ impl<B: BlockchainTypes, TS: TargetStorage> VerifyTable<BlockOptions, B, TS> for
     type Returns = Vec<B::TxId>;
     type Params = ();
 
-    async fn verify_table(&self, storage: &TS, _table: &BlockOptions, range: &Range, _params: &Self::Params) -> Result<Self::Returns> {
+    async fn verify_table(&self, storage: &TS, _table: &BlockOptions, range: &Range, _params: &Self::Params) -> Result<Self::Returns, String> {
         tracing::trace!(range = %range, "Verify blocks");
         let mut blocks = storage.open(&self)
-            .await?
-            .read()?;
+            .await.map_err(|e| format!("Failed to open blocks storage: {}", e))?
+            .read().map_err(|e| format!("Failed to read blocks storage: {}", e))?;
         let shutdown = global::get_shutdown();
 
         let mut heights = HashSet::new();
@@ -374,35 +384,35 @@ impl<B: BlockchainTypes, TS: TargetStorage> VerifyTable<BlockOptions, B, TS> for
                 }
                 let record = record.unwrap();
 
-                let height = avros::get_height(&record)?;
+                let height = avros::get_height(&record).map_err(|e| format!("Failed to get height: {}", e))?;
                 if !range.contains(&Range::Single(height)) {
                     tracing::error!(range = %range, "Height is not in range: {}", height);
-                    return Err(anyhow!("Height is not in range: {}", height));
+                    return Err(format!("Height is not in range: {}", height));
                 }
                 let first = heights.insert(height);
                 if !first {
                     tracing::error!(range = %range, "Duplicate height: {}", height);
-                    return Err(anyhow!("Duplicate height: {}", height));
+                    return Err(format!("Duplicate height: {}", height));
                 }
 
                 let json = record.fields.iter()
                     .find(|f| f.0 == "json");
                 if json.is_none() {
                     tracing::error!(range = %range, "No json in the record");
-                    return Err(anyhow!("No json in the record"));
+                    return Err("No json in the record".to_string());
                 }
                 let json = json.unwrap();
                 let json = match &json.1 {
                     Value::Bytes(b) => b.clone(),
                     _ => {
                         tracing::error!(range = %range, "Invalid json type: {:?}", json.1);
-                        return Err(anyhow!("Invalid json type: {:?}", json.1));
+                        return Err(format!("Invalid json type: {:?}", json.1));
                     }
                 };
                 let block = serde_json::from_slice::<B::BlockParsed>(json.as_slice());
                 if block.is_err() {
                     tracing::error!(range = %range, "Invalid json data: {:?}", block.err().unwrap());
-                    return Err(anyhow!("Invalid json data"));
+                    return Err("Invalid json data".to_string());
                 }
                 let block = block.unwrap();
                 expected_txes.extend(block.txes());
@@ -411,7 +421,7 @@ impl<B: BlockchainTypes, TS: TargetStorage> VerifyTable<BlockOptions, B, TS> for
         }
         if heights.len() != range.len() {
             tracing::error!(range = %range, "Missing blocks in the table");
-            return Err(anyhow!("Missing blocks in the table"));
+            return Err("Missing blocks in the table".to_string());
         }
         Ok(expected_txes)
     }
