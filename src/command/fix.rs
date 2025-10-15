@@ -1,13 +1,6 @@
 use std::marker::PhantomData;
 use async_trait::async_trait;
-use crate::{
-    archiver::{ArchiveAll, Archiver},
-    args::Args,
-    blockchain::BlockchainTypes,
-    command::CommandExecutor,
-    notify::RunMode,
-    storage::TargetStorage
-};
+use crate::{archiver::{ArchiveAll, Archiver}, args::Args, blockchain::BlockchainTypes, command::CommandExecutor, global, notify::RunMode, storage::TargetStorage};
 use crate::archiver::blocks_config::Blocks;
 use crate::archiver::datakind::DataOptions;
 
@@ -44,16 +37,24 @@ impl<B: BlockchainTypes, TS: TargetStorage> FixCommand<B, TS> {
 impl<B: BlockchainTypes, TS: TargetStorage> CommandExecutor for FixCommand<B, TS> {
 
     async fn execute(&self) -> anyhow::Result<()> {
+        let shutdown = global::get_shutdown();
         let range = self.blocks.to_range(self.archiver.data_provider.as_ref()).await?;
         tracing::info!("Fixing range: {}", range);
 
         let options = self.tx_options.clone();
         let missing = self.archiver.target.find_incomplete_tables(range, &options).await?;
         for (range, kinds) in missing {
-            tracing::info!("Found missing data in range {}: {:?}", range, kinds);
-            let chunks = range.split_chunks(self.chunk_size, true);
+            if shutdown.is_signalled() {
+                break;
+            }
+            tracing::info!(range = %range, "Found missing data: {:?}", kinds);
+            let chunks = range.split_chunks(self.chunk_size, false);
             let options = self.tx_options.clone().only_include(&kinds);
             for chunk in chunks {
+                if shutdown.is_signalled() {
+                    break;
+                }
+                tracing::info!(range = %chunk, "Fixing chunk");
                 self.archiver.archive(chunk, RunMode::Fix, &options).await?;
             }
         }

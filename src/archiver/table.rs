@@ -7,6 +7,7 @@ use crate::blockchain::{BlockchainData, BlockchainTypes};
 use crate::archiver::datakind::{DataKind, TraceOptions, TxOptions};
 use crate::notify::Notification;
 use crate::archiver::range::Range;
+use crate::global;
 use crate::storage::{TargetFile, TargetFileWriter, TargetStorage};
 
 ///
@@ -25,12 +26,20 @@ pub trait ArchiveTable<T, B: BlockchainTypes> {
 #[async_trait]
 impl<B: BlockchainTypes, TS: TargetStorage> ArchiveTable<TraceOptions, B> for Archiver<B, TS> {
     async fn process_table(&self, range: Range, notification: Notification, blocks: &BlockTransactions<B>, options: &TraceOptions) -> anyhow::Result<()> {
+        let shutdown = global::get_shutdown();
+        if shutdown.is_signalled() {
+            return Ok(());
+        }
         let file = self.target.create(DataKind::TransactionTraces, &range)
             .await
             .map_err(|e| anyhow!("Unable to create file: {}", e))?;
         let file_url = file.get_url();
         for (block, txes) in blocks.iter() {
             for tx_index in 0..txes.len() {
+                if shutdown.is_signalled() {
+                    tracing::info!("Shutdown signalled, stopping");
+                    return Ok(());
+                }
                 let data = self.data_provider.fetch_traces(&block, tx_index, &options).await?;
                 let _ = file.append(data).await?;
             }
@@ -52,12 +61,20 @@ impl<B: BlockchainTypes, TS: TargetStorage> ArchiveTable<TraceOptions, B> for Ar
 #[async_trait]
 impl<B: BlockchainTypes, TS: TargetStorage> ArchiveTable<TxOptions, B> for Archiver<B, TS> {
     async fn process_table(&self, range: Range, notification: Notification, blocks: &BlockTransactions<B>, _options: &TxOptions) -> anyhow::Result<()> {
+        let shutdown = global::get_shutdown();
+        if shutdown.is_signalled() {
+            return Ok(());
+        }
         let file = self.target.create(DataKind::Transactions, &range)
             .await
             .map_err(|e| anyhow!("Unable to create file: {}", e))?;
         let file_url = file.get_url();
         for (block, txes) in blocks.iter() {
             for tx_index in 0..txes.len() {
+                if shutdown.is_signalled() {
+                    tracing::info!("Shutdown signalled, stopping");
+                    return Ok(());
+                }
                 let data = self.data_provider.fetch_tx(&block, tx_index).await?;
                 let _ = file.append(data).await?;
             }

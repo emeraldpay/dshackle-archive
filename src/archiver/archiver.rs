@@ -11,6 +11,7 @@ use crate::archiver::datakind::{DataKind, DataOptions};
 use crate::notify::empty::EmptyNotifier;
 use crate::notify::{Notification, Notifier, RunMode};
 use crate::archiver::range::Range;
+use crate::global;
 use crate::storage::TargetStorage;
 
 #[derive(Clone)]
@@ -90,6 +91,7 @@ impl<B: BlockchainTypes, TS: TargetStorage> ArchiveAll<Height> for Archiver<B, T
 impl<B: BlockchainTypes, TS: TargetStorage> ArchiveAll<Range> for Archiver<B, TS> {
     async fn archive(&self, what: Range, mode: RunMode, options: &DataOptions) -> anyhow::Result<()> {
         let start_time = Utc::now();
+        tracing::debug!("Archiving range: {:?}", what);
 
         let notification = Notification {
             // common fields
@@ -113,6 +115,11 @@ impl<B: BlockchainTypes, TS: TargetStorage> ArchiveAll<Range> for Archiver<B, TS
 
         if let Some(traces_options) = &options.trace {
             self.process_table(what.clone(), notification.clone(), &blocks, traces_options).await?;
+        }
+
+        let shutdown = global::get_shutdown();
+        if shutdown.is_signalled() {
+            return Ok(());
         }
 
         let duration = Utc::now().signed_duration_since(start_time);

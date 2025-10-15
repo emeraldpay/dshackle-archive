@@ -8,6 +8,7 @@ use crate::blockchain::{BlockReference, BlockchainData, BlockchainTypes, MultiBl
 use crate::archiver::datakind::DataKind;
 use crate::notify::Notification;
 use crate::archiver::range::Range;
+use crate::global;
 use crate::storage::{TargetFile, TargetFileWriter, TargetStorage};
 
 ///
@@ -22,6 +23,10 @@ pub trait ArchiveBlock<B: BlockchainTypes> {
 #[async_trait]
 impl<B: BlockchainTypes, TS: TargetStorage> ArchiveBlock<B> for Archiver<B, TS> {
     async fn process_blocks(&self, blocks: MultiBlockReference, notification: Notification) -> anyhow::Result<BlockTransactions<B>> {
+        let shutdown = global::get_shutdown();
+        if shutdown.is_signalled() {
+            return Ok(vec![]);
+        }
         let range: Range = blocks.clone().into();
         let file = self.target.create(DataKind::Blocks, &range)
             .await
@@ -46,6 +51,10 @@ impl<B: BlockchainTypes, TS: TargetStorage> ArchiveBlock<B> for Archiver<B, TS> 
 
         let mut results = Vec::new();
         for height in heights {
+            if shutdown.is_signalled() {
+                tracing::info!("Shutdown signalled, stopping");
+                break;
+            }
             let (record, block, txes) = self.data_provider.fetch_block(&height).await?;
             let _ = file.append(record).await?;
             results.push((block, txes));

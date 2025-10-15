@@ -35,7 +35,7 @@ pub struct Args {
     #[arg(long = "continue")]
     pub continue_last: bool,
 
-    /// [Fix Command] Ensure that the latest T blocks are archived
+    /// [Verify/Fix Commands] Use the latest T blocks instead of a range
     #[arg(long = "tail")]
     pub tail: Option<u64>,
 
