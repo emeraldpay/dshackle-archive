@@ -65,6 +65,7 @@ impl<B: BlockchainTypes, TS: TargetStorage> ArchiveTable<TxOptions, B> for Archi
         if shutdown.is_signalled() {
             return Ok(());
         }
+        let dry_run = global::is_dry_run();
         let file = self.target.create(DataKind::Transactions, &range)
             .await
             .map_err(|e| anyhow!("Unable to create file: {}", e))?;
@@ -76,10 +77,14 @@ impl<B: BlockchainTypes, TS: TargetStorage> ArchiveTable<TxOptions, B> for Archi
                     return Ok(());
                 }
                 let data = self.data_provider.fetch_tx(&block, tx_index).await?;
-                let _ = file.append(data).await?;
+                if !dry_run {
+                    let _ = file.append(data).await?;
+                }
             }
         }
-        let _ = file.close().await?;
+        if !dry_run {
+            let _ = file.close().await?;
+        }
         let notification_tx = Notification {
             file_type: DataKind::Transactions,
             location: file_url,
@@ -87,7 +92,9 @@ impl<B: BlockchainTypes, TS: TargetStorage> ArchiveTable<TxOptions, B> for Archi
 
             ..notification
         };
-        let _ = self.notifications.send(notification_tx).await;
+        if !dry_run {
+            let _ = self.notifications.send(notification_tx).await;
+        }
         Ok(())
     }
 }

@@ -74,7 +74,12 @@ async fn main_inner() -> Result<()> {
     tracing::debug!("debug");
     tracing::trace!("trace");
 
+    global::set_dry_run(&args);
     global::set_compression(&args);
+
+    if global::is_dry_run() {
+        tracing::info!("Dry run mode enabled, no changes will be made");
+    }
 
     let chain_ref = ChainRef::from_str(&args.blockchain)
         .map_err(|_| anyhow!("Unsupported blockchain: {}", args.blockchain))?;

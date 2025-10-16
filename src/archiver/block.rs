@@ -27,6 +27,7 @@ impl<B: BlockchainTypes, TS: TargetStorage> ArchiveBlock<B> for Archiver<B, TS> 
         if shutdown.is_signalled() {
             return Ok(vec![]);
         }
+        let dry_run = global::is_dry_run();
         let range: Range = blocks.clone().into();
         let file = self.target.create(DataKind::Blocks, &range)
             .await
@@ -56,11 +57,15 @@ impl<B: BlockchainTypes, TS: TargetStorage> ArchiveBlock<B> for Archiver<B, TS> 
                 break;
             }
             let (record, block, txes) = self.data_provider.fetch_block(&height).await?;
-            let _ = file.append(record).await?;
+            if !dry_run {
+                let _ = file.append(record).await?;
+            }
             results.push((block, txes));
         }
 
-        let _ = file.close().await?;
+        if !dry_run {
+            let _ = file.close().await?;
+        }
         let notification_tx = Notification {
             file_type: DataKind::Blocks,
             location: file_url,
@@ -68,7 +73,9 @@ impl<B: BlockchainTypes, TS: TargetStorage> ArchiveBlock<B> for Archiver<B, TS> 
 
             ..notification
         };
-        let _ = self.notifications.send(notification_tx).await;
+        if !dry_run {
+            let _ = self.notifications.send(notification_tx).await;
+        }
         Ok(results)
     }
 }

@@ -76,7 +76,7 @@ impl Default for Args {
         Self {
             command: Command::Stream,
             blockchain: "ethereum".to_string(),
-            dry_run: true,
+            dry_run: false,
             connection: Connection::default(),
             notify: None,
             aws: None,

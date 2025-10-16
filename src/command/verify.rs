@@ -39,7 +39,6 @@ pub struct VerifyCommand<B: BlockchainTypes, TS: TargetStorage> {
     data_options: DataOptions,
     delete_chunk: bool,
     chunk: usize,
-    dry_run: bool,
 }
 
 impl<B: BlockchainTypes + 'static, TS: TargetStorage + 'static> VerifyCommand<B, TS> {
@@ -54,14 +53,12 @@ impl<B: BlockchainTypes + 'static, TS: TargetStorage + 'static> VerifyCommand<B,
             data_options: DataOptions::from(config),
             delete_chunk: config.fix_clean,
             chunk: config.get_chunk_size(),
-            dry_run: config.dry_run,
         })
     }
 
     async fn verify_chunk(&self, archived: ArchivesList) -> anyhow::Result<()> {
         let shutdown = global::get_shutdown();
         let delete_chunk = self.delete_chunk;
-        let dry_run = self.dry_run;
         let archiver = self.archiver.clone();
         let data_options = self.data_options.clone();
         let mut jobs = JoinSet::new();
@@ -72,7 +69,7 @@ impl<B: BlockchainTypes + 'static, TS: TargetStorage + 'static> VerifyCommand<B,
             let data_options = data_options.clone();
             jobs.spawn(async move {
                 let _permit = parallel.acquire().await;
-                verify_table_group(delete_chunk, dry_run, archiver, group, data_options).await
+                verify_table_group(delete_chunk, archiver, group, data_options).await
             });
         }
         while !shutdown.is_signalled() {
@@ -130,7 +127,7 @@ impl<B: BlockchainTypes + 'static, FR: TargetStorage + 'static> CommandExecutor 
     }
 }
 
-async fn verify_table_group<B: BlockchainTypes, TS: TargetStorage>(delete_chunk: bool, dry_run: bool, archiver: Arc<Archiver<B, TS>>, group: ArchiveGroup, data_options: DataOptions) -> anyhow::Result<()> {
+async fn verify_table_group<B: BlockchainTypes, TS: TargetStorage>(delete_chunk: bool, archiver: Arc<Archiver<B, TS>>, group: ArchiveGroup, data_options: DataOptions) -> anyhow::Result<()> {
     let shutdown = global::get_shutdown();
     let incomplete = !group.is_complete();
     let mut for_deletion: Vec<&FileReference> = vec![];
@@ -154,6 +151,7 @@ async fn verify_table_group<B: BlockchainTypes, TS: TargetStorage>(delete_chunk:
         for_deletion = group.tables();
     }
 
+    let dry_run = global::is_dry_run();
     for f in for_deletion {
         tracing::info!(range = %group.range, file = %f.path, "Deleting corrupted or incomplete file");
         if !dry_run {
