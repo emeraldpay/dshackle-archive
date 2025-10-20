@@ -1,5 +1,5 @@
 use std::sync::Mutex;
-use apache_avro::Codec;
+use apache_avro::{Codec, ZstandardSettings};
 use lazy_static::lazy_static;
 use crate::args::{Args, Compression};
 
@@ -17,7 +17,7 @@ pub fn get_avro_codec() -> Codec {
     let compression = COMPRESSION.lock().unwrap();
     match *compression {
         Compression::Snappy => Codec::Snappy,
-        Compression::Zstd => Codec::Zstandard,
+        Compression::Zstd => Codec::Zstandard(ZstandardSettings::new(9)),
     }
 }
 

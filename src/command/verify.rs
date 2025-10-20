@@ -453,7 +453,7 @@ mod tests {
         )
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread")]
     async fn does_nothing_on_empty_archive() {
         testing::start_test();
         let mem = Arc::new(InMemory::new());
@@ -475,7 +475,7 @@ mod tests {
         }
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread")]
     async fn does_nothing_with_full_group() {
         testing::start_test();
         let mem = Arc::new(InMemory::new());
@@ -523,7 +523,7 @@ mod tests {
         assert_eq!(all.len(), 2);
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread")]
     async fn deletes_incomplete_group() {
         testing::start_test();
         let mem = Arc::new(InMemory::new());
@@ -614,7 +614,7 @@ mod tests {
         );
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread")]
     async fn deletes_empty_block() {
         testing::start_test();
         let mem = Arc::new(InMemory::new());
@@ -667,7 +667,7 @@ mod tests {
         assert_eq!(files.len(), 0);
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread")]
     async fn deletes_missing_tx() {
         testing::start_test();
         let mem = Arc::new(InMemory::new());

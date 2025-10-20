@@ -248,6 +248,8 @@ impl NewObjectsFile<'_> {
         }
     }
 
+    ///
+    /// Starts a pipe from a Synchronized writer to Async writer
     fn pipe_start(mut buf: BufWriter, on_close: oneshot::Sender<usize>) -> ObjectWriterPipe {
         let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
         let in_flight = Arc::new(AtomicI64::new(0));
@@ -272,7 +274,6 @@ impl NewObjectsFile<'_> {
                     WriteOp::Flush => {
                         if let Err(e) = buf.flush().await {
                             tracing::error!("Error flushing object: {:?}", e);
-                            return;
                         }
                     }
                     WriteOp::Close => {
@@ -292,12 +293,14 @@ impl NewObjectsFile<'_> {
                     }
                 }
             }
+            rx.close();
         });
         ObjectWriterPipe::new(tx, in_flight)
     }
 
 }
 
+#[derive(Debug)]
 enum WriteOp {
     /// Write data to the object
     Data(Vec<u8>),
@@ -311,6 +314,8 @@ enum WriteOp {
     Await(std::sync::mpsc::Sender<()>)
 }
 
+/// A pipe from a Synchronized writer to Async writer
+/// Avro writes synchronously, but actual storages like S3 (object_store) are async
 #[derive(Clone)]
 struct ObjectWriterPipe {
     channel: Arc<tokio::sync::mpsc::UnboundedSender<WriteOp>>,
@@ -329,11 +334,14 @@ impl ObjectWriterPipe {
 }
 
 impl Write for ObjectWriterPipe {
+
+    /// Send data to the pipe, but it could be written much later
     fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
         self.channel.send(WriteOp::Data(buf.to_vec()))
             .map_err(|_| std::io::Error::new(std::io::ErrorKind::BrokenPipe, "Already closed"))?;
         let buffer_size = self.in_flight.fetch_add(buf.len() as i64, Ordering::Relaxed);
 
+        // when we see that there is a large amount of data in-flight, we wait until it is written
         if buffer_size > 4 * 1024 * 1024 {
             let (tx, rx) = std::sync::mpsc::channel();
             self.channel.send(WriteOp::Await(tx))
@@ -343,12 +351,16 @@ impl Write for ObjectWriterPipe {
         Ok(buf.len())
     }
 
+    ///
+    /// Awaits the actual inner stream flushed all the in-flight data
+    /// Otherwise the pipe can be overflown (which causes OOM) or corrupt data if closed in a wrong time / wrong order
     fn flush(&mut self) -> std::io::Result<()> {
         self.channel.send(WriteOp::Flush)
             .map_err(|_| std::io::Error::new(std::io::ErrorKind::BrokenPipe, "Already closed"))?;
         let (tx, rx) = std::sync::mpsc::channel();
         self.channel.send(WriteOp::Await(tx))
             .map_err(|_| std::io::Error::new(std::io::ErrorKind::BrokenPipe, "Already closed"))?;
+        // MUST BLOCK the current thread until all the in-flight data is written
         rx.recv().unwrap();
         Ok(())
     }
@@ -367,10 +379,12 @@ mod tests {
     use futures::stream::StreamExt;
     use crate::testing;
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread")]
     pub async fn can_write() {
+        testing::start_test();
         let mem = Arc::new(InMemory::new());
         let file = Box::new(NewObjectsFile::new(mem.clone(), DataKind::Blocks, "test".to_string(), Path::from("test.avro")));
+        tokio::time::sleep(std::time::Duration::from_secs(1)).await;
 
         let mut record = Record::new(&BLOCK_SCHEMA).unwrap();
         record.put("blockchainType", "ETHEREUM");
@@ -426,7 +440,7 @@ mod tests {
         files.collect::<Vec<FileReference>>().await
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread")]
     pub async fn test_list_whole() {
         let files = list(
             Range::new(021000000, 022000000),
@@ -448,7 +462,7 @@ mod tests {
         assert_eq!(files[3].range, Range::Single(21596363));
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread")]
     pub async fn test_list_part() {
         let files = list(
             Range::new(021596363, 021596364),
@@ -471,7 +485,7 @@ mod tests {
         assert_eq!(files[3].path, "archive/eth/021000000/021596000/021596364.txes.avro");
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread")]
     pub async fn test_list_empty_start() {
         testing::start_test();
         let files = list(
@@ -485,7 +499,7 @@ mod tests {
         assert_eq!(files[0].path, "archive/eth/021000000/021918000/021918015.block.avro");
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread")]
     pub async fn test_list_no_files() {
         let files = list(
             Range::new(021596370, 021596375),
@@ -500,7 +514,7 @@ mod tests {
         assert_eq!(files.len(), 0);
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread")]
     pub async fn test_list_multi_levels() {
         let files = list(
             Range::new(21_500_000, 21_600_000),
@@ -521,7 +535,7 @@ mod tests {
         assert_eq!(files[6].path, "archive/eth/021000000/021598000/021598444.txes.avro");
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread")]
     pub async fn test_list_with_ranges() {
         testing::start_test();
         let files = list(
@@ -549,7 +563,7 @@ mod tests {
         assert_eq!(files[5].path, "archive/eth/021000000/range-021597000_021597999.txes.avro");
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread")]
     pub async fn write_and_read() {
         testing::start_test();
         let mem = Arc::new(InMemory::new());

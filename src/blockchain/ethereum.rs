@@ -10,6 +10,7 @@ use alloy::{
     primitives::{TxHash, BlockHash},
     rpc::types::{Transaction as TransactionJson, Block as BlockJson, Block, TransactionTrait}
 };
+use alloy::network::TransactionResponse;
 use crate::blockchain::{BlockDetails, BlockReference, BlockchainData, EthereumType, JsonString};
 use anyhow::{Result, anyhow};
 use tokio_retry2::{Retry, RetryError};
@@ -216,7 +217,7 @@ impl BlockchainData<EthereumType> for EthereumData {
         record.put("json", tx_json_bytes);
         record.put("raw", tx_raw?);
 
-        record.put("from",  Value::Union(1, Box::new(Value::String(format!("0x{:x}", parsed_tx.from)))));
+        record.put("from",  Value::Union(1, Box::new(Value::String(format!("0x{:x}", parsed_tx.from())))));
         if let Some(to) = parsed_tx.inner.to() {
             record.put("to", Value::Union(1, Box::new(Value::String(format!("0x{:x}", to)))));
         } else {

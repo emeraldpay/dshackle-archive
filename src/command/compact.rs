@@ -327,7 +327,7 @@ mod tests {
     use crate::args::Args;
     use crate::testing;
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread")]
     async fn test_compact_command() {
         testing::start_test();
 
