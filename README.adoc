@@ -93,6 +93,8 @@ Options:
           Compression algorithm to use when writing new Avro files. Default is `zstd` [possible values: snappy, zstd]
   -h, --help
           Print help
+  -V, --version
+          Print version
 ----
 
 === Commands

@@ -4,8 +4,22 @@ use std::str::FromStr;
 use emerald_api::proto::common::ChainRef;
 use serde::Deserialize;
 use crate::errors::ConfigError;
+use shadow_rs::{shadow};
+
+shadow!(build);
+
+pub fn version() -> String {
+    format!(
+        "{} (commit: {}, built: {}, os: {})",
+        build::PKG_VERSION,
+        build::SHORT_COMMIT,
+        build::BUILD_TIME,
+        build::BUILD_OS
+    )
+}
 
 #[derive(Parser, Debug, Clone)]
+#[command(version = version())]
 pub struct Args {
     #[arg(id = "COMMAND")]
     pub command: Command,

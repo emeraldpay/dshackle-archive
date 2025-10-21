@@ -6,7 +6,7 @@ license = "Apache-2.0"
 description = "Extract blockchain data in JSON format and archive it as Avro files for offline processing"
 
 [dependencies]
-clap = { version = "4.5", features = ["derive"] }
+clap = { version = "4.5", features = ["derive", "string"] }
 serde = { version = "1.0" , features = ["derive"] }
 serde_json = "1.0"
 tokio = { version = "1.48", features = ["fs", "rt-multi-thread", "macros"] }
@@ -36,7 +36,11 @@ object_store = { version = "0.12", features = ["aws"] }
 bytes = "1.10"
 url = "2.5"
 rustls-platform-verifier = "0.6"
+shadow-rs = { version = "1.4", default-features = false }
 
+
+[build-dependencies]
+shadow-rs = "1.4"
 
 [dev-dependencies]
 testcontainers = "0.25"
