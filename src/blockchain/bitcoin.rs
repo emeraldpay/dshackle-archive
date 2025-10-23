@@ -11,6 +11,7 @@ use serde::{Deserialize, Deserializer};
 use crate::avros::{BLOCK_SCHEMA, TX_SCHEMA};
 use crate::blockchain::{BitcoinType, BlockDetails, BlockReference, BlockchainData, JsonString};
 use crate::archiver::datakind::TraceOptions;
+use crate::blockchain::next_block::NextBlock;
 
 #[derive(Clone)]
 pub struct BitcoinData {
@@ -178,5 +179,9 @@ impl BlockchainData<BitcoinType> for BitcoinData {
         let raw_block = self.get_block(&best_block).await?;
         let parsed_block = serde_json::from_slice::<BitcoinBlock>(&raw_block)?;
         Ok((parsed_block.height, best_block))
+    }
+
+    fn next_finalized_blocks(&self) -> Result<Box<dyn NextBlock>> {
+        Err(anyhow!("Next finalized blocks are not supported for Bitcoin"))
     }
 }

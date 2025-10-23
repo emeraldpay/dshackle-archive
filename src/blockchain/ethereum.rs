@@ -16,6 +16,7 @@ use anyhow::{Result, anyhow};
 use tokio_retry2::{Retry, RetryError};
 use tokio_retry2::strategy::{jitter, ExponentialFactorBackoff};
 use crate::archiver::datakind::TraceOptions;
+use crate::blockchain::next_block::{NextBlock, NextFinalizedBlock};
 
 #[derive(Clone)]
 pub struct EthereumData {
@@ -38,10 +39,23 @@ impl EthereumData {
         Ok(data)
     }
 
+    pub async fn get_block_data(&self, hash: &BlockHash) -> Result<BlockJson<TxHash>> {
+        let raw_block = self.get_block(hash).await?;
+        serde_json::from_slice::<BlockJson<TxHash>>(raw_block.as_slice())
+            .map_err(|_| anyhow!("Invalid block JSON response"))
+    }
+
     async fn get_block(&self, hash: &BlockHash) -> Result<Vec<u8>> {
         let params = format!("[\"0x{:x}\", false]", hash).as_bytes().to_vec();
         let data = self.blockchain.native_call("eth_getBlockByHash", params).await?;
         Ok(data)
+    }
+
+    pub async fn get_finalized_block_data(&self) -> Result<BlockJson<TxHash>> {
+        let params = "[\"finalized\", false]".as_bytes().to_vec();
+        let raw_block = self.blockchain.native_call("eth_getBlockByNumber", params).await?;
+        serde_json::from_slice::<BlockJson<TxHash>>(raw_block.as_slice())
+            .map_err(|_| anyhow!("Invalid block JSON response"))
     }
 
     async fn get_uncle(&self, hash: &BlockHash, i: usize) -> Result<Vec<u8>> {
@@ -281,6 +295,13 @@ impl BlockchainData<EthereumType> for EthereumData {
             .map_err(|_| BlockchainError::InvalidResponse)?;
 
         Ok((parsed_block.header.number, parsed_block.header.hash))
+    }
+
+    fn next_finalized_blocks(&self) -> Result<Box<dyn NextBlock>> {
+        Ok(Box::new(NextFinalizedBlock::new(
+            self.blockchain.clone(),
+            Arc::new(self.clone()),
+        )))
     }
 }
 

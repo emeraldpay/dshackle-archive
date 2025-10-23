@@ -82,7 +82,12 @@ pub struct Args {
     ///
     /// Compression algorithm to use when writing new Avro files. Default is `zstd`.
     #[arg(long = "compression")]
-    pub compression: Option<Compression>
+    pub compression: Option<Compression>,
+
+    ///
+    /// [Stream Command] Follow mode for new blocks: `latest` - follow the latest blocks (default); `finalized` - follow only finalized blocks
+    #[arg(long = "follow", default_value = "latest")]
+    pub follow: Follow,
 }
 
 impl Default for Args {
@@ -103,6 +108,7 @@ impl Default for Args {
             fields_trace: Some("calls,stateDiff".to_string()),
             fix_clean: false,
             compression: None,
+            follow: Follow::Latest,
         }
     }
 }
@@ -229,6 +235,12 @@ impl Default for Aws {
 pub enum Compression {
     Snappy,
     Zstd,
+}
+
+#[derive(clap::ValueEnum, Debug, Clone, PartialEq)]
+pub enum Follow {
+    Latest,
+    Finalized
 }
 
 #[cfg(test)]

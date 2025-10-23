@@ -120,6 +120,7 @@ mod tests {
             run: RunMode::Archive,
             height_start: 100,
             height_end: 120,
+            maturity: None,
             location: "file://archive/range-100_120.blocks.avro".to_string(),
         }).await;
 

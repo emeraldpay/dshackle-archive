@@ -91,6 +91,8 @@ Options:
           [Fix Command] Set to remove any existing data in whole chunk if any of tables is missing a block in the chunk or has broken values. Default is `false`, which deleted only tables with missing / corrupted data
       --compression <COMPRESSION>
           Compression algorithm to use when writing new Avro files. Default is `zstd` [possible values: snappy, zstd]
+      --follow <FOLLOW>
+          [Stream Command] Follow mode for new blocks: `latest` - follow the latest blocks (default); `finalized` - follow only finalized blocks [default: latest] [possible values: latest, finalized]
   -h, --help
           Print help
   -V, --version
@@ -120,8 +122,8 @@ Continuously append fresh blocks one by one to the archive.
 In addition to the copying, Dshackle archive can be configured to notify an external system about new blocks in the archive.
 
 Note that when it's in streaming mode the archives are writen in a per-block basis.
-I.e., each block comes with in a separate pair of two files.
-One for the block itself, and another one for all transactions in that block.
+I.e., each block comes with in a separate group of files.
+One for the block itself, another one for all transactions in that block, and third for traces if selected.
 To merge the individual files into larger ranges use `compact` command.
 
 To notify an external system, there are two options:
@@ -279,6 +281,7 @@ NOTE: Applicable only for Ethereum-compatible blockchains.
   "blockchain":"ETH",
   "type":"transactions",
   "run":"stream",
+  "maturity": "finalized",
   "heightStart":14813875,
   "heightEnd":14813875,
   "location":"gs://my-bucket/blockchain-archive/eth/014000000/014813000/014813875.txes.avro"
@@ -291,6 +294,7 @@ NOTE: Applicable only for Ethereum-compatible blockchains.
 - `blockchain` blockchain
 - `type` type of file (`transactions`, `blocks`, or `traces`)
 - `run` mode in which the Dshackle Archive is run (`archive`, `stream`, `copy` or `compact`)
+- `maturity` block maturity level (`latest` or `finalized`); `finalized` is applicable to Ethereum PoS chains only
 - `heightStart` and `heightEnd` range of blocks in the archived files
 - `location` a URL to the archived file
 

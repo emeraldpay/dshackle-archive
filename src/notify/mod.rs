@@ -30,6 +30,8 @@ pub struct Notification {
     pub height_end: u64,
     /// `location` a URL to the archived file
     pub location: String,
+    /// `maturity` maturity level of the block in that archive (`finalized` or `head`)
+    pub maturity: Option<Maturity>,
 }
 
 /// RunMode represents the mode in which the Dshackle Archive is run.
@@ -41,6 +43,16 @@ pub enum RunMode {
     Copy,
     Compact,
     Fix,
+}
+
+/// Maturity represents the maturity level of the block.
+#[derive(Clone, Serialize, Deserialize, Debug)]
+#[serde(rename_all = "lowercase")]
+pub enum Maturity {
+    /// Block is finalized (i.e, on Ethereum)
+    Finalized,
+    /// Just a fresh block ath the top
+    Head,
 }
 
 impl Notification {

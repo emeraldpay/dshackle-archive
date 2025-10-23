@@ -8,7 +8,9 @@ use crate::avros::{BLOCK_SCHEMA, TX_SCHEMA};
 use crate::blockchain::{BlockDetails, BlockReference, BlockchainData, BlockchainTypes};
 use crate::blockchain::connection::Blockchain;
 use crate::archiver::datakind::TraceOptions;
+use crate::blockchain::next_block::{NextBlock};
 
+#[derive(Clone)]
 pub struct MockType {}
 
 impl BlockchainTypes for MockType {
@@ -139,5 +141,9 @@ impl BlockchainData<MockType> for MockData {
             .iter().max_by(|a, b| a.height.cmp(&b.height))
             .map(|b| (b.height, b.hash.clone()))
             .ok_or_else(|| anyhow!("No blocks found"))
+    }
+
+    fn next_finalized_blocks(&self) -> anyhow::Result<Box<dyn NextBlock>> {
+        Err(anyhow!("Not implemented"))
     }
 }

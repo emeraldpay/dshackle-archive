@@ -39,7 +39,7 @@ impl<B: BlockchainTypes, TS: TargetStorage> CommandExecutor for ArchiveCommand<B
             if shutdown.is_signalled() {
                 break;
             }
-            self.archiver.archive(subrange, RunMode::Archive, &self.data_options).await?;
+            self.archiver.archive(subrange, RunMode::Archive, None, &self.data_options).await?;
         }
 
         Ok(())

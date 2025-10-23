@@ -17,6 +17,9 @@ use crate::{
 use anyhow::Result;
 use crate::archiver::datakind::DataOptions;
 use crate::archiver::range::Range;
+use crate::args::Follow;
+use crate::blockchain::BlockchainData;
+use crate::notify::Maturity;
 
 ///
 /// Provides `stream` command.
@@ -29,6 +32,7 @@ pub struct StreamCommand<B: BlockchainTypes, TS: TargetStorage> {
     continue_blocks: Option<u64>,
     archiver: Archiver<B, TS>,
     tx_options: DataOptions,
+    follow: Follow,
 }
 
 impl<B: BlockchainTypes, TS: TargetStorage> StreamCommand<B, TS> {
@@ -44,13 +48,15 @@ impl<B: BlockchainTypes, TS: TargetStorage> StreamCommand<B, TS> {
         };
 
         let tx_options = DataOptions::from(config);
+        let follow = config.follow.clone();
 
         Ok(Self {
             b: PhantomData,
             blockchain,
             continue_blocks,
             archiver,
-            tx_options
+            tx_options,
+            follow,
         })
     }
 
@@ -67,6 +73,7 @@ impl<B: BlockchainTypes, TS: TargetStorage> StreamCommand<B, TS> {
                     self.archiver.archive(
                         Height::from(height),
                         RunMode::Stream,
+                        None,
                         &range_opts
                     ).await?;
                 }
@@ -80,7 +87,23 @@ impl<B: BlockchainTypes, TS: TargetStorage> StreamCommand<B, TS> {
 impl<B: BlockchainTypes, TS: TargetStorage> CommandExecutor for StreamCommand<B, TS> {
 
     async fn execute(&self) -> Result<()> {
-        let mut heights = self.blockchain.subscribe_blocks().await?;
+
+        let maturity = match self.follow {
+            Follow::Latest => Maturity::Head,
+            Follow::Finalized => Maturity::Finalized,
+        };
+
+        let heights = match self.follow {
+            Follow::Latest => {
+                Box::new(self.blockchain.clone())
+            }
+            Follow::Finalized => {
+                self.archiver.data_provider.next_finalized_blocks()?
+            }
+        };
+        let heights = Arc::new(heights);
+        let mut heights = heights.next_blocks().await?;
+
         let mut stop = false;
         let mut continued = self.continue_blocks.is_none();
         let shutdown = global::get_shutdown();
@@ -102,7 +125,7 @@ impl<B: BlockchainTypes, TS: TargetStorage> CommandExecutor for StreamCommand<B,
                         }
 
                         tracing::info!("Archive block: {} {:?}", height.height, height.hash);
-                        self.archiver.archive(height, RunMode::Stream, &self.tx_options).await?;
+                        self.archiver.archive(height, RunMode::Stream, Some(maturity.clone()), &self.tx_options).await?;
                     } else {
                         stop = true;
                     }

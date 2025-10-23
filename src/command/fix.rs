@@ -55,7 +55,7 @@ impl<B: BlockchainTypes, TS: TargetStorage> CommandExecutor for FixCommand<B, TS
                     break;
                 }
                 tracing::info!(range = %chunk, "Fixing chunk");
-                self.archiver.archive(chunk, RunMode::Fix, &options).await?;
+                self.archiver.archive(chunk, RunMode::Fix, None, &options).await?;
             }
         }
         Ok(())

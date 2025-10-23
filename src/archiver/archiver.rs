@@ -9,7 +9,7 @@ use crate::blockchain::{BlockchainData, BlockchainTypes, MultiBlockReference};
 use crate::blockchain::connection::Height;
 use crate::archiver::datakind::{DataKind, DataOptions};
 use crate::notify::empty::EmptyNotifier;
-use crate::notify::{Notification, Notifier, RunMode};
+use crate::notify::{Maturity, Notification, Notifier, RunMode};
 use crate::archiver::range::Range;
 use crate::global;
 use crate::storage::TargetStorage;
@@ -48,12 +48,12 @@ impl<B: BlockchainTypes, TS: TargetStorage> Archiver<B, TS> {
 
 #[async_trait]
 pub trait ArchiveAll<T> {
-    async fn archive(&self, what: T, mode: RunMode, options: &DataOptions) -> anyhow::Result<()>;
+    async fn archive(&self, what: T, mode: RunMode, maturity: Option<Maturity>, options: &DataOptions) -> anyhow::Result<()>;
 }
 
 #[async_trait]
 impl<B: BlockchainTypes, TS: TargetStorage> ArchiveAll<Height> for Archiver<B, TS> {
-    async fn archive(&self, what: Height, mode: RunMode, options: &DataOptions) -> anyhow::Result<()> {
+    async fn archive(&self, what: Height, mode: RunMode, maturity: Option<Maturity>, options: &DataOptions) -> anyhow::Result<()> {
         let start_time = Utc::now();
 
         let notification = Notification {
@@ -64,6 +64,7 @@ impl<B: BlockchainTypes, TS: TargetStorage> ArchiveAll<Height> for Archiver<B, T
             run: mode,
             height_start: what.height,
             height_end: what.height,
+            maturity,
 
             // specific fields, should be overridden later
             file_type: DataKind::Blocks,
@@ -89,7 +90,7 @@ impl<B: BlockchainTypes, TS: TargetStorage> ArchiveAll<Height> for Archiver<B, T
 
 #[async_trait]
 impl<B: BlockchainTypes, TS: TargetStorage> ArchiveAll<Range> for Archiver<B, TS> {
-    async fn archive(&self, what: Range, mode: RunMode, options: &DataOptions) -> anyhow::Result<()> {
+    async fn archive(&self, what: Range, mode: RunMode, maturity: Option<Maturity>, options: &DataOptions) -> anyhow::Result<()> {
         let start_time = Utc::now();
         tracing::debug!("Archiving range: {:?}", what);
 
@@ -101,6 +102,7 @@ impl<B: BlockchainTypes, TS: TargetStorage> ArchiveAll<Range> for Archiver<B, TS
             run: mode,
             height_start: what.start(),
             height_end: what.end(),
+            maturity,
 
             // specific fields, should be overridden later
             file_type: DataKind::Blocks,

@@ -3,6 +3,8 @@ pub mod connection;
 pub mod bitcoin;
 #[cfg(test)]
 pub mod mock;
+pub mod next_block;
+pub mod block_seq;
 
 use std::fmt::Debug;
 use std::hash::Hash;
@@ -11,11 +13,18 @@ use apache_avro::types::Record;
 use async_trait::async_trait;
 use anyhow::{anyhow, Error, Result};
 use serde::Deserialize;
-use crate::blockchain::bitcoin::BitcoinData;
-use crate::blockchain::connection::{Blockchain, Height};
-use crate::blockchain::ethereum::EthereumData;
-use crate::archiver::datakind::TraceOptions;
-use crate::archiver::range::Range;
+use crate::{
+    blockchain::{
+        bitcoin::BitcoinData,
+        connection::{Blockchain, Height},
+        ethereum::EthereumData,
+        next_block::{NextBlock}
+    },
+    archiver::{
+        datakind::TraceOptions,
+        range::Range
+    }
+};
 
 ///
 /// Defined the data types for a blockchain
@@ -23,11 +32,11 @@ pub trait BlockchainTypes: Send + Sync + Sized {
 
     ///
     /// Type of the Block Hash / Block Identifier
-    type BlockHash: FromStr + PartialEq + Hash + Eq + Send + Sync + Debug;
+    type BlockHash: FromStr + PartialEq + Hash + Eq + Send + Sync + Debug + Clone;
 
     ///
     /// Type of the Transaction Hash / Transaction Identifier
-    type TxId: FromStr + PartialEq + Hash + Eq + Send + Sync + Debug;
+    type TxId: FromStr + PartialEq + Hash + Eq + Send + Sync + Debug + Clone;
 
     ///
     /// Block details converted from the JSON response
@@ -91,6 +100,11 @@ pub trait BlockchainData<T: BlockchainTypes>: Send + Sync {
     ///
     /// Get the current height
     async fn height(&self) -> Result<(u64, T::BlockHash)>;
+
+    ///
+    /// Create the next Finalized blocks provider (applicable for Ethereum blockchain types)
+    fn next_finalized_blocks(&self) -> Result<Box<dyn NextBlock>>;
+
 }
 
 ///
