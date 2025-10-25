@@ -181,7 +181,7 @@ impl BlockchainData<EthereumType> for EthereumData {
     async fn fetch_block(&self, height: &BlockReference<BlockHash>) -> Result<(Record, Block<TxHash>, Vec<TxHash>)> {
         let raw_block = match height {
             BlockReference::Hash(hash) => self.get_block(&hash).await?,
-            BlockReference::Height(height) => self.get_block_at(*height).await?,
+            BlockReference::Height(height) => self.get_block_at(height.height).await?,
         };
         let parsed_block = serde_json::from_slice::<BlockJson<TxHash>>(raw_block.as_slice())
             .map_err(|_| BlockchainError::InvalidResponse)?;

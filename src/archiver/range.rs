@@ -1,11 +1,50 @@
 use std::fmt::{Display, Formatter};
 use std::str::FromStr;
 use anyhow::anyhow;
+use crate::archiver::BlockHash;
+
+///
+/// A particular hash on blockchain
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct Height {
+    /// The height number
+    pub height: u64,
+    /// Optional block hash at this height
+    /// If it's specified it has the higher priority on selecting blocks
+    pub hash: Option<BlockHash>,
+}
+
+impl Height {
+    pub fn new<S: Into<BlockHash>>(height: u64, hash: Option<S>) -> Self {
+        Height { height, hash: hash.map(|h| h.into()) }
+    }
+}
+
+impl From<u64> for Height {
+    fn from(height: u64) -> Self {
+        Height {
+            height,
+            hash: None,
+        }
+    }
+}
+
+impl Display for Height {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        if let Some(hash) = &self.hash {
+            write!(f, "{} ({})", self.height, hash)
+        } else {
+            write!(f, "{}", self.height)
+        }
+    }
+}
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum Range {
-    Single(u64),
-    Multiple(u64, u64),
+    /// At a single height
+    Single(Height),
+    /// Sequence of blocks from start height to end (inclusive)
+    Multiple(Height, Height),
 }
 
 impl PartialOrd for Range {
@@ -27,9 +66,9 @@ impl Range {
             panic!("Invalid range: {}..{}", start, end);
         }
         if start == end {
-            Range::Single(start)
+            Range::Single(Height::from(start))
         } else {
-            Range::Multiple(start, end)
+            Range::Multiple(Height::from(start), Height::from(end))
         }
     }
 
@@ -45,22 +84,32 @@ impl Range {
 
     pub fn iter(&self) -> Box<dyn Iterator<Item = u64>> {
         match self {
-            Range::Single(height) => Box::new(std::iter::once(*height)),
-            Range::Multiple(start, end) => Box::new((*start..=*end).into_iter()),
+            Range::Single(height) => Box::new(std::iter::once(height.height)),
+            Range::Multiple(start, end) => Box::new((start.height..=end.height).into_iter()),
+        }
+    }
+
+    pub fn iter_height(&self) -> Box<dyn Iterator<Item = Height>> {
+        match self {
+            Range::Single(height) => Box::new(std::iter::once(height.clone())),
+            Range::Multiple(start, end) => Box::new(
+                (start.height..=end.height).into_iter()
+                    .map(|h| Height::from(h))
+            ),
         }
     }
 
     pub fn start(&self) -> u64 {
         match self {
-            Range::Single(height) => *height,
-            Range::Multiple(start, _) => *start,
+            Range::Single(height) => height.height,
+            Range::Multiple(start, _) => start.height,
         }
     }
 
     pub fn end(&self) -> u64 {
         match self {
-            Range::Single(height) => *height,
-            Range::Multiple(_, end) => *end,
+            Range::Single(height) => height.height,
+            Range::Multiple(_, end) => end.height,
         }
     }
 
@@ -69,15 +118,15 @@ impl Range {
     pub fn contains(&self, other: &Range) -> bool {
         match self {
             Range::Single(h) => match other {
-                Range::Single(ho) => *h == *ho,
+                Range::Single(ho) => h.height == ho.height,
                 Range::Multiple(_, _) => false
             },
             Range::Multiple(start, end) => match other {
                 Range::Single(h) => {
-                    *start <= *h && *h <= *end
+                    start.height <= h.height && h.height <= end.height
                 }
                 Range::Multiple(other_start, other_end) => {
-                    *start <= *other_start && *end >= *other_end
+                    start.height <= other_start.height && end.height >= other_end.height
                 }
             }
         }
@@ -87,19 +136,19 @@ impl Range {
         match self {
             Range::Single(h) => {
                 match other {
-                    Range::Single(other_h) => *h == *other_h,
-                    Range::Multiple(other_start, other_end) => other_start <= h && h <= other_end
+                    Range::Single(other_h) => h.height == other_h.height,
+                    Range::Multiple(other_start, other_end) => other_start.height <= h.height && h.height <= other_end.height
                 }
             }
             Range::Multiple(start, end) => {
                 match other {
                     Range::Single(h) => {
-                        *start <= *h && *h <= *end
+                        start.height <= h.height && h.height <= end.height
                     }
                     Range::Multiple(other_start, other_end) => {
-                        if *start < *other_start {
-                            *end >= *other_start
-                        } else if *start < *other_end {
+                        if start.height < other_start.height {
+                            end.height >= other_start.height
+                        } else if start.height < other_end.height {
                             true
                         } else {
                             false
@@ -120,7 +169,7 @@ impl Range {
     pub fn len(&self) -> usize {
         match self {
             Range::Single(_) => 1,
-            Range::Multiple(start, end) => (end - start + 1) as usize,
+            Range::Multiple(start, end) => (end.height - start.height + 1) as usize,
         }
     }
 
@@ -176,18 +225,18 @@ impl Range {
             Range::Multiple(start, end) => {
                 let mut result = Vec::new();
                 // Find the chunk boundary that contains the start
-                let chunk_start = (start / chunk_size as u64) * chunk_size as u64;
+                let chunk_start = (start.height / chunk_size as u64) * chunk_size as u64;
                 let mut current_start = chunk_start;
 
                 if aligned {
-                    let is_aligned = current_start == *start;
+                    let is_aligned = current_start == start.height;
                     if !is_aligned {
-                        current_start = (start / chunk_size as u64 + 1) * chunk_size as u64;
+                        current_start = (start.height / chunk_size as u64 + 1) * chunk_size as u64;
                     }
                 }
 
-                while current_start <= *end {
-                    let current_end = std::cmp::min(current_start + chunk_size as u64 - 1, *end);
+                while current_start <= end.height {
+                    let current_end = std::cmp::min(current_start + chunk_size as u64 - 1, end.height);
 
                     if aligned {
                         let is_aligned = current_end % chunk_size as u64 == chunk_size as u64 - 1;
@@ -197,7 +246,7 @@ impl Range {
                         }
                     }
 
-                    let adjusted_start = std::cmp::max(current_start, *start);
+                    let adjusted_start = std::cmp::max(current_start, start.height);
                     result.push(Range::new(adjusted_start, current_end));
                     current_start = current_end + 1;
                 }
@@ -209,8 +258,15 @@ impl Range {
 
     pub fn first(&self) -> Self {
         match self {
-            Range::Single(h) => Range::Single(*h),
-            Range::Multiple(start, _) => Range::Single(*start),
+            Range::Single(h) => Range::Single(h.clone()),
+            Range::Multiple(start, _) => Range::Single(start.clone()),
+        }
+    }
+
+    pub fn first_height(&self) -> Height {
+        match self {
+            Range::Single(h) => h.clone(),
+            Range::Multiple(start, _) => start.clone(),
         }
     }
 }
@@ -222,7 +278,7 @@ impl FromStr for Range {
         let parts: Vec<&str> = s.split("..").collect();
         if parts.len() == 1 {
             let h = parts[0].parse::<u64>()?;
-            return Ok(Range::Single(h));
+            return Ok(Range::Single(Height::from(h)));
         }
         if parts.len() != 2 {
             return Err(anyhow!("Invalid range: {}", s));
@@ -236,15 +292,15 @@ impl FromStr for Range {
 impl Display for Range {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
-            Range::Single(height) => write!(f, "{}", height),
-            Range::Multiple(start, end) => write!(f, "{}..{}", start, end),
+            Range::Single(height) => write!(f, "{}", height.height),
+            Range::Multiple(start, end) => write!(f, "{}..{}", start.height, end.height),
         }
     }
 }
 
 impl From<u64> for Range {
     fn from(h: u64) -> Self {
-        Range::Single(h)
+        Range::Single(h.into())
     }
 }
 
@@ -254,8 +310,8 @@ mod tests {
 
     #[test]
     fn test_range_new() {
-        assert_eq!(Range::new(5, 5), Range::Single(5));
-        assert_eq!(Range::new(3, 7), Range::Multiple(3, 7));
+        assert_eq!(Range::new(5, 5), Range::Single(5.into()));
+        assert_eq!(Range::new(3, 7), Range::Multiple(3.into(), 7.into()));
     }
 
     #[test]
@@ -269,58 +325,58 @@ mod tests {
 
     #[test]
     fn test_range_iter_single() {
-        let single = Range::Single(5);
+        let single = Range::Single(5.into());
         let values: Vec<u64> = single.iter().collect();
         assert_eq!(values, vec![5]);
     }
 
     #[test]
     fn test_range_iter_multiple() {
-        let multiple = Range::Multiple(3, 5);
+        let multiple = Range::Multiple(3.into(), 5.into());
         let values: Vec<u64> = multiple.iter().collect();
         assert_eq!(values, vec![3, 4, 5]);
     }
 
     #[test]
     fn test_range_start() {
-        assert_eq!(Range::Single(5).start(), 5);
-        assert_eq!(Range::Multiple(3, 7).start(), 3);
+        assert_eq!(Range::Single(5.into()).start(), 5);
+        assert_eq!(Range::Multiple(3.into(), 7.into()).start(), 3);
     }
 
     #[test]
     fn test_range_end() {
-        assert_eq!(Range::Single(5).end(), 5);
-        assert_eq!(Range::Multiple(3, 7).end(), 7);
+        assert_eq!(Range::Single(5.into()).end(), 5);
+        assert_eq!(Range::Multiple(3.into(), 7.into()).end(), 7);
     }
 
     #[test]
     fn test_range_contains_single() {
-        let single = Range::Single(5);
-        assert!(single.contains(&Range::Single(5)));
-        assert!(!single.contains(&Range::Single(4)));
-        assert!(!single.contains(&Range::Single(0)));
-        assert!(!single.contains(&Range::Single(6)));
+        let single = Range::Single(5.into());
+        assert!(single.contains(&Range::Single(5.into())));
+        assert!(!single.contains(&Range::Single(4.into())));
+        assert!(!single.contains(&Range::Single(0.into())));
+        assert!(!single.contains(&Range::Single(6.into())));
     }
 
     #[test]
     fn test_range_contains_multi() {
-        let multiple = Range::Multiple(3, 7);
-        assert!(multiple.contains(&Range::Single(3)));
-        assert!(multiple.contains(&Range::Single(4)));
-        assert!(multiple.contains(&Range::Single(5)));
-        assert!(multiple.contains(&Range::Single(6)));
-        assert!(multiple.contains(&Range::Single(7)));
-        assert!(!multiple.contains(&Range::Single(8)));
-        assert!(!multiple.contains(&Range::Single(2)));
-        assert!(!multiple.contains(&Range::Single(0)));
+        let multiple = Range::Multiple(3.into(), 7.into());
+        assert!(multiple.contains(&Range::Single(3.into())));
+        assert!(multiple.contains(&Range::Single(4.into())));
+        assert!(multiple.contains(&Range::Single(5.into())));
+        assert!(multiple.contains(&Range::Single(6.into())));
+        assert!(multiple.contains(&Range::Single(7.into())));
+        assert!(!multiple.contains(&Range::Single(8.into())));
+        assert!(!multiple.contains(&Range::Single(2.into())));
+        assert!(!multiple.contains(&Range::Single(0.into())));
     }
 
     #[test]
     fn test_range_contains_parts() {
-        let large = Range::Multiple(1, 29);
-        assert!(large.contains(&Range::Multiple(1, 9)));
-        assert!(large.contains(&Range::Multiple(10, 19)));
-        assert!(large.contains(&Range::Multiple(20, 29)));
+        let large = Range::Multiple(1.into(), 29.into());
+        assert!(large.contains(&Range::Multiple(1.into(), 9.into())));
+        assert!(large.contains(&Range::Multiple(10.into(), 19.into())));
+        assert!(large.contains(&Range::Multiple(20.into(), 29.into())));
     }
 
     #[test]
@@ -443,14 +499,14 @@ mod tests {
     #[test]
     fn test_split_single() {
         assert_eq!(
-            Range::Single(123).split_chunks(100, false),
+            Range::Single(123.into()).split_chunks(100, false),
             vec![
-                Range::Single(123),
+                Range::Single(123.into()),
             ]
         );
 
         assert_eq!(
-            Range::Single(123).split_chunks(100, true),
+            Range::Single(123.into()).split_chunks(100, true),
             vec![]
         );
     }
@@ -500,11 +556,11 @@ mod tests {
     fn parse_single() {
         assert_eq!(
             "1".parse::<Range>().unwrap(),
-            Range::Single(1)
+            Range::Single(1.into())
         );
         assert_eq!(
             "1999".parse::<Range>().unwrap(),
-            Range::Single(1999)
+            Range::Single(1999.into())
         );
     }
 
@@ -551,14 +607,14 @@ mod tests {
     #[test]
     fn test_cut_single_from_multiple() {
         let base = Range::new(10, 20);
-        let other = Range::Single(15);
+        let other = Range::Single(15.into());
         let result = base.cut(&other);
         assert_eq!(result, vec![Range::new(10, 14), Range::new(16, 20)]);
     }
 
     #[test]
     fn test_cut_multiple_from_single() {
-        let base = Range::Single(15);
+        let base = Range::Single(15.into());
         let other = Range::new(10, 20);
         let result = base.cut(&other);
         assert_eq!(result, vec![]);

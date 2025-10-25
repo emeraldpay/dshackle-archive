@@ -1,4 +1,3 @@
-use std::fmt::{Display, Formatter};
 use std::str::FromStr;
 use emerald_api::{
     blockchain,
@@ -19,6 +18,7 @@ use crate::args;
 use crate::errors::{BlockchainError};
 use futures_util::stream::StreamExt;
 use tonic::transport::Channel;
+use crate::archiver::range::Height;
 
 pub struct Blockchain {
     parallel: Semaphore,
@@ -149,32 +149,6 @@ impl DshackleConn {
         blockchain::connect(&self.emerald_conn)
     }
 
-}
-
-
-#[derive(Debug, Clone, PartialEq)]
-pub struct Height {
-    pub height: u64,
-    pub hash: Option<String>,
-}
-
-impl From<u64> for Height {
-    fn from(height: u64) -> Self {
-        Height {
-            height,
-            hash: None,
-        }
-    }
-}
-
-impl Display for Height {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        if let Some(hash) = &self.hash {
-            write!(f, "{} ({})", self.height, hash)
-        } else {
-            write!(f, "{}", self.height)
-        }
-    }
 }
 
 pub type TransactionId = String;

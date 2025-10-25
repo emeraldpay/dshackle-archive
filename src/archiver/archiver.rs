@@ -5,12 +5,11 @@ use chrono::Utc;
 use tokio::sync::mpsc::Sender;
 use crate::archiver::block::ArchiveBlock;
 use crate::archiver::table::ArchiveTable;
-use crate::blockchain::{BlockchainData, BlockchainTypes, MultiBlockReference};
-use crate::blockchain::connection::Height;
+use crate::blockchain::{BlockchainData, BlockchainTypes};
 use crate::archiver::datakind::{DataKind, DataOptions};
 use crate::notify::empty::EmptyNotifier;
 use crate::notify::{Maturity, Notification, Notifier, RunMode};
-use crate::archiver::range::Range;
+use crate::archiver::range::{Height, Range};
 use crate::global;
 use crate::storage::TargetStorage;
 
@@ -71,8 +70,8 @@ impl<B: BlockchainTypes, TS: TargetStorage> ArchiveAll<Height> for Archiver<B, T
             location: "".to_string(),
         };
 
-        let blocks = self.process_blocks(MultiBlockReference::Single(what.clone()), notification.clone()).await?;
-        let range = Range::Single(what.height);
+        let blocks = self.process_blocks(Range::Single(what.clone()), notification.clone()).await?;
+        let range = Range::Single(what.clone());
 
         if let Some(tx_options) = &options.tx {
             self.process_table(range.clone(), notification.clone(), &blocks, tx_options).await?;
@@ -109,7 +108,7 @@ impl<B: BlockchainTypes, TS: TargetStorage> ArchiveAll<Range> for Archiver<B, TS
             location: "".to_string(),
         };
 
-        let blocks = self.process_blocks(MultiBlockReference::Range(what.clone()), notification.clone()).await?;
+        let blocks = self.process_blocks(what.clone(), notification.clone()).await?;
 
         if let Some(tx_options) = &options.tx {
             self.process_table(what.clone(), notification.clone(), &blocks, tx_options).await?;

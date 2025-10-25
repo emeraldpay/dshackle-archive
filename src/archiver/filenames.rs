@@ -2,10 +2,10 @@ use std::str::FromStr;
 use lazy_static::lazy_static;
 use regex::Regex;
 use crate::archiver::datakind::DataKind;
-use crate::archiver::range::Range;
+use crate::archiver::range::{Height, Range};
 
 lazy_static! {
-    static ref RE_SINGLE: Regex = Regex::new(r"^(\d+)\.(\w+)\.(\w+\.)?avro$").unwrap();
+    static ref RE_SINGLE: Regex = Regex::new(r"^(\d+)\.(([a-f0-9]{64})\.)?(\w+)\.(\w+\.)?avro$").unwrap();
     static ref RE_RANGE: Regex = Regex::new(r"^range-(\d+)_(\d+)\.(\w+)\.(\w+\.)?avro$").unwrap();
 }
 
@@ -28,67 +28,70 @@ impl Filenames {
 
     pub fn parse(filename: String) -> Option<(DataKind, Range)> {
         if let Some(cap) = RE_SINGLE.captures(filename.as_str()) {
-            let height = cap.get(1).unwrap().as_str().parse().unwrap();
-            let kind = DataKind::from_str(cap.get(2).unwrap().as_str());
+            let height: u64 = cap.get(1).unwrap().as_str().parse().unwrap();
+            let hash = cap.get(3).map(|x| x.as_str().to_string());
+            let kind = DataKind::from_str(cap.get(4).unwrap().as_str());
             if kind.is_err() {
                 return None;
             }
-            return Some((kind.unwrap(), Range::Single(height)));
+            return Some((kind.unwrap(), Range::Single(Height::new(height, hash))));
         }
         if let Some(cap) = RE_RANGE.captures(filename.as_str()) {
-            let start = cap.get(1).unwrap().as_str().parse().unwrap();
-            let end = cap.get(2).unwrap().as_str().parse().unwrap();
+            let start: u64 = cap.get(1).unwrap().as_str().parse().unwrap();
+            let end: u64 = cap.get(2).unwrap().as_str().parse().unwrap();
             let kind = DataKind::from_str(cap.get(3).unwrap().as_str());
             if kind.is_err() {
                 return None;
             }
-            return Some((kind.unwrap(), Range::Multiple(start, end)));
+            return Some((kind.unwrap(), Range::Multiple(start.into(), end.into())));
         }
         None
     }
 
-    pub fn filename(&self, kind: &DataKind, range: &Range) -> String {
+    pub fn filename(&self, kind: &DataKind, blocks: &Range) -> String {
         let suffix = match kind {
-            DataKind::Blocks => match range {
-                Range::Single(_) => "block",
-                Range::Multiple(_, _) => "blocks"
-            },
+            DataKind::Blocks => if blocks.len() == 1 { "block" } else { "blocks" },
             DataKind::Transactions => "txes",
             DataKind::TransactionTraces => "traces"
         };
 
-        match range {
-            Range::Single(height) => {
-                format!("{}.{}.avro", self.range_padded(*height), suffix)
-            },
-            Range::Multiple(start, end) => {
-                format!("range-{}_{}.{}.avro", self.range_padded(*start), self.range_padded(*end), suffix)
+        if blocks.len() == 1 {
+            let height = blocks.first_height();
+            if let Some(hash) = &height.hash {
+                format!("{}.{}.{}.avro", self.range_padded(blocks.start()), hash, suffix)
+            } else {
+                format!("{}.{}.avro", self.range_padded(blocks.start()), suffix)
             }
+        } else {
+            format!("range-{}_{}.{}.avro", self.range_padded(blocks.start()), self.range_padded(blocks.end()), suffix)
         }
     }
 
-    pub fn relative_path(&self, kind: &DataKind, range: &Range) -> String {
-        match range {
-            Range::Single(start) => {
-                format!("{}/{}/{}",
-                        self.level_1(*start),
-                        self.level_2(*start),
-                        self.filename(kind, range)
-                )
-            }
-            Range::Multiple(start, _end) => {
-                format!("{}/{}",
-                        self.level_1(*start),
-                        self.filename(kind, range)
-                )
-            }
+    pub fn relative_path(&self, kind: &DataKind, blocks: &Range) -> String {
+        if blocks.len() == 1 {
+            format!("{}/{}/{}",
+                    self.level_1(blocks.start()),
+                    self.level_2(blocks.start()),
+                    self.filename(kind, blocks)
+            )
+        } else {
+            format!("{}/{}",
+                    self.level_1(blocks.start()),
+                    self.filename(kind, blocks)
+            )
         }
     }
 
+    ///
+    /// Offset is a position in a directory list. Since Dshackle Archive uses a S3-like storage, which sorts files by their name,
+    /// this is where to start to look for files in a given range.
     pub fn offset(&self, range: &Range) -> String {
         match range {
-            Range::Single(start) => self.range_padded(*start),
-            Range::Multiple(start, _) => format!("range-{}", self.range_padded(*start))
+            // For a single block, it's just the height
+            Range::Single(start) => self.range_padded(start.height),
+            // For a range we use a prefix `range-` only to distinguish them from the single files,
+            // otherwise they would be mixed and single ranges listed twice, etc.
+            Range::Multiple(start, _) => format!("range-{}", self.range_padded(start.height))
         }
     }
 
@@ -226,7 +229,7 @@ mod tests {
     fn single_block_file() {
         let filenames = Filenames::default();
         let kind = DataKind::Blocks;
-        let range = Range::Single(12000000);
+        let range = Range::Single(12000000.into());
         assert_eq!(filenames.filename(&kind, &range), "012000000.block.avro");
     }
 
@@ -234,7 +237,7 @@ mod tests {
     fn single_block_txes_file() {
         let filenames = Filenames::default();
         let kind = DataKind::Transactions;
-        let range = Range::Single(12000000);
+        let range = Range::Single(12000000.into());
         assert_eq!(filenames.filename(&kind, &range), "012000000.txes.avro");
     }
 
@@ -242,7 +245,7 @@ mod tests {
     fn single_block_tx_traces_file() {
         let filenames = Filenames::default();
         let kind = DataKind::TransactionTraces;
-        let range = Range::Single(12000000);
+        let range = Range::Single(12000000.into());
         assert_eq!(filenames.filename(&kind, &range), "012000000.traces.avro");
     }
 
@@ -250,32 +253,32 @@ mod tests {
     fn single_block_path() {
         let filenames = Filenames::default();
         let kind = DataKind::Blocks;
-        assert_eq!(filenames.path(&kind, &Range::Single(12000005)), "012000000/012000000/012000005.block.avro");
-        assert_eq!(filenames.path(&kind, &Range::Single(12004999)), "012000000/012004000/012004999.block.avro");
-        assert_eq!(filenames.path(&kind, &Range::Single(12005000)), "012000000/012005000/012005000.block.avro");
-        assert_eq!(filenames.path(&kind, &Range::Single(12005001)), "012000000/012005000/012005001.block.avro");
-        assert_eq!(filenames.path(&kind, &Range::Single(12345678)), "012000000/012345000/012345678.block.avro");
+        assert_eq!(filenames.path(&kind, &Range::Single(12000005.into())), "012000000/012000000/012000005.block.avro");
+        assert_eq!(filenames.path(&kind, &Range::Single(12004999.into())), "012000000/012004000/012004999.block.avro");
+        assert_eq!(filenames.path(&kind, &Range::Single(12005000.into())), "012000000/012005000/012005000.block.avro");
+        assert_eq!(filenames.path(&kind, &Range::Single(12005001.into())), "012000000/012005000/012005001.block.avro");
+        assert_eq!(filenames.path(&kind, &Range::Single(12345678.into())), "012000000/012345000/012345678.block.avro");
     }
 
     #[test]
     fn multi_block_path() {
         let filenames = Filenames::default();
         let kind = DataKind::Blocks;
-        assert_eq!(filenames.path(&kind, &Range::Multiple(12000000, 12000999)), "012000000/range-012000000_012000999.blocks.avro");
+        assert_eq!(filenames.path(&kind, &Range::Multiple(12000000.into(), 12000999.into())), "012000000/range-012000000_012000999.blocks.avro");
     }
 
     #[test]
     fn multi_tx_path() {
         let filenames = Filenames::default();
         let kind = DataKind::Transactions;
-        assert_eq!(filenames.path(&kind, &Range::Multiple(12000000, 12000999)), "012000000/range-012000000_012000999.txes.avro");
+        assert_eq!(filenames.path(&kind, &Range::Multiple(12000000.into(), 12000999.into())), "012000000/range-012000000_012000999.txes.avro");
     }
 
     #[test]
     fn multi_tx_traces_path() {
         let filenames = Filenames::default();
         let kind = DataKind::TransactionTraces;
-        assert_eq!(filenames.path(&kind, &Range::Multiple(12000000, 12000999)), "012000000/range-012000000_012000999.traces.avro");
+        assert_eq!(filenames.path(&kind, &Range::Multiple(12000000.into(), 12000999.into())), "012000000/range-012000000_012000999.traces.avro");
     }
 
     #[test]
@@ -343,20 +346,59 @@ mod tests {
     fn parse_single_block_file() {
         let (kind, range) = Filenames::parse("021625120.block.avro".to_string()).unwrap();
         assert_eq!(kind, DataKind::Blocks);
-        assert_eq!(range, Range::Single(21625120));
+        assert_eq!(range, Range::Single(21625120.into()));
+        assert!(range.first_height().hash.is_none());
+    }
+
+    #[test]
+    fn parse_single_block_file_with_hash() {
+        let (kind, range) = Filenames::parse("021625120.b4e72a78fd2cb0e75768401a92e5258618eec892b7e4edb49b2a592e9a5de5c4.block.avro".to_string()).unwrap();
+        assert_eq!(kind, DataKind::Blocks);
+        assert_eq!(range, Range::Single(Height::new(21625120, Some("b4e72a78fd2cb0e75768401a92e5258618eec892b7e4edb49b2a592e9a5de5c4".to_string()))));
     }
 
     #[test]
     fn parse_single_tx_file() {
         let (kind, range) = Filenames::parse("021625139.txes.avro".to_string()).unwrap();
         assert_eq!(kind, DataKind::Transactions);
-        assert_eq!(range, Range::Single(21625139));
+        assert_eq!(range, Range::Single(21625139.into()));
+        assert!(range.first_height().hash.is_none());
+    }
+
+    #[test]
+    fn parse_single_tx_file_with_hash() {
+        let (kind, range) = Filenames::parse("021625139.b4e72a78fd2cb0e75768401a92e5258618eec892b7e4edb49b2a592e9a5de5c4.txes.avro".to_string()).unwrap();
+        assert_eq!(kind, DataKind::Transactions);
+        assert_eq!(range, Range::Single(Height::new(21625139, Some("b4e72a78fd2cb0e75768401a92e5258618eec892b7e4edb49b2a592e9a5de5c4".to_string()))));
     }
 
     #[test]
     fn parse_single_tx_traces_file() {
         let (kind, range) = Filenames::parse("021625139.traces.avro".to_string()).unwrap();
         assert_eq!(kind, DataKind::TransactionTraces);
-        assert_eq!(range, Range::Single(21625139));
+        assert_eq!(range, Range::Single(21625139.into()));
+        assert!(range.first_height().hash.is_none());
+    }
+
+    #[test]
+    fn offset_single_block() {
+        let filenames = Filenames::default();
+        let single = Range::Single(12000000.into());
+        assert_eq!(filenames.offset(&single), "012000000");
+    }
+
+    #[test]
+    fn offset_multi_block() {
+        let filenames = Filenames::default();
+        let multi = Range::Multiple(12000000.into(), 12000999.into());
+        assert_eq!(filenames.offset(&multi), "range-012000000");
+    }
+
+    #[test]
+    fn offset_different_for_ranges() {
+        let filenames = Filenames::default();
+        let multi = Range::Multiple(12000000.into(), 12000999.into());
+        let single = multi.first();
+        assert_ne!(filenames.offset(&single), filenames.offset(&multi));
     }
 }

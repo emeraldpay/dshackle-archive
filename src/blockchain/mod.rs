@@ -16,15 +16,15 @@ use serde::Deserialize;
 use crate::{
     blockchain::{
         bitcoin::BitcoinData,
-        connection::{Blockchain, Height},
+        connection::{Blockchain},
         ethereum::EthereumData,
         next_block::{NextBlock}
     },
     archiver::{
         datakind::TraceOptions,
-        range::Range
     }
 };
+use crate::archiver::range::Height;
 
 ///
 /// Defined the data types for a blockchain
@@ -108,29 +108,25 @@ pub trait BlockchainData<T: BlockchainTypes>: Send + Sync {
 }
 
 ///
-/// A reference to a block
+/// A reference to a block on blockchain
 pub enum BlockReference<T> where T: FromStr {
-    /// By its hash / identifier
+    /// By its hash / identifier, i.e. when the height is unknown
     Hash(T),
-    /// Byt its height
-    Height(u64),
+    /// Byt its height (and optionally hash)
+    Height(Height),
 }
 
-
-
-#[derive(Debug, Clone, PartialEq)]
-pub enum MultiBlockReference {
-    /// Just single block optionally referenced by its hash
-    Single(Height),
-    /// Multiple blocks in the range
-    Range(Range),
-}
-
-impl Into<Range> for MultiBlockReference {
-    fn into(self) -> Range {
-        match self {
-            MultiBlockReference::Single(h) => Range::Single(h.height),
-            MultiBlockReference::Range(r) => r,
+impl <T> From<Height> for BlockReference<T> where T: FromStr {
+    fn from(value: Height) -> Self {
+        match &value.hash {
+            Some(h) => match T::from_str(h.as_ref()) {
+                Ok(hash) => BlockReference::Hash(hash),
+                Err(_) => {
+                    tracing::warn!("Failed to parse block hash from: {}", h);
+                    BlockReference::Height(value)
+                }
+            },
+            None => BlockReference::Height(value)
         }
     }
 }
@@ -152,7 +148,7 @@ impl<T> BlockReference<T> where T: FromStr {
     }
 
     pub fn height(h: u64) -> Self {
-        BlockReference::Height(h)
+        BlockReference::Height(h.into())
     }
 
 }

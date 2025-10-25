@@ -5,7 +5,6 @@ use crate::{
     archiver::{ArchiveAll, Archiver},
     args::Args,
     blockchain::{
-        connection::Height,
         connection::Blockchain,
         BlockchainTypes
     },
@@ -16,7 +15,7 @@ use crate::{
 };
 use anyhow::Result;
 use crate::archiver::datakind::DataOptions;
-use crate::archiver::range::Range;
+use crate::archiver::range::{Height, Range};
 use crate::args::Follow;
 use crate::blockchain::BlockchainData;
 use crate::notify::Maturity;
@@ -64,7 +63,7 @@ impl<B: BlockchainTypes, TS: TargetStorage> StreamCommand<B, TS> {
     /// Ensures that the last N blocks are archived, where N is `self.continue_blocks`.
     async fn ensure_continued(&self, height: Height) -> Result<()> {
         if let Some(len) = self.continue_blocks {
-            let range = Range::up_to(len, &Range::Single(height.height));
+            let range = Range::up_to(len, &Range::Single(height));
             let options = self.tx_options.clone();
             let missing = self.archiver.target.find_incomplete_tables(range, &options).await?;
             for (range, kinds) in missing {

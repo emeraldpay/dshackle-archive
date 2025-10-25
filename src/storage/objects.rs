@@ -442,6 +442,7 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread")]
     pub async fn test_list_whole() {
+        testing::start_test();
         let files = list(
             Range::new(021000000, 022000000),
             vec![
@@ -456,10 +457,10 @@ mod tests {
         assert_eq!(files[0].path, "archive/eth/021000000/021596000/021596362.block.avro");
         assert_eq!(files[1].path, "archive/eth/021000000/021596000/021596362.txes.avro");
         assert_eq!(files[1].kind, DataKind::Transactions);
-        assert_eq!(files[1].range, Range::Single(21596362));
+        assert_eq!(files[1].range, Range::Single(21596362.into()));
         assert_eq!(files[2].path, "archive/eth/021000000/021596000/021596363.block.avro");
         assert_eq!(files[2].kind, DataKind::Blocks);
-        assert_eq!(files[3].range, Range::Single(21596363));
+        assert_eq!(files[3].range, Range::Single(21596363.into()));
     }
 
     #[tokio::test(flavor = "multi_thread")]

@@ -88,7 +88,7 @@ impl BlockchainData<MockType> for MockData {
         let blocks = self.blocks.lock().unwrap();
         let block = blocks.iter()
             .find(|b| match height {
-                BlockReference::Height(h) => b.height == *h,
+                BlockReference::Height(h) => b.height == h.height,
                 BlockReference::Hash(h) => b.hash == *h,
             })
             .ok_or(anyhow!("Block not found"))?

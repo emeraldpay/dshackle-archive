@@ -307,7 +307,7 @@ mod tests {
         let incomplete = storage.find_incomplete_tables(range, &tx_options).await.unwrap();
 
         assert_eq!(incomplete.len(), 1);
-        assert_eq!(incomplete[0].0, Range::Single(21596362));
+        assert_eq!(incomplete[0].0, Range::Single(21596362.into()));
         assert_eq!(incomplete[0].1, vec![DataKind::Blocks]);
     }
 
@@ -325,7 +325,7 @@ mod tests {
         let incomplete = storage.find_incomplete_tables(range, &tx_options).await.unwrap();
 
         assert_eq!(incomplete.len(), 1);
-        assert_eq!(incomplete[0].0, Range::Single(21596362));
+        assert_eq!(incomplete[0].0, Range::Single(21596362.into()));
         assert_eq!(incomplete[0].1, vec![DataKind::Transactions]);
     }
 
@@ -343,7 +343,7 @@ mod tests {
 
         // 21596362 has no files at all, so it's reported as completely missing
         assert_eq!(incomplete.len(), 1);
-        assert_eq!(incomplete[0].0, Range::Single(21596362));
+        assert_eq!(incomplete[0].0, Range::Single(21596362.into()));
         assert!(incomplete[0].1.contains(&DataKind::Blocks));
         assert!(incomplete[0].1.contains(&DataKind::Transactions));
     }
@@ -370,10 +370,10 @@ mod tests {
         let mut sorted_incomplete = incomplete.clone();
         sorted_incomplete.sort_by_key(|(r, _)| r.start());
 
-        assert_eq!(sorted_incomplete[0].0, Range::Single(21596362));
+        assert_eq!(sorted_incomplete[0].0, Range::Single(21596362.into()));
         assert_eq!(sorted_incomplete[0].1, vec![DataKind::Transactions]);
 
-        assert_eq!(sorted_incomplete[1].0, Range::Single(21596364));
+        assert_eq!(sorted_incomplete[1].0, Range::Single(21596364.into()));
         assert_eq!(sorted_incomplete[1].1, vec![DataKind::Blocks]);
     }
 
@@ -415,7 +415,7 @@ mod tests {
         let incomplete = storage.find_incomplete_tables(range, &tx_options).await.unwrap();
 
         assert_eq!(incomplete.len(), 1);
-        assert_eq!(incomplete[0].0, Range::Single(21596362));
+        assert_eq!(incomplete[0].0, Range::Single(21596362.into()));
         assert_eq!(incomplete[0].1, vec![DataKind::TransactionTraces]);
     }
 
@@ -506,7 +506,7 @@ mod tests {
 
         // 21596101 is completely missing, so it's reported
         assert_eq!(incomplete.len(), 1);
-        assert_eq!(incomplete[0].0, Range::Single(21596101));
+        assert_eq!(incomplete[0].0, Range::Single(21596101.into()));
         assert!(incomplete[0].1.contains(&DataKind::Blocks));
         assert!(incomplete[0].1.contains(&DataKind::Transactions));
     }
@@ -564,11 +564,11 @@ mod tests {
         sorted.sort_by_key(|(r, _)| r.start());
 
         // 21596363 is incomplete (missing txes)
-        assert_eq!(sorted[0].0, Range::Single(21596363));
+        assert_eq!(sorted[0].0, Range::Single(21596363.into()));
         assert_eq!(sorted[0].1, vec![DataKind::Transactions]);
 
         // 21596364 is completely missing
-        assert_eq!(sorted[1].0, Range::Single(21596364));
+        assert_eq!(sorted[1].0, Range::Single(21596364.into()));
         assert!(sorted[1].1.contains(&DataKind::Blocks));
         assert!(sorted[1].1.contains(&DataKind::Transactions));
     }

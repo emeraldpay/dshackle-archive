@@ -1,9 +1,10 @@
 use std::sync::Arc;
 use async_trait::async_trait;
 use tokio::sync::mpsc::Receiver;
+use crate::archiver::range::Height;
 use crate::blockchain::block_seq::BlockSequence;
 use crate::blockchain::{BlockchainTypes, EthereumType};
-use crate::blockchain::connection::{Blockchain, Height};
+use crate::blockchain::connection::{Blockchain};
 use crate::errors::BlockchainError;
 
 ///

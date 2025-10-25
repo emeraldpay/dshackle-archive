@@ -16,3 +16,5 @@ use crate::blockchain::BlockchainTypes;
 
 #[allow(type_alias_bounds)]
 pub type BlockTransactions<B: BlockchainTypes> = Vec<(B::BlockParsed, Vec<B::TxId>)>;
+
+pub type BlockHash = String;
