@@ -11,7 +11,7 @@ use alloy::{
     rpc::types::{Transaction as TransactionJson, Block as BlockJson, Block, TransactionTrait}
 };
 use alloy::network::TransactionResponse;
-use crate::blockchain::{BlockDetails, BlockReference, BlockchainData, EthereumType, JsonString};
+use crate::blockchain::{BlockDetails, BlockReference, BlockchainData, BlockchainTypes, EthereumType, JsonString};
 use anyhow::{Result, anyhow};
 use tokio_retry2::{Retry, RetryError};
 use tokio_retry2::strategy::{jitter, ExponentialFactorBackoff};
@@ -311,10 +311,18 @@ fn parse_number(s: String) -> Result<u64> {
     u64::from_str_radix(s, 16).map_err(|e| anyhow!("Invalid number: {}", e))
 }
 
-impl BlockDetails<TxHash> for Block<TxHash> {
+impl BlockDetails<EthereumType> for Block<TxHash> {
     fn txes(&self) -> Vec<TxHash> {
         self.transactions.as_transactions()
             .map(|txes| txes.to_vec())
             .unwrap_or_default()
+    }
+
+    fn hash(&self) -> <EthereumType as BlockchainTypes>::BlockHash {
+        self.hash()
+    }
+
+    fn parent(&self) -> <EthereumType as BlockchainTypes>::BlockHash {
+        self.header.hash
     }
 }

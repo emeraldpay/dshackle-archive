@@ -30,12 +30,21 @@ impl BlockchainTypes for MockType {
 pub struct MockBlock {
     pub height: u64,
     pub hash: String,
+    pub parent: String,
     pub transactions: Vec<String>,
 }
 
-impl BlockDetails<String> for MockBlock {
+impl BlockDetails<MockType> for MockBlock {
     fn txes(&self) -> Vec<String> {
         self.transactions.clone()
+    }
+
+    fn hash(&self) -> String {
+        self.hash.clone()
+    }
+
+    fn parent(&self) -> String {
+        self.parent.clone()
     }
 }
 

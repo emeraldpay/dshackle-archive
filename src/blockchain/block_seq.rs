@@ -2,9 +2,9 @@ use crate::blockchain::BlockchainTypes;
 
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-struct BlockLink<T: BlockchainTypes> {
-    parent: T::BlockHash,
-    current: T::BlockHash,
+pub struct BlockLink<T: BlockchainTypes> {
+    pub parent: T::BlockHash,
+    pub current: T::BlockHash,
 }
 
 impl<T: BlockchainTypes> BlockLink<T> {
@@ -25,9 +25,9 @@ impl<T: BlockchainTypes> AtHeight<T> {
     }
 }
 
-/// 
+///
 /// Keeps blocks in order. Order is defined by block parent hashes, not only by heights.
-/// That allows reorgs, forks, etc. But we always know the correct sequence to the specified block. 
+/// That allows reorgs, forks, etc. But we always know the correct sequence to the specified block.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct BlockSequence<T: BlockchainTypes> {
     size: usize,
@@ -65,28 +65,80 @@ impl<T: BlockchainTypes> BlockSequence<T> {
         }
     }
 
+    pub fn is_linked(&self, height: u64, hash: &T::BlockHash) -> bool {
+        self.get_linked(height, hash).is_some()
+    }
+
+    pub fn get_block(&self, height: u64, hash: &T::BlockHash) -> Option<&BlockLink<T>> {
+        match self.get_index(height) {
+            None => None,
+            Some(pos) => {
+                self.current[pos].find_block(hash)
+            }
+        }
+    }
+
     ///
     /// Check if the given block has the parent (or it's the first block in sequence)
-    pub fn is_linked(&self, height: u64, hash: &T::BlockHash) -> bool {
+    pub fn get_linked(&self, height: u64, hash: &T::BlockHash) -> Option<&BlockLink<T>> {
         match self.get_index(height) {
-            None => false,
+            None => None,
             Some(pos) => {
+                let block = self.current[pos].find_block(hash);
                 if pos == 0 {
-                    true
+                    block
                 } else {
-                    let block = &self.current[pos].find_block(hash);
                     if block.is_none() {
-                        return false;
+                        return None;
                     }
                     let block = block.unwrap();
                     let prev_height = &self.current[pos - 1];
-                    prev_height.blocks
+                    let has_prev = prev_height.blocks
                         .iter().any(|prev| {
-                            block.is_after(prev)
-                        })
+                        block.is_after(prev)
+                    });
+                    if !has_prev {
+                        return None;
+                    }
+                    Some(block)
                 }
             }
         }
+    }
+
+    ///
+    /// Get the sequence of linked blocks up to the specified.
+    /// May be shorter that the whole contained sequence of height, if one of the blocks is
+    /// missing and so break the chain
+    pub fn up_to<'a>(&'a self, height: u64, hash: &'a T::BlockHash) -> Vec<(u64, &'a T::BlockHash)> {
+        let mut linked = vec![];
+        let top = self.get_index(height);
+        if top.is_none() {
+            return vec![];
+        }
+        let mut current = (height, hash);
+        // linked.push(current);
+        loop {
+            let link = self.get_block(current.0, &current.1);
+            if link.is_none() {
+                return linked;
+            }
+            linked.push(current);
+            let link = link.unwrap();
+            // linked.push((height, &link.current));
+            current = (current.0 - 1, &link.parent);
+        }
+    }
+
+    pub fn get_head(&self) -> Option<(u64, &T::BlockHash)> {
+        if self.current.is_empty() {
+            return None;
+        }
+        let top = self.current.last().unwrap();
+        if top.blocks.len() != 1 {
+            return None;
+        }
+        Some((top.height, &top.blocks.first().unwrap().current))
     }
 
     ///
@@ -212,4 +264,111 @@ mod tests {
         assert_eq!(seq.current[0].height, 3);
         assert_eq!(seq.current[1].height, 4);
     }
+
+    #[test]
+    fn get_head_empty() {
+        let seq = BlockSequence::<MockType>::new(3);
+        assert_eq!(seq.get_head(), None);
+    }
+
+    #[test]
+    fn get_head_multiple_blocks() {
+        let mut seq = BlockSequence::<MockType>::new(3);
+        seq.append(1, "000".to_string(), "111".to_string());
+        seq.append(1, "000".to_string(), "112".to_string()); // fork at height 1
+        assert_eq!(seq.get_head(), None);
+    }
+
+    #[test]
+    fn get_head_single_block() {
+        let mut seq = BlockSequence::<MockType>::new(3);
+        seq.append(1, "000".to_string(), "111".to_string());
+        let head = seq.get_head();
+        assert_eq!(head, Some((1, &"111".to_string())));
+    }
+
+    #[test]
+    fn get_head_last_height_single_block() {
+        let mut seq = BlockSequence::<MockType>::new(3);
+        seq.append(1, "000".to_string(), "111".to_string());
+        seq.append(2, "111".to_string(), "222".to_string());
+        let head = seq.get_head();
+        assert_eq!(head, Some((2, &"222".to_string())));
+    }
+
+    #[test]
+    fn get_head_last_height_multiple_blocks() {
+        let mut seq = BlockSequence::<MockType>::new(3);
+        seq.append(1, "000".to_string(), "111".to_string());
+        seq.append(2, "111".to_string(), "222".to_string());
+        seq.append(3, "222".to_string(), "333".to_string());
+        let head = seq.get_head();
+        assert_eq!(head, Some((3, &"333".to_string())));
+    }
+
+    #[test]
+    fn up_to_height_not_present() {
+        let seq = BlockSequence::<MockType>::new(3);
+        let hash = "111".to_string();
+        let result = seq.up_to(1, &hash);
+        assert_eq!(result, vec![]);
+    }
+
+    #[test]
+    fn up_to_first_block() {
+        let mut seq = BlockSequence::<MockType>::new(3);
+        seq.append(1, "000".to_string(), "111".to_string());
+        let hash = "111".to_string();
+        let result = seq.up_to(1, &hash);
+        assert_eq!(result, vec![(1, &"111".to_string())]);
+    }
+
+    #[test]
+    fn up_to_linear_chain() {
+        let mut seq = BlockSequence::<MockType>::new(5);
+        seq.append(1, "000".to_string(), "111".to_string());
+        seq.append(2, "111".to_string(), "222".to_string());
+        seq.append(3, "222".to_string(), "333".to_string());
+        let hash = "333".to_string();
+        let result = seq.up_to(3, &hash);
+        assert_eq!(result, vec![(3, &"333".to_string()), (2, &"222".to_string()), (1, &"111".to_string())]);
+    }
+
+    #[test]
+    fn up_to_partial_chain_missing_link() {
+        let mut seq = BlockSequence::<MockType>::new(5);
+        seq.append(1, "000".to_string(), "111".to_string());
+        // skip height 2
+        seq.append(3, "222".to_string(), "333".to_string());
+        let hash = "333".to_string();
+        let result = seq.up_to(3, &hash);
+        // Should only return the starting block, as the parent is missing
+        assert_eq!(result, vec![(3, &"333".to_string())]);
+    }
+
+    #[test]
+    fn up_to_fork_chain() {
+        let mut seq = BlockSequence::<MockType>::new(5);
+        seq.append(1, "000".to_string(), "111".to_string());
+        seq.append(2, "111".to_string(), "222a".to_string());
+        seq.append(2, "111".to_string(), "222b".to_string());
+        seq.append(3, "222b".to_string(), "333".to_string());
+        let hash = "333".to_string();
+        let result = seq.up_to(3, &hash);
+
+        assert_eq!(result, vec![(3, &"333".to_string()), (2, &"222b".to_string()), (1, &"111".to_string())]);
+    }
+
+    #[test]
+    fn up_to_missing_parent() {
+        let mut seq = BlockSequence::<MockType>::new(5);
+        seq.append(1, "000".to_string(), "111".to_string());
+        seq.append(2, "111".to_string(), "222".to_string());
+        seq.append(3, "999".to_string(), "333".to_string()); // wrong parent
+        let hash = "333".to_string();
+        let result = seq.up_to(3, &hash);
+        // Should only return the starting block, as the parent is not linked
+        assert_eq!(result, vec![(3, &"333".to_string())]);
+    }
+
 }

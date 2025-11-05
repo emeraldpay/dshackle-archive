@@ -40,7 +40,7 @@ pub trait BlockchainTypes: Send + Sync + Sized {
 
     ///
     /// Block details converted from the JSON response
-    type BlockParsed: BlockDetails<Self::TxId> + for<'a> Deserialize<'a> + Send + Sync;
+    type BlockParsed: BlockDetails<Self> + for<'a> Deserialize<'a> + Send + Sync;
 
     ///
     /// Data provider for the blockchain
@@ -153,8 +153,10 @@ impl<T> BlockReference<T> where T: FromStr {
 
 }
 
-pub trait BlockDetails<T> {
-    fn txes(&self) -> Vec<T>;
+pub trait BlockDetails<T> where T: BlockchainTypes{
+    fn txes(&self) -> Vec<T::TxId>;
+    fn hash(&self) -> T::BlockHash;
+    fn parent(&self) -> T::BlockHash;
 }
 
 pub struct JsonString(pub String);

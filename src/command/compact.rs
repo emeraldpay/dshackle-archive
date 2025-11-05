@@ -810,6 +810,7 @@ mod tests {
             data_provider.add_block(MockBlock {
                 height: block_height,
                 hash: format!("B{}", block_height),
+                parent: format!("B{}", block_height-1),
                 transactions: txs.clone(),
             });
             for tx in &txs {
@@ -877,6 +878,7 @@ mod tests {
             data_provider.add_block(MockBlock {
                 height: block_height,
                 hash: format!("B{}", block_height),
+                parent: format!("B{}", block_height-1),
                 transactions: txs.clone(),
             });
             for tx in &txs {
@@ -964,6 +966,7 @@ mod tests {
             data_provider.add_block(MockBlock {
                 height: block_height,
                 hash: format!("B{}", block_height),
+                parent: format!("B{}", block_height-1),
                 transactions: txs.clone(),
             });
             for tx in &txs {
@@ -1022,6 +1025,7 @@ mod tests {
             data_provider.add_block(MockBlock {
                 height: block_height,
                 hash: format!("B{}", block_height),
+                parent: format!("B{}", block_height-1),
                 transactions: txs.clone(),
             });
             for tx in &txs {
@@ -1070,6 +1074,7 @@ mod tests {
             data_provider.add_block(MockBlock {
                 height: block_height,
                 hash: format!("B{}", block_height),
+                parent: format!("B{}", block_height-1),
                 transactions: txs.clone(),
             });
             for tx in &txs {

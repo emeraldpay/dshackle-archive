@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use thiserror::Error;
 use crate::archiver::datakind::{DataKind, DataTables};
 use crate::archiver::range::Range;
 use crate::storage::FileReference;
@@ -6,13 +7,21 @@ use crate::storage::FileReference;
 ///
 /// A group of files for the same range
 ///
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ArchiveGroup {
     pub range: Range,
     expect_tables: DataTables,
     pub blocks: Option<FileReference>,
     pub txes: Option<FileReference>,
     pub traces: Option<FileReference>,
+}
+
+#[derive(Error, Debug)]
+pub enum RangeGroupError {
+    #[error("Table already exists for the range: {}", .0.path)]
+    Duplicate(FileReference, FileReference),
+    #[error("File range mismatch: expected {0}, got {1}")]
+    DifferentRange(Range, Range),
 }
 
 impl ArchiveGroup {
@@ -32,22 +41,38 @@ impl ArchiveGroup {
     ///
     /// Add a file to the group
     ///
-    pub fn with_file(self, file: FileReference) -> anyhow::Result<Self> {
+    pub fn with_file(self, file: FileReference) -> Result<Self, RangeGroupError> {
         if file.range != self.range {
-            return Err(anyhow::anyhow!("File range mismatch: expected {:?}, got {:?}", self.range, file.range));
+            return Err(RangeGroupError::DifferentRange(self.range, file.range));
         }
         let merged = match file.kind {
-            DataKind::Blocks => Self {
-                blocks: Some(file),
-                ..self
+            DataKind::Blocks => {
+                if self.blocks.is_some() {
+                    return Err(RangeGroupError::Duplicate(self.blocks.unwrap(), file));
+                }
+                Self {
+                    blocks: Some(file),
+                    ..self
+                }
             },
-            DataKind::Transactions => Self {
-                txes: Some(file),
-                ..self
+            DataKind::Transactions => {
+                if self.txes.is_some() {
+                    return Err(RangeGroupError::Duplicate(self.txes.unwrap(), file));
+                }
+                Self {
+                    txes: Some(file),
+                    ..self
+                }
             },
-            DataKind::TransactionTraces => Self {
-                traces: Some(file),
-                ..self
+            DataKind::TransactionTraces => {
+                if self.traces.is_some() {
+                    return Err(RangeGroupError::Duplicate(self.traces.unwrap(), file));
+                }
+
+                Self {
+                    traces: Some(file),
+                    ..self
+                }
             },
         };
         Ok(merged)
@@ -110,6 +135,7 @@ pub struct ArchivesList {
     current: HashMap<Range, ArchiveGroup>,
 }
 
+
 impl ArchivesList {
 
     ///
@@ -123,7 +149,7 @@ impl ArchivesList {
 
     ///
     /// Append to the current list or update the current group. Returns `true` if the group is complete
-    pub fn append(&mut self, file: FileReference) -> anyhow::Result<bool> {
+    pub fn append(&mut self, file: FileReference) -> Result<bool, RangeGroupError> {
         let range = file.range.clone();
 
         let current = self.current.remove(&range)
@@ -135,7 +161,7 @@ impl ArchivesList {
         Ok(is_complete)
     }
 
-    pub fn remove(&mut self, range: &Range) -> Option<ArchiveGroup> {
+    pub fn remove_all(&mut self, range: &Range) -> Option<ArchiveGroup> {
         self.current.remove(range)
     }
 
@@ -150,10 +176,9 @@ impl ArchivesList {
     ///
     /// Get all file groups that are missing one or more DataKinds in their range
     /// Ex., called after appending all the files in the ranges.
-    pub fn list_incomplete(&self) -> Vec<ArchiveGroup> {
+    pub fn list_incomplete(&self) -> Vec<&ArchiveGroup> {
         self.current.values()
             .filter(|g| !g.is_complete())
-            .cloned()
             .collect()
     }
 
@@ -248,7 +273,7 @@ mod tests {
         };
 
         archives_list.append(file).unwrap();
-        let removed = archives_list.remove(&range);
+        let removed = archives_list.remove_all(&range);
         assert!(removed.is_some());
         assert_eq!(archives_list.current.len(), 0);
     }

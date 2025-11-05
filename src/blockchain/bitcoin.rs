@@ -9,7 +9,7 @@ use async_trait::async_trait;
 use chrono::Utc;
 use serde::{Deserialize, Deserializer};
 use crate::avros::{BLOCK_SCHEMA, TX_SCHEMA};
-use crate::blockchain::{BitcoinType, BlockDetails, BlockReference, BlockchainData, JsonString};
+use crate::blockchain::{BitcoinType, BlockDetails, BlockReference, BlockchainData, BlockchainTypes, JsonString};
 use crate::archiver::datakind::TraceOptions;
 use crate::blockchain::next_block::NextBlock;
 
@@ -111,9 +111,17 @@ pub struct BitcoinBlock {
     time: u64
 }
 
-impl BlockDetails<TxHash> for BitcoinBlock {
+impl BlockDetails<BitcoinType> for BitcoinBlock {
     fn txes(&self) -> Vec<TxHash> {
         self.transactions.clone()
+    }
+
+    fn hash(&self) -> <BitcoinType as BlockchainTypes>::BlockHash {
+        self.hash.clone()
+    }
+
+    fn parent(&self) -> <BitcoinType as BlockchainTypes>::BlockHash {
+        self.previous_block_hash.clone()
     }
 }
 
