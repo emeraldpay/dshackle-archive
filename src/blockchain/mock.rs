@@ -114,7 +114,7 @@ impl BlockchainData<MockType> for MockData {
                 BlockReference::Height(h) => b.height == h.height,
                 BlockReference::Hash(h) => b.hash == *h,
             })
-            .ok_or(anyhow!("Block not found"))?
+            .ok_or(anyhow!("Block not found: {:?}", height))?
             .clone();
 
         let mut record = Record::new(&BLOCK_SCHEMA).unwrap();

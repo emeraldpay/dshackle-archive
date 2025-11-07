@@ -109,11 +109,21 @@ pub trait BlockchainData<T: BlockchainTypes>: Send + Sync {
 
 ///
 /// A reference to a block on blockchain
+
 pub enum BlockReference<T> where T: FromStr {
     /// By its hash / identifier, i.e. when the height is unknown
     Hash(T),
     /// Byt its height (and optionally hash)
     Height(Height),
+}
+
+impl Debug for BlockReference<String> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            BlockReference::Hash(h) => write!(f, "Hash({})", h),
+            BlockReference::Height(h) => write!(f, "Height({})", h.height),
+        }
+    }
 }
 
 impl <T> From<Height> for BlockReference<T> where T: FromStr {

@@ -27,6 +27,7 @@ use crate::archiver::datakind::{BlockOptions, TraceOptions, TxOptions};
 use crate::archiver::range_bag::RangeBag;
 use crate::archiver::range_group::RangeGroupError;
 use crate::blockchain::block_seq::BlockSequence;
+use crate::blockchain::{BlockReference, BlockchainData};
 use crate::storage::FileReference;
 
 ///
@@ -88,7 +89,8 @@ impl<B: BlockchainTypes + 'static, TS: TargetStorage + 'static> VerifyCommand<B,
 
         // first we need to leave only uniq files
         let complete = self.select_complete(archived.all()).await?;
-        let uniq = self.deduplicate(complete).await?;
+        let no_forks = self.remove_forks(complete).await?;
+        let uniq = self.deduplicate(no_forks).await?;
 
         let grouped = self.merge_small(uniq);
 
@@ -141,6 +143,53 @@ impl<B: BlockchainTypes + 'static, TS: TargetStorage + 'static> VerifyCommand<B,
         Ok(result)
     }
 
+    async fn remove_forks(&self, archived: Vec<ArchiveGroup>) -> anyhow::Result<Vec<ArchiveGroup>> {
+        let mut result = vec![];
+        let dry_run = global::is_dry_run();
+        let mut left = archived;
+
+        while !left.is_empty() {
+            let group = left.remove(0);
+            if group.range.len() > 1 {
+                tracing::trace!(ranage = %group.range, "Large range, no fork checks");
+                result.push(group);
+                continue;
+            }
+            let height = group.range.start();
+            let mut forks: Vec<ArchiveGroup> = left.extract_if(.., |g| g.range.start() == group.range.start())
+                .collect();
+            if forks.is_empty() {
+                tracing::trace!("Only one block at height {}, no forks", height);
+                result.push(group);
+                continue;
+            }
+            forks.push(group);
+            let (_, actual, _) = self.archiver.data_provider.fetch_block(&BlockReference::height(height)).await?;
+            let expected_hash = actual.hash();
+            for fork in &forks {
+                if let Range::Single(h) = &fork.range {
+                    if let Some(fork_hash) = h.hash.as_ref() {
+                        if let Ok(fork_hash) = B::BlockHash::from_str(fork_hash.as_str()) {
+                            if fork_hash.eq(&expected_hash) {
+                                result.push(fork.clone());
+                                continue
+                            }
+                        }
+                    }
+
+                    tracing::debug!(range = %fork.range, "Delete forked blocks");
+                    if !dry_run {
+                        for f in fork.tables() {
+                            let _ = self.archiver.target.delete(f).await;
+                        }
+                    }
+                }
+            }
+        }
+
+        Ok(result)
+    }
+
     async fn deduplicate(&self, archived: Vec<ArchiveGroup>) -> anyhow::Result<Vec<ArchiveGroup>> {
         let mut result = vec![];
         let dry_run = global::is_dry_run();
@@ -154,7 +203,7 @@ impl<B: BlockchainTypes + 'static, TS: TargetStorage + 'static> VerifyCommand<B,
                 .collect();
             let group = if all_groups_in_range.len() > 1 {
                 // we got few files in the range
-                let best = self.find_best(&all_groups_in_range).await?;
+                let best = self.find_best(all_groups_in_range.clone()).await?;
                 // delete the other files
                 for other in &all_groups_in_range {
                     if best.ne(other) {
@@ -204,25 +253,9 @@ impl<B: BlockchainTypes + 'static, TS: TargetStorage + 'static> VerifyCommand<B,
         result
     }
 
-    async fn find_best<'a>(&self, groups: &'a Vec<ArchiveGroup>) -> anyhow::Result<&'a ArchiveGroup> {
-        if groups.is_empty() {
-            return Err(anyhow::anyhow!("Empty group"))
-        }
-        if let Some(largest) = groups.iter().max_by_key(|g| g.range.len()) {
-            let count = groups.iter().filter(|g| g.range.len() == largest.range.len()).count();
-            if count == 1 {
-                return Ok(largest);
-            }
-            if largest.range.len() == 1 {
-                // it's streaming blocks and there were two blocks on that height
-                // we have to find out which one is now on blockchain
-                // TODO check with blockchain
-                tracing::warn!("Need access to blockchain to find out which block is valid at height {}", largest.range)
-            }
-        }
-
-        // we already verified it's not empty
-        Ok(groups.first().unwrap())
+    async fn find_best(&self, groups: Vec<ArchiveGroup>) -> anyhow::Result<ArchiveGroup> {
+        groups.into_iter().max_by_key(|g| g.range.len())
+            .ok_or_else(|| anyhow::anyhow!("Empty group"))
     }
 
 }
@@ -321,7 +354,7 @@ async fn verify_content<'a, B: BlockchainTypes, TS: TargetStorage>(archiver: Arc
         .collect();
 
     let block_verification = if blocks.len() > 0 && data_options.block.is_some() {
-        BlockVerify::<B, TS>::new().verify_table(data_options.block.as_ref().unwrap(), archiver.target.as_ref(), &range, &blocks,&()).await
+        BlockVerify::<B, TS>::new().verify_table(data_options.block.as_ref().unwrap(), archiver.target.as_ref(), &range, &blocks, archiver.data_provider.as_ref()).await
     } else {
         tracing::error!(range = %range, "No block file. Skip verification and delete other tables in the range");
         return Ok(groups.iter().flat_map(|g| g.tables()).collect())
@@ -563,9 +596,9 @@ impl<B: BlockchainTypes, TS: TargetStorage> BlockVerify<B, TS> {
 #[async_trait]
 impl<B: BlockchainTypes, TS: TargetStorage> VerifyTable<BlockOptions, B, TS> for BlockVerify<B, TS> {
     type Returns = Vec<B::TxId>;
-    type Params = ();
+    type Params = B::DataProvider;
 
-    async fn verify_table(&self, _options: &BlockOptions, storage: &TS, range: &Range, files: &Vec<&FileReference>, _params: &Self::Params) -> Result<Self::Returns, String> {
+    async fn verify_table(&self, _options: &BlockOptions, storage: &TS, range: &Range, files: &Vec<&FileReference>, data_provider: &Self::Params) -> Result<Self::Returns, String> {
         tracing::trace!(range = %range, "Verify blocks");
 
         let mut block_seq: BlockSequence<B> = BlockSequence::new(range.len());
@@ -648,6 +681,13 @@ impl<B: BlockchainTypes, TS: TargetStorage> VerifyTable<BlockOptions, B, TS> for
                 tracing::error!(range = %range, "Table range is not consistent for blocks");
                 return Err("Table range is not consistent for blocks".to_string());
             }
+
+            let (_, actual, _) = data_provider.fetch_block(&BlockReference::height(range.end())).await
+                .map_err(|e| format!("Failed to fetch block from blockchain: {}", e))?;
+            if !actual.hash().eq(&top_block.1) {
+                tracing::error!(range = %range, "Top block hash does not match blockchain: expected {:?}, in archive {:?}", actual.hash(), top_block.1);
+                return Err("Top block hash does not match blockchain".to_string());
+            }
         }
 
         Ok(expected_txes)
@@ -679,6 +719,15 @@ mod tests {
         Archiver::new_simple(
             Arc::new(storage),
             Arc::new(MockData::new("test")),
+        )
+    }
+
+    fn create_archiver_with_data(mem: Arc<InMemory>, data: Arc<MockData>) -> Archiver<MockType, ObjectsStorage<InMemory>> {
+        let storage = ObjectsStorage::new(mem, "test".to_string(), Filenames::with_dir("archive/eth".to_string()));
+
+        Archiver::new_simple(
+            Arc::new(storage),
+            data,
         )
     }
 
@@ -715,13 +764,13 @@ mod tests {
             parent: "B100".to_string(),
             transactions: vec!["TX001".to_string()],
         };
-        let data = MockData::new("TEST");
+        let data = Arc::new(MockData::new("TEST"));
         data.add_block(block101.clone());
         data.add_tx(MockTx {
             hash: "TX001".to_string(),
         });
 
-        let archiver = create_archiver(mem.clone());
+        let archiver = create_archiver_with_data(mem.clone(), data.clone());
 
         let write = archiver.target.create(DataKind::Blocks, &Range::Single(101.into())).await.unwrap();
         let record = data.fetch_block(&BlockReference::Height(101.into())).await.unwrap();
@@ -776,7 +825,7 @@ mod tests {
             parent: "B102".to_string(),
             transactions: vec!["TX003".to_string()],
         };
-        let data = MockData::new("TEST");
+        let data = Arc::new(MockData::new("TEST"));
         data.add_block(block101.clone());
         data.add_block(block102.clone());
         data.add_block(block103.clone());
@@ -790,7 +839,7 @@ mod tests {
             hash: "TX003".to_string(),
         });
 
-        let archiver = create_archiver(mem.clone());
+        let archiver = create_archiver_with_data(mem.clone(), data.clone());
 
         // should have:
         // block 101 + txes 101
@@ -851,8 +900,8 @@ mod tests {
     async fn deletes_empty_block() {
         testing::start_test();
         let mem = Arc::new(InMemory::new());
-        let archiver = create_archiver(mem.clone());
-        let data = MockData::new("TEST");
+        let data = Arc::new(MockData::new("TEST"));
+        let archiver = create_archiver_with_data(mem.clone(), data.clone());
 
         let block100 = MockBlock {
             height: 100,
