@@ -60,8 +60,42 @@ pub struct VerifyCommand<B: BlockchainTypes, TS: TargetStorage> {
     blocks: Blocks,
     archiver: Arc<Archiver<B, TS>>,
     data_options: DataOptions,
-    delete_chunk: bool,
+    /// if try then delete the whole group of files in any issue with any of other files in the group
+    /// i.e., if a Tx is invalid (or missing, etc.) the delete the file with corresponding blocks as well even if it's verified as valid
+    delete_whole_groups: bool,
     chunk: usize,
+}
+
+///
+/// Data for the verification based on the filenames only
+struct Preprocess {
+    input: Vec<ArchiveGroup>,
+    for_deletion: Vec<FileReference>,
+}
+
+impl Preprocess {
+    fn new(archive: ArchivesList) -> Self {
+        Self {
+            input: archive.all(),
+            for_deletion: vec![],
+        }
+    }
+
+    ///
+    /// Mark all files in the group for deletion
+    fn delete_all(&mut self, group: ArchiveGroup) {
+        for f in group.tables() {
+            self.for_deletion.push(f.clone());
+        }
+    }
+
+    /// Get out the current list of input files.
+    ///
+    /// WARNING: this clears the internal list.
+    ///
+    fn inputs(&mut self) -> Vec<ArchiveGroup> {
+        std::mem::take(&mut self.input)
+    }
 }
 
 impl<B: BlockchainTypes + 'static, TS: TargetStorage + 'static> VerifyCommand<B, TS> {
@@ -74,190 +108,247 @@ impl<B: BlockchainTypes + 'static, TS: TargetStorage + 'static> VerifyCommand<B,
             blocks: Blocks::try_from(config)?,
             archiver: Arc::new(archiver),
             data_options: DataOptions::from(config),
-            delete_chunk: config.fix_clean,
+            delete_whole_groups: config.fix_clean,
             chunk: config.get_chunk_size(),
         })
     }
 
     async fn verify_chunk(&self, archived: ArchivesList) -> anyhow::Result<()> {
-        let shutdown = global::get_shutdown();
-        let delete_chunk = self.delete_chunk;
-        let archiver = self.archiver.clone();
-        let data_options = self.data_options.clone();
         let mut jobs = JoinSet::new();
-        let parallel = Arc::new(Semaphore::new(4));
 
+        // ----
+        // 1. Apply verification that can be done on the filename level
+        // ----
+
+        let mut preprocess = Preprocess::new(archived);
         // first we need to leave only uniq files
-        let complete = self.select_complete(archived.all()).await?;
-        let no_forks = self.remove_forks(complete).await?;
-        let uniq = self.deduplicate(no_forks).await?;
-
-        let grouped = self.merge_small(uniq);
-
-        // verify data in each group
-        for (range, group) in grouped {
-            let parallel = parallel.clone();
-            let archiver = archiver.clone();
-            let data_options = data_options.clone();
-            jobs.spawn(async move {
-                let _permit = parallel.acquire().await;
-                verify_table_group(delete_chunk, archiver, range, group, data_options).await
-            });
+        if self.delete_whole_groups {
+            // we know that incomplete groups of files are always invalid
+            let _ = select_complete(&mut preprocess)?;
         }
+        let _ = remove_forks::<B>(&mut preprocess, self.archiver.data_provider.clone()).await?;
+        let _ = deduplicate(&mut preprocess)?;
 
+        // ----
+        // 2. now we can execute on that data.
+        // ----
+
+        // group small ranges together to process them in one go
+        let grouped = merge_small(preprocess.input);
+
+        // first, delete files that are marked for deletion
+        let target = self.archiver.target.clone();
+        jobs.spawn(async move {
+            delete(preprocess.for_deletion, target).await
+        });
+
+        process_data(
+            grouped,
+            self.archiver.clone(), self.data_options.clone(), self.delete_whole_groups,
+            &mut jobs
+        );
+
+        let shutdown = global::get_shutdown();
         while !shutdown.is_signalled() {
             tokio::select! {
-            _ = shutdown.signalled() => {
-                tracing::info!("Shutting down...");
-                jobs.shutdown().await
-            },
-            next = jobs.join_next() => {
-                if next.is_none() {
-                    break;
+                _ = shutdown.signalled() => {
+                    tracing::info!("Shutting down...");
+                    jobs.shutdown().await
+                },
+                next = jobs.join_next() => {
+                    if next.is_none() {
+                        break;
+                    }
                 }
             }
-        }
         }
         Ok(())
     }
 
-    async fn select_complete(&self, all: Vec<ArchiveGroup>) -> anyhow::Result<Vec<ArchiveGroup>> {
-        let mut result = vec![];
-        let dry_run = global::is_dry_run();
-        let delete_chunk = self.delete_chunk;
+}
 
-        for group in all {
-            if group.is_complete() {
-                result.push(group);
-            } else {
-                tracing::debug!(range = %group.range, "Delete incomplete group");
-                if delete_chunk {
-                    if !dry_run {
-                        for f in group.tables() {
-                            let _ = self.archiver.target.delete(f).await;
-                        }
-                    }
-                }
-            }
+///
+/// verify data in each group
+fn process_data<B: BlockchainTypes + 'static, TS: TargetStorage + 'static>(
+    ranges: Vec<(Range, Vec<ArchiveGroup>)>,
+    archiver: Arc<Archiver<B, TS>>,
+    data_options: DataOptions,
+    delete_whole_chunk: bool,
+    jobs: &mut JoinSet<anyhow::Result<()>>,
+) {
+    let parallel = Arc::new(Semaphore::new(4));
+    for (range, group) in ranges {
+        let parallel = parallel.clone();
+        let archiver = archiver.clone();
+        let data_options = data_options.clone();
+        jobs.spawn(async move {
+            let _permit = parallel.acquire().await;
+            verify_table_group(delete_whole_chunk, archiver, range, group, data_options).await
+        });
+    }
+}
+
+///
+/// Merge all individual files that cover small ranges into larger list of groups
+/// A small range is 10 or fewer blocks.
+fn merge_small(groups: Vec<ArchiveGroup>) -> Vec<(Range, Vec<ArchiveGroup>)> {
+    let limit = 10;
+    let mut small = RangeBag::new();
+    let mut result = vec![];
+    let mut left = vec![];
+    for group in groups {
+        if group.range.len() > limit {
+            result.push((group.range.clone(), vec![group]));
+        } else {
+            small.append(group.range.clone());
+            left.push(group);
         }
-        Ok(result)
     }
 
-    async fn remove_forks(&self, archived: Vec<ArchiveGroup>) -> anyhow::Result<Vec<ArchiveGroup>> {
-        let mut result = vec![];
-        let dry_run = global::is_dry_run();
-        let mut left = archived;
-
-        while !left.is_empty() {
-            let group = left.remove(0);
-            if group.range.len() > 1 {
-                tracing::trace!(ranage = %group.range, "Large range, no fork checks");
-                result.push(group);
-                continue;
+    let small = small.compact();
+    for range in small.ranges {
+        // TODO makes sense to split into smaller ranges, but we cannot just split by chunks as we need to align with the existing files
+        for group in &left {
+            let mut in_range = vec![];
+            if range.contains(&group.range) {
+                in_range.push(group.clone());
             }
-            let height = group.range.start();
-            let mut forks: Vec<ArchiveGroup> = left.extract_if(.., |g| g.range.start() == group.range.start())
-                .collect();
-            if forks.is_empty() {
-                tracing::trace!("Only one block at height {}, no forks", height);
-                result.push(group);
-                continue;
-            }
-            forks.push(group);
-            let (_, actual, _) = self.archiver.data_provider.fetch_block(&BlockReference::height(height)).await?;
-            let expected_hash = actual.hash();
-            for fork in &forks {
-                if let Range::Single(h) = &fork.range {
-                    if let Some(fork_hash) = h.hash.as_ref() {
-                        if let Ok(fork_hash) = B::BlockHash::from_str(fork_hash.as_str()) {
-                            if fork_hash.eq(&expected_hash) {
-                                result.push(fork.clone());
-                                continue
-                            }
-                        }
-                    }
-
-                    tracing::debug!(range = %fork.range, "Delete forked blocks");
-                    if !dry_run {
-                        for f in fork.tables() {
-                            let _ = self.archiver.target.delete(f).await;
-                        }
-                    }
-                }
-            }
+            result.push((range.clone(), in_range));
         }
-
-        Ok(result)
     }
 
-    async fn deduplicate(&self, archived: Vec<ArchiveGroup>) -> anyhow::Result<Vec<ArchiveGroup>> {
-        let mut result = vec![];
-        let dry_run = global::is_dry_run();
-        let archiver = self.archiver.clone();
+    result
+}
 
-        let mut left = archived;
+///
+/// Delete the list of files
+/// Does nothing is dry-run mode is enabled
+async fn delete<TS: TargetStorage + 'static>(files: Vec<FileReference>, target: Arc<TS>) -> anyhow::Result<()> {
+    let dry_run = global::is_dry_run();
+    if dry_run {
+        tracing::info!("Dry run mode, no files will be deleted");
+    }
+    let shutdown = global::get_shutdown();
+    let semaphore = Arc::new(Semaphore::new(4));
+    for f in &files {
+        tracing::trace!(file = %f.path, "Deleting file");
+        if shutdown.is_signalled() {
+            break;
+        }
+        let shutdown = shutdown.branch();
+        let semaphore = semaphore.clone();
+        let target = target.clone();
+        let f = f.clone();
+        tokio::spawn(async move {
+            if shutdown.is_signalled() {
+                return;
+            }
+            let _permit = semaphore.acquire().await;
+            let _ = target.delete(&f).await;
+        });
+    }
+    Ok(())
+}
 
-        while !left.is_empty() {
-            let group = left.remove(0);
-            let all_groups_in_range: Vec<ArchiveGroup> = left.extract_if(.., |g| g.range.is_intersected_with(&group.range))
-                .collect();
-            let group = if all_groups_in_range.len() > 1 {
-                // we got few files in the range
-                let best = self.find_best(all_groups_in_range.clone()).await?;
-                // delete the other files
-                for other in &all_groups_in_range {
-                    if best.ne(other) {
-                        tracing::debug!(range = %group.range, "Delete duplicate group");
-                        if !dry_run {
-                            for f in other.tables() {
-                                let _ = archiver.target.delete(f).await;
-                            }
-                        }
-                    }
-                }
-                best.clone()
-            } else {
-                group
-            };
+///
+/// Leaves only groups files where all the files are present (as specified by DataOptions in the group)
+/// Marks all other files for deletion
+fn select_complete(data: &mut Preprocess) -> anyhow::Result<()> {
+    let mut result = vec![];
+    let input = data.inputs();
+
+    for group in input {
+        if group.is_complete() {
             result.push(group);
+        } else {
+            tracing::debug!(range = %group.range, "Delete incomplete group");
+            data.delete_all(group);
         }
-
-        Ok(result)
     }
+    data.input = result;
+    Ok(())
+}
 
-    fn merge_small(&self, groups: Vec<ArchiveGroup>) -> Vec<(Range, Vec<ArchiveGroup>)> {
-        let limit = 10;
-        let mut small = RangeBag::new();
-        let mut result = vec![];
-        let mut left = vec![];
-        for group in groups {
-            if group.range.len() > limit {
-                result.push((group.range.clone(), vec![group]));
-            } else {
-                small.append(group.range.clone());
-                left.push(group);
-            }
+///
+/// Cleans up individual heights (as made by Stream command) when a height contains multiple blocks (i.e., a fork happened at that height)
+/// In those cases, it uses the block hash from the filename, and checks the blockchain to see which block is
+/// the actual one and removes other files from the archive
+async fn remove_forks<B: BlockchainTypes + 'static>(data: &mut Preprocess, data_provider: Arc<B::DataProvider>) -> anyhow::Result<()> {
+    let mut result = vec![];
+    let mut left = data.inputs();
+
+    while !left.is_empty() {
+        let group = left.remove(0);
+        if group.range.len() > 1 {
+            tracing::trace!(ranage = %group.range, "Large range, no fork checks");
+            result.push(group);
+            continue;
         }
-
-        let small = small.compact();
-        for range in small.ranges {
-            for group in &left {
-                let mut in_range = vec![];
-                if range.contains(&group.range) {
-                    in_range.push(group.clone());
+        let height = group.range.start();
+        let mut forks: Vec<ArchiveGroup> = left.extract_if(.., |g| g.range.start() == group.range.start())
+            .collect();
+        if forks.is_empty() {
+            tracing::trace!("Only one block at height {}, no forks", height);
+            result.push(group);
+            continue;
+        }
+        forks.push(group);
+        let (_, actual, _) = data_provider.fetch_block(&BlockReference::height(height)).await?;
+        let expected_hash = actual.hash();
+        for fork in forks {
+            if let Range::Single(h) = &fork.range {
+                if let Some(fork_hash) = h.hash.as_ref() {
+                    if let Ok(fork_hash) = B::BlockHash::from_str(fork_hash.as_str()) {
+                        if fork_hash.eq(&expected_hash) {
+                            result.push(fork.clone());
+                            continue
+                        }
+                    }
                 }
-                result.push((range.clone(), in_range));
+
+                tracing::debug!(range = %fork.range, "Delete forked blocks");
+                data.delete_all(fork);
             }
         }
-
-        result
     }
+    data.input = result;
 
-    async fn find_best(&self, groups: Vec<ArchiveGroup>) -> anyhow::Result<ArchiveGroup> {
-        groups.into_iter().max_by_key(|g| g.range.len())
-            .ok_or_else(|| anyhow::anyhow!("Empty group"))
+    Ok(())
+}
+
+///
+/// Remove all intersected ranges, by keeping only the groups that covers the largest range
+fn deduplicate(data: &mut Preprocess) -> anyhow::Result<()> {
+    let mut result = vec![];
+
+    let mut left = data.inputs();
+
+    while !left.is_empty() {
+        let group = left.remove(0);
+        let all_groups_in_range: Vec<ArchiveGroup> = left.extract_if(.., |g| g.range.is_intersected_with(&group.range))
+            .collect();
+        let group = if all_groups_in_range.len() > 1 {
+            // we got few files in the range
+            // select ib that it the largest
+            let best = all_groups_in_range.iter()
+                .max_by_key(|g| g.range.len())
+                .ok_or_else(|| anyhow::anyhow!("Empty group"))?;
+            // delete the other files
+            for other in &all_groups_in_range {
+                if best.ne(other) {
+                    tracing::debug!(range = %group.range, "Delete duplicate group");
+                    data.delete_all(other.clone());
+                }
+            }
+            best.clone()
+        } else {
+            group
+        };
+        result.push(group);
     }
+    data.input = result;
 
+    Ok(())
 }
 
 #[async_trait]
@@ -316,7 +407,7 @@ impl<B: BlockchainTypes + 'static, FR: TargetStorage + 'static> CommandExecutor 
     }
 }
 
-async fn verify_table_group<B: BlockchainTypes, TS: TargetStorage>(delete_chunk: bool, archiver: Arc<Archiver<B, TS>>, range: Range, groups: Vec<ArchiveGroup>, data_options: DataOptions) -> anyhow::Result<()> {
+async fn verify_table_group<B: BlockchainTypes + , TS: TargetStorage + 'static>(delete_whole_chunk: bool, archiver: Arc<Archiver<B, TS>>, range: Range, groups: Vec<ArchiveGroup>, data_options: DataOptions) -> anyhow::Result<()> {
     let shutdown = global::get_shutdown();
     let mut for_deletion: Vec<&FileReference> = vec![];
 
@@ -329,18 +420,13 @@ async fn verify_table_group<B: BlockchainTypes, TS: TargetStorage>(delete_chunk:
         return Ok(());
     }
 
-    if !for_deletion.is_empty() && delete_chunk {
+    if !for_deletion.is_empty() && delete_whole_chunk {
         tracing::info!(range = %range, "Deleting all tables in the chunk due to --fix.clean");
         for_deletion = groups.iter().flat_map(|g| g.tables()).collect();
     }
 
-    let dry_run = global::is_dry_run();
-    for f in for_deletion {
-        tracing::info!(range = %range, file = %f.path, "Deleting corrupted or incomplete file");
-        if !dry_run {
-            archiver.target.delete(&f).await?;
-        }
-    }
+    delete(for_deletion.into_iter().cloned().collect(), archiver.target.clone()).await?;
+
     Ok(())
 }
 
