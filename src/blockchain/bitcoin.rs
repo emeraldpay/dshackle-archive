@@ -62,36 +62,42 @@ impl BitcoinData {
     }
 
     async fn get_bet_block_hash(&self) -> Result<BlockHash> {
+        tracing::debug!("Get best block hash");
         let data = self.blockchain.native_call("getbestblockhash", b"[]".to_vec()).await?;
         let hash = JsonString::try_from(data)?;
         BlockHash::from_str(&hash.0)
     }
 
     async fn get_block_hash(&self, height: u64) -> Result<BlockHash> {
-        let params = format!("[\"{}\"]", height).as_bytes().to_vec();
+        tracing::debug!(height = %height, "Get block hash at height");
+        let params = format!("[{}]", height).as_bytes().to_vec();
         let data = self.blockchain.native_call("getblockhash", params).await?;
         let hash = JsonString::try_from(data)?;
         BlockHash::from_str(&hash.0)
     }
 
     async fn get_block_at(&self, height: u64) -> Result<Vec<u8>> {
+        tracing::debug!(height = %height, "Get block at height");
         let hash = self.get_block_hash(height).await?;
         self.get_block(&hash).await
     }
 
     async fn get_block(&self, hash: &BlockHash) -> Result<Vec<u8>> {
+        tracing::debug!(block_hash = %format!("{:x}", hash), "Get block by hash");
         let params = format!("[\"{:x}\", 1]", &hash).as_bytes().to_vec();
         let data = self.blockchain.native_call("getblock", params).await?;
         Ok(data)
     }
 
     async fn get_tx(&self, hash: &TxHash) -> Result<Vec<u8>> {
+        tracing::debug!(tx_hash = %format!("{:x}", hash), "Get transaction by hash");
         let params = format!("[\"{:x}\", true]", &hash).as_bytes().to_vec();
         let data = self.blockchain.native_call("getrawtransaction", params).await?;
         Ok(data)
     }
 
     async fn get_tx_raw(&self, hash: &TxHash) -> Result<Vec<u8>> {
+        tracing::debug!(tx_hash = %format!("{:x}", hash), "Get raw transaction by hash");
         let params = format!("[\"{:x}\", false]", &hash).as_bytes().to_vec();
         let data = self.blockchain.native_call("getrawtransaction", params).await?;
         let raw = JsonString::try_from(data)?;

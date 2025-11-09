@@ -65,16 +65,22 @@ impl Blockchain {
             .into_inner();
 
         if let Some(resp) = response.next().await {
-            if let Ok(value) = resp {
-                if value.succeed {
-                    Ok(value.payload)
-                } else {
-                    Err(BlockchainError::FailResponse(value.error_message))
+            match resp {
+                Ok(value) => {
+                    if value.succeed {
+                        Ok(value.payload)
+                    } else {
+                        tracing::error!("Blockchain call failed. {}() -> {}", method, value.error_message);
+                        Err(BlockchainError::FailResponse(method.to_string(), value.error_message))
+                    }
                 }
-            } else {
-                Err(BlockchainError::IO)
+                Err(e) => {
+                    tracing::warn!("Error response from blockchain. {}(). Status: {}", method, e);
+                    Err(BlockchainError::IO)
+                }
             }
         } else {
+            tracing::warn!("No response from blockchain. {}()", method);
             Err(BlockchainError::IO)
         }
     }
@@ -89,7 +95,10 @@ impl Blockchain {
             let response =  client
                 .subscribe_head(Chain {r#type: chain })
                 .await
-                .map_err(|e| BlockchainError::FailResponse(format!("Cannot request head: {}", e)));
+                .map_err(|e| {
+                    tracing::error!("Cannot subscribe to head: {:?}", e);
+                    BlockchainError::IO
+                });
 
             if let Err(e) = response {
                 tracing::error!("Cannot request head: {:?}", e);

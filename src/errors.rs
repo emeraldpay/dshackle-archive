@@ -26,8 +26,8 @@ pub enum BlockchainError {
     NoConnection,
     #[error("Invalid response from blockchain upstream")]
     InvalidResponse,
-    #[error("Blockchain Error: {0}")]
-    FailResponse(String),
+    #[error("Blockchain Error: {0} -> {1}")]
+    FailResponse(String, String),
     #[error("IO Error")]
     IO,
 }
@@ -53,8 +53,8 @@ impl From<ConfigError> for Error {
 }
 
 impl From<tonic::Status> for BlockchainError {
-    fn from(e: tonic::Status) -> Self {
-        BlockchainError::FailResponse(e.to_string())
+    fn from(_e: tonic::Status) -> Self {
+        BlockchainError::IO
     }
 }
 

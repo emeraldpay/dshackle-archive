@@ -34,24 +34,28 @@ impl EthereumData {
     }
 
     async fn get_block_at(&self, height: u64) -> Result<Vec<u8>> {
+        tracing::debug!(height = %height, "Get block at height");
         let params = format!("[\"{:#01x}\", false]", height).as_bytes().to_vec();
         let data = self.blockchain.native_call("eth_getBlockByNumber", params).await?;
         Ok(data)
     }
 
     pub async fn get_block_data(&self, hash: &BlockHash) -> Result<BlockJson<TxHash>> {
+        tracing::debug!(hash = %format!("0x{:x}", hash), "Get block JSON");
         let raw_block = self.get_block(hash).await?;
         serde_json::from_slice::<BlockJson<TxHash>>(raw_block.as_slice())
             .map_err(|_| anyhow!("Invalid block JSON response"))
     }
 
     async fn get_block(&self, hash: &BlockHash) -> Result<Vec<u8>> {
+        tracing::debug!(hash = %format!("0x{:x}", hash), "Get block by hash");
         let params = format!("[\"0x{:x}\", false]", hash).as_bytes().to_vec();
         let data = self.blockchain.native_call("eth_getBlockByHash", params).await?;
         Ok(data)
     }
 
     pub async fn get_finalized_block_data(&self) -> Result<BlockJson<TxHash>> {
+        tracing::debug!("Get finalized block JSON");
         let params = "[\"finalized\", false]".as_bytes().to_vec();
         let raw_block = self.blockchain.native_call("eth_getBlockByNumber", params).await?;
         serde_json::from_slice::<BlockJson<TxHash>>(raw_block.as_slice())
@@ -59,24 +63,28 @@ impl EthereumData {
     }
 
     async fn get_uncle(&self, hash: &BlockHash, i: usize) -> Result<Vec<u8>> {
+        tracing::debug!(hash = %format!("0x{:x}", hash), "Get uncle {}", i);
         let params = format!("[\"0x{:x}\", \"0x{:x}\"]", hash, i).as_bytes().to_vec();
         let data = self.blockchain.native_call("eth_getUncleByBlockHashAndIndex", params).await?;
         Ok(data)
     }
 
     async fn get_tx(&self, hash: &TxHash) -> Result<Vec<u8>> {
+        tracing::debug!(tx_hash = %format!("0x{:x}", hash), "Get transaction");
         let params = format!("[\"0x{:x}\"]", hash).as_bytes().to_vec();
         let data = self.blockchain.native_call("eth_getTransactionByHash", params).await?;
         Ok(data)
     }
 
     async fn get_tx_receipt(&self, hash: &TxHash) -> Result<Vec<u8>> {
+        tracing::debug!(tx_hash = %format!("0x{:x}", hash), "Get transaction receipt");
         let params = format!("[\"0x{:x}\"]", hash).as_bytes().to_vec();
         let data = self.blockchain.native_call("eth_getTransactionReceipt", params).await?;
         Ok(data)
     }
 
     async fn get_tx_raw(&self, hash: &TxHash) -> Result<Vec<u8>> {
+        tracing::debug!(tx_hash = %format!("0x{:x}", hash), "Get raw transaction");
         let params = format!("[\"0x{:x}\"]", hash).as_bytes().to_vec();
         let data_as_json = self.blockchain.native_call("eth_getRawTransactionByHash", params).await?;
         if data_as_json == b"null" {
@@ -137,6 +145,7 @@ impl EthereumData {
     }
 
     async fn get_tx_trace(&self, hash: &TxHash) -> Result<Vec<u8>> {
+        tracing::debug!(tx_hash = %format!("0x{:x}", hash), "Get transaction trace");
         // See https://geth.ethereum.org/docs/developers/evm-tracing/built-in-tracers#call-tracer
         let tracer = r#"{
             "tracer": "callTracer"
@@ -147,6 +156,7 @@ impl EthereumData {
     }
 
     async fn get_tx_state_diff(&self, hash: &TxHash) -> Result<Vec<u8>> {
+        tracing::debug!(tx_hash = %format!("0x{:x}", hash), "Get transaction state diff");
         // See https://geth.ethereum.org/docs/developers/evm-tracing/built-in-tracers#prestate-tracer
         let tracer = r#"{
             "tracer": "prestateTracer",
