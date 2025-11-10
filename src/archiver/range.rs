@@ -277,14 +277,14 @@ impl FromStr for Range {
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         let parts: Vec<&str> = s.split("..").collect();
         if parts.len() == 1 {
-            let h = parts[0].parse::<u64>()?;
+            let h = parts[0].replace("_", "").parse::<u64>()?;
             return Ok(Range::Single(Height::from(h)));
         }
         if parts.len() != 2 {
             return Err(anyhow!("Invalid range: {}", s));
         }
-        let start = parts[0].parse::<u64>()?;
-        let end = parts[1].parse::<u64>()?;
+        let start = parts[0].replace("_", "").parse::<u64>()?;
+        let end = parts[1].replace("_", "").parse::<u64>()?;
         Ok(Range::new(start, end))
     }
 }
@@ -618,5 +618,32 @@ mod tests {
         let other = Range::new(10, 20);
         let result = base.cut(&other);
         assert_eq!(result, vec![]);
+    }
+
+    #[test]
+    fn test_fromstr_single() {
+        let r = Range::from_str("42").unwrap();
+        assert_eq!(r, Range::Single(Height::from(42)));
+    }
+
+    #[test]
+    fn test_fromstr_multiple() {
+        let r = Range::from_str("10..20").unwrap();
+        assert_eq!(r, Range::Multiple(Height::from(10), Height::from(20)));
+    }
+
+    #[test]
+    fn test_fromstr_multiple_underscore() {
+        let r = Range::from_str("10_000..12_000").unwrap();
+        assert_eq!(r, Range::Multiple(Height::from(10_000), Height::from(12_000)));
+    }
+
+    #[test]
+    fn test_fromstr_invalid() {
+        assert!(Range::from_str("abc").is_err());
+        assert!(Range::from_str("10..").is_err());
+        assert!(Range::from_str("..20").is_err());
+        assert!(Range::from_str("10..20..30").is_err());
+        assert!(Range::from_str("").is_err());
     }
 }
