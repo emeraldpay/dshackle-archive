@@ -1,3 +1,4 @@
+use std::fmt::Display;
 use std::str::FromStr;
 use apache_avro::Schema;
 use serde::{Deserialize, Serialize};
@@ -34,6 +35,17 @@ impl FromStr for DataKind {
             "traces" | "trace" => Ok(DataKind::TransactionTraces),
             _ => Err(format!("Unknown data kind: {}", s)),
         }
+    }
+}
+
+impl Display for DataKind {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let name = match self {
+            DataKind::Blocks => "Blocks",
+            DataKind::Transactions => "Transactions",
+            DataKind::TransactionTraces => "Traces",
+        };
+        write!(f, "{}", name)
     }
 }
 

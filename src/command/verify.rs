@@ -1,7 +1,7 @@
-use std::collections::{HashSet};
+use std::collections::{HashMap, HashSet};
 use std::marker::PhantomData;
 use std::str::FromStr;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use apache_avro::types::{Record, Value};
 use async_trait::async_trait;
 use tokio::sync::Semaphore;
@@ -23,7 +23,7 @@ use crate::{
         TargetStorage
     },
 };
-use crate::archiver::datakind::{BlockOptions, TraceOptions, TxOptions};
+use crate::archiver::datakind::{BlockOptions, DataKind, TraceOptions, TxOptions};
 use crate::archiver::range_bag::RangeBag;
 use crate::archiver::range_group::RangeGroupError;
 use crate::blockchain::block_seq::BlockSequence;
@@ -64,6 +64,42 @@ pub struct VerifyCommand<B: BlockchainTypes, TS: TargetStorage> {
     /// i.e., if a Tx is invalid (or missing, etc.) the delete the file with corresponding blocks as well even if it's verified as valid
     delete_whole_groups: bool,
     chunk: usize,
+}
+
+struct TableStat {
+    processed: usize,
+    deleted: usize,
+}
+
+impl Default for TableStat {
+    fn default() -> Self {
+        Self {
+            processed: 0,
+            deleted: 0,
+        }
+    }
+}
+
+struct VerificationStat {
+    tables: HashMap<DataKind, TableStat>,
+}
+
+impl VerificationStat {
+    fn new() -> Self {
+        Self {
+            tables: HashMap::new(),
+        }
+    }
+
+    fn on_processed(&mut self, kind: &DataKind, range: &Range) {
+        let stat = self.tables.entry(kind.clone()).or_insert_with(|| TableStat::default());
+        stat.processed += range.len();
+    }
+
+    fn on_delete(&mut self, kind: &DataKind, range: &Range) {
+        let stat = self.tables.entry(kind.clone()).or_insert_with(|| TableStat::default());
+        stat.deleted += range.len();
+    }
 }
 
 ///
@@ -113,8 +149,14 @@ impl<B: BlockchainTypes + 'static, TS: TargetStorage + 'static> VerifyCommand<B,
         })
     }
 
-    async fn verify_chunk(&self, archived: ArchivesList) -> anyhow::Result<()> {
+    async fn verify_chunk(&self, archived: ArchivesList, stat: Arc<Mutex<VerificationStat>>) -> anyhow::Result<()> {
         let mut jobs = JoinSet::new();
+
+        for g in archived.iter() {
+            for table in g.tables() {
+                stat.lock().unwrap().on_processed(&table.kind, &g.range);
+            }
+        }
 
         // ----
         // 1. Apply verification that can be done on the filename level
@@ -137,6 +179,9 @@ impl<B: BlockchainTypes + 'static, TS: TargetStorage + 'static> VerifyCommand<B,
         let grouped = merge_small(preprocess.input);
 
         // first, delete files that are marked for deletion
+        for delete in &preprocess.for_deletion {
+            stat.lock().unwrap().on_delete(&delete.kind, &delete.range);
+        }
         let target = self.archiver.target.clone();
         jobs.spawn(async move {
             delete(preprocess.for_deletion, target).await
@@ -145,7 +190,8 @@ impl<B: BlockchainTypes + 'static, TS: TargetStorage + 'static> VerifyCommand<B,
         process_data(
             grouped,
             self.archiver.clone(), self.data_options.clone(), self.delete_whole_groups,
-            &mut jobs
+            &mut jobs,
+            stat
         );
 
         let shutdown = global::get_shutdown();
@@ -175,15 +221,17 @@ fn process_data<B: BlockchainTypes + 'static, TS: TargetStorage + 'static>(
     data_options: DataOptions,
     delete_whole_chunk: bool,
     jobs: &mut JoinSet<anyhow::Result<()>>,
+    stat: Arc<Mutex<VerificationStat>>,
 ) {
     let parallel = Arc::new(Semaphore::new(4));
     for (range, group) in ranges {
         let parallel = parallel.clone();
         let archiver = archiver.clone();
         let data_options = data_options.clone();
+        let stat = stat.clone();
         jobs.spawn(async move {
             let _permit = parallel.acquire().await;
-            verify_table_group(delete_whole_chunk, archiver, range, group, data_options).await
+            verify_table_group(delete_whole_chunk, archiver, range, group, data_options, stat).await
         });
     }
 }
@@ -207,14 +255,14 @@ fn merge_small(groups: Vec<ArchiveGroup>) -> Vec<(Range, Vec<ArchiveGroup>)> {
 
     let small = small.compact();
     for range in small.ranges {
-        // TODO makes sense to split into smaller ranges, but we cannot just split by chunks as we need to align with the existing files
+        // TODO makes sense to split into smaller ranges, but we cannot just split by chunks as we need to align with the existing files (i.e., we cannot split them into different groups)
+        let mut in_range = vec![];
         for group in &left {
-            let mut in_range = vec![];
             if range.contains(&group.range) {
                 in_range.push(group.clone());
             }
-            result.push((range.clone(), in_range));
         }
+        result.push((range.clone(), in_range));
     }
 
     result
@@ -231,7 +279,7 @@ async fn delete<TS: TargetStorage + 'static>(files: Vec<FileReference>, target: 
     let shutdown = global::get_shutdown();
     let semaphore = Arc::new(Semaphore::new(4));
     for f in &files {
-        tracing::trace!(file = %f.path, "Deleting file");
+        tracing::debug!(range = %f.range, dry_run = %dry_run, "Deleting file: {}", f.path);
         if shutdown.is_signalled() {
             break;
         }
@@ -361,6 +409,7 @@ impl<B: BlockchainTypes + 'static, FR: TargetStorage + 'static> CommandExecutor 
         let ranges = full_range.split_chunks(self.chunk, false);
         let shutdown = global::get_shutdown();
         let dry_run = global::is_dry_run();
+        let stat = Arc::new(Mutex::new(VerificationStat::new()));
 
         for range in ranges {
             tracing::info!(range = %range, "Verifying chunk");
@@ -383,6 +432,11 @@ impl<B: BlockchainTypes + 'static, FR: TargetStorage + 'static> CommandExecutor 
                                 // error means there is something wrong with the file. ex. a duplicate table
                                 match e {
                                     RangeGroupError::Duplicate(f1, f2) => {
+                                        {
+                                            let mut stat = stat.lock().unwrap();
+                                            stat.on_delete(&f1.kind, &f1.range);
+                                            stat.on_delete(&f2.kind, &f2.range);
+                                        }
                                         if !dry_run {
                                             let _ = tokio::join!(
                                                 self.archiver.target.delete(&f1),
@@ -400,14 +454,31 @@ impl<B: BlockchainTypes + 'static, FR: TargetStorage + 'static> CommandExecutor 
                 }
             }
 
-            self.verify_chunk(archived).await?;
+            self.verify_chunk(archived, stat.clone()).await?;
+        }
+
+        {
+            let stat = stat.lock().unwrap();
+            for (kind, table_stat) in &stat.tables {
+                tracing::info!(
+                    "Verification stats {}: processed = {} blocks, deleted = {} blocks",
+                    kind, table_stat.processed, table_stat.deleted
+                );
+            }
         }
 
         Ok(())
     }
 }
 
-async fn verify_table_group<B: BlockchainTypes + , TS: TargetStorage + 'static>(delete_whole_chunk: bool, archiver: Arc<Archiver<B, TS>>, range: Range, groups: Vec<ArchiveGroup>, data_options: DataOptions) -> anyhow::Result<()> {
+async fn verify_table_group<B: BlockchainTypes + , TS: TargetStorage + 'static>(
+    delete_whole_chunk: bool,
+    archiver: Arc<Archiver<B, TS>>,
+    range: Range,
+    groups: Vec<ArchiveGroup>,
+    data_options: DataOptions,
+    stat: Arc<Mutex<VerificationStat>>
+) -> anyhow::Result<()> {
     let shutdown = global::get_shutdown();
     let mut for_deletion: Vec<&FileReference> = vec![];
 
@@ -423,6 +494,13 @@ async fn verify_table_group<B: BlockchainTypes + , TS: TargetStorage + 'static>(
     if !for_deletion.is_empty() && delete_whole_chunk {
         tracing::info!(range = %range, "Deleting all tables in the chunk due to --fix.clean");
         for_deletion = groups.iter().flat_map(|g| g.tables()).collect();
+    }
+
+    {
+        let mut stat = stat.lock().unwrap();
+        for file in &for_deletion {
+            stat.on_delete(&file.kind, &file.range);
+        }
     }
 
     delete(for_deletion.into_iter().cloned().collect(), archiver.target.clone()).await?;
@@ -545,6 +623,7 @@ impl<B: BlockchainTypes, TS: TargetStorage> VerifyTable<TxOptions, B, TS> for Tx
         let mut existing_txes = HashSet::new();
 
         for file in files {
+            tracing::debug!(range = %file.range, "Processing tx file: {}", file.path);
             let mut txes = storage.open(file)
                 .await.map_err(|e| format!("Failed to open txes storage: {}", e))?
                 .read().map_err(|e| format!("Failed to read txes storage: {}", e))?;
@@ -616,6 +695,7 @@ impl<B: BlockchainTypes, TS: TargetStorage> VerifyTable<TraceOptions, B, TS> for
         let mut existing_txes = HashSet::new();
 
         for file in files {
+            tracing::debug!(range = %file.range, "Processing trace file: {}", file.path);
             let mut traces = storage.open(file)
                 .await.map_err(|e| format!("Failed to open traces storage: {}", e))?
                 .read().map_err(|e| format!("Failed to read traces storage: {}", e))?;
@@ -693,6 +773,7 @@ impl<B: BlockchainTypes, TS: TargetStorage> VerifyTable<BlockOptions, B, TS> for
         let shutdown = global::get_shutdown();
 
         for file in files {
+            tracing::debug!(range = %file.range, "Processing block file: {}", file.path);
             let mut blocks = storage.open(file)
                 .await.map_err(|e| format!("Failed to open blocks storage: {}", e))?
                 .read().map_err(|e| format!("Failed to read blocks storage: {}", e))?;
@@ -746,10 +827,13 @@ impl<B: BlockchainTypes, TS: TargetStorage> VerifyTable<BlockOptions, B, TS> for
                     },
                 }
             }
+            if shutdown.is_signalled() {
+                break;
+            }
         }
 
         if heights.len() != range.len() {
-            tracing::error!(range = %range, "Missing blocks in the table");
+            tracing::error!(range = %range, "Missing blocks in the table. {} act != {} exp", heights.len(), range.len());
             return Err("Missing blocks in the table".to_string());
         }
 
@@ -789,13 +873,14 @@ mod tests {
     use crate::blockchain::mock::{MockBlock, MockData, MockTx, MockType};
     use crate::archiver::Archiver;
     use crate::command::CommandExecutor;
-    use crate::command::verify::VerifyCommand;
+    use crate::command::verify::{merge_small, VerifyCommand};
     use crate::archiver::filenames::Filenames;
     use crate::storage::objects::ObjectsStorage;
     use futures_util::StreamExt;
     use crate::blockchain::{BlockReference, BlockchainData};
-    use crate::archiver::datakind::DataKind;
+    use crate::archiver::datakind::{DataKind, DataTables};
     use crate::archiver::range::Range;
+    use crate::archiver::range_group::ArchiveGroup;
     use crate::storage::{TargetFileWriter, TargetStorage};
     use crate::testing;
 
@@ -1079,4 +1164,57 @@ mod tests {
         assert_eq!(files.len(), 0);
     }
 
+    #[test]
+    fn test_merge_small_empty() {
+        let groups = vec![];
+        let result = merge_small(groups);
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn test_merge_small_all_large() {
+        let groups = vec![
+            ArchiveGroup::new(Range::new(0, 20), DataTables::default()),
+            ArchiveGroup::new(Range::new(21, 41), DataTables::default()),
+        ];
+        let result = merge_small(groups.clone());
+        assert_eq!(result.len(), 2);
+        assert_eq!(result[0].1[0].range, groups[0].range);
+        assert_eq!(result[1].1[0].range, groups[1].range);
+    }
+
+    #[test]
+    fn test_merge_small_all_small() {
+        let groups = vec![
+            ArchiveGroup::new(Range::single(5), DataTables::default()),
+            ArchiveGroup::new(Range::new(0, 4), DataTables::default()),
+            ArchiveGroup::new(Range::new(6, 10), DataTables::default()),
+
+        ];
+        let result = merge_small(groups.clone());
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].0, Range::new(0, 10));
+        assert_eq!(result[0].1.len(), 3);
+    }
+
+    #[test]
+    fn test_merge_small_mixed() {
+        let large = ArchiveGroup::new(Range::new(0, 20), DataTables::default());
+        let small1 = ArchiveGroup::new(Range::new(21, 25), DataTables::default());
+        let small2 = ArchiveGroup::new(Range::single(26), DataTables::default());
+        let groups = vec![large.clone(), small1.clone(), small2.clone()];
+        let result = merge_small(groups.clone());
+
+        assert_eq!(result.len(), 2);
+
+        let all_large: Vec<&(Range, Vec<ArchiveGroup>)> = result.iter().filter(|(r, _)| r.len() > 10).collect();
+        let all_small: Vec<&(Range, Vec<ArchiveGroup>)> = result.iter().filter(|(r, _)| r.len() <= 10).collect();
+
+        assert_eq!(all_large[0].0, Range::new(0, 20));
+        assert_eq!(all_large[0].1.len(), 1);
+
+        assert_eq!(all_small[0].0, Range::new(21, 26));
+        assert_eq!(all_small[0].1.len(), 2);
+
+    }
 }

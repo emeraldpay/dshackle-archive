@@ -72,6 +72,10 @@ impl Range {
         }
     }
 
+    pub fn single(height: u64) -> Self {
+        Range::Single(Height::from(height))
+    }
+
     pub fn up_to(size: u64, target: &Self) -> Self {
         let target_start = target.start();
         let start = if size > target_start {
