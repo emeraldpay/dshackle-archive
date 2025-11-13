@@ -329,10 +329,10 @@ impl BlockDetails<EthereumType> for Block<TxHash> {
     }
 
     fn hash(&self) -> <EthereumType as BlockchainTypes>::BlockHash {
-        self.hash()
+        self.header.hash
     }
 
     fn parent(&self) -> <EthereumType as BlockchainTypes>::BlockHash {
-        self.header.hash
+        self.header.parent_hash
     }
 }

@@ -790,6 +790,7 @@ impl<B: BlockchainTypes, TS: TargetStorage> VerifyTable<BlockOptions, B, TS> for
 
                     record = blocks.recv() => {
                         if record.is_none() {
+                            tracing::trace!("Finished reading blocks from the file: {}", file.path);
                             break
                         }
                         let record = record.unwrap();
@@ -825,6 +826,7 @@ impl<B: BlockchainTypes, TS: TargetStorage> VerifyTable<BlockOptions, B, TS> for
                             return Err("Invalid json data".to_string());
                         }
                         let block = block.unwrap();
+                        tracing::trace!(height = height, "Block {:?} is on top of {:?}", block.hash(), block.parent());
                         block_seq.append(height, block.parent(), block.hash());
                         expected_txes.extend(block.txes());
                     },
