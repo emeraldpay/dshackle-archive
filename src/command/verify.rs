@@ -245,7 +245,10 @@ fn merge_small(groups: Vec<ArchiveGroup>) -> Vec<(Range, Vec<ArchiveGroup>)> {
     let mut result = vec![];
     let mut left = vec![];
     for group in groups {
-        if group.range.len() > limit {
+        // we do not merge:
+        // 1. large groups
+        // 2. incomplete groups as they would break sequence; note that incomplete groups are not necessary come here, but if Verify is running without --fix.clean they can be present
+        if group.range.len() > limit || !group.is_complete() {
             result.push((group.range.clone(), vec![group]));
         } else {
             small.append(group.range.clone());
@@ -890,7 +893,7 @@ mod tests {
     use crate::archiver::datakind::{DataKind, DataTables};
     use crate::archiver::range::Range;
     use crate::archiver::range_group::ArchiveGroup;
-    use crate::storage::{TargetFileWriter, TargetStorage};
+    use crate::storage::{FileReference, TargetFileWriter, TargetStorage};
     use crate::testing;
 
     fn create_archiver(mem: Arc<InMemory>) -> Archiver<MockType, ObjectsStorage<InMemory>> {
@@ -1195,10 +1198,15 @@ mod tests {
     #[test]
     fn test_merge_small_all_small() {
         let groups = vec![
-            ArchiveGroup::new(Range::single(5), DataTables::default()),
-            ArchiveGroup::new(Range::new(0, 4), DataTables::default()),
-            ArchiveGroup::new(Range::new(6, 10), DataTables::default()),
-
+            ArchiveGroup::new(Range::single(5), DataTables::default())
+                .with_file(FileReference::new("05-block", DataKind::Blocks, Range::single(5))).unwrap()
+                .with_file(FileReference::new("05-tx", DataKind::Transactions, Range::single(5))).unwrap(),
+            ArchiveGroup::new(Range::new(0, 4), DataTables::default())
+                .with_file(FileReference::new("00_04-block", DataKind::Blocks, Range::new(0, 4))).unwrap()
+                .with_file(FileReference::new("00_04-tx", DataKind::Transactions, Range::new(0, 4))).unwrap(),
+            ArchiveGroup::new(Range::new(6, 10), DataTables::default())
+                .with_file(FileReference::new("06_10-block", DataKind::Blocks, Range::new(6, 10))).unwrap()
+                .with_file(FileReference::new("06_10-tx", DataKind::Transactions, Range::new(6, 10))).unwrap(),
         ];
         let result = merge_small(groups.clone());
         assert_eq!(result.len(), 1);
@@ -1207,10 +1215,41 @@ mod tests {
     }
 
     #[test]
+    fn test_merge_small_skips_incomplete() {
+        let groups = vec![
+            //no block
+            ArchiveGroup::new(Range::single(5), DataTables::default())
+                .with_file(FileReference::new("05-tx", DataKind::Transactions, Range::single(5))).unwrap(),
+
+            // no tx
+            ArchiveGroup::new(Range::new(0, 4), DataTables::default())
+                .with_file(FileReference::new("00_04-block", DataKind::Blocks, Range::new(0, 4))).unwrap(),
+
+            // complete
+            ArchiveGroup::new(Range::new(6, 10), DataTables::default())
+                .with_file(FileReference::new("06_10-block", DataKind::Blocks, Range::new(6, 10))).unwrap()
+                .with_file(FileReference::new("06_10-tx", DataKind::Transactions, Range::new(6, 10))).unwrap(),
+            ArchiveGroup::new(Range::single(11), DataTables::default())
+                .with_file(FileReference::new("11-block", DataKind::Blocks, Range::single(11))).unwrap()
+                .with_file(FileReference::new("11-tx", DataKind::Transactions, Range::single(11))).unwrap(),
+        ];
+        let result = merge_small(groups.clone());
+        assert_eq!(result.len(), 3);
+        assert!(result.iter().any(|r| r.0 == Range::new(6, 11)));
+    }
+
+    #[test]
     fn test_merge_small_mixed() {
-        let large = ArchiveGroup::new(Range::new(0, 20), DataTables::default());
-        let small1 = ArchiveGroup::new(Range::new(21, 25), DataTables::default());
-        let small2 = ArchiveGroup::new(Range::single(26), DataTables::default());
+        let large = ArchiveGroup::new(Range::new(0, 20), DataTables::default())
+            .with_file(FileReference::new("00_20-block", DataKind::Blocks, Range::new(0, 20))).unwrap()
+            .with_file(FileReference::new("00_20-tx", DataKind::Transactions, Range::new(0, 20))).unwrap();
+        let small1 = ArchiveGroup::new(Range::new(21, 25), DataTables::default())
+            .with_file(FileReference::new("21_25-block", DataKind::Blocks, Range::new(21, 25))).unwrap()
+            .with_file(FileReference::new("21_25-tx", DataKind::Transactions, Range::new(21, 25))).unwrap();
+        let small2 = ArchiveGroup::new(Range::single(26), DataTables::default())
+            .with_file(FileReference::new("26-block", DataKind::Blocks, Range::single(26))).unwrap()
+            .with_file(FileReference::new("26-tx", DataKind::Transactions, Range::single(26))).unwrap();
+
         let groups = vec![large.clone(), small1.clone(), small2.clone()];
         let result = merge_small(groups.clone());
 

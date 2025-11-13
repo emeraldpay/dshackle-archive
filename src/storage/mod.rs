@@ -234,6 +234,16 @@ pub struct FileReference {
     pub range: Range,
 }
 
+impl FileReference {
+    pub fn new<S: ToString>(path: S, kind: DataKind, range: Range) -> Self {
+        Self {
+            path: path.to_string(),
+            kind,
+            range,
+        }
+    }
+}
+
 impl Ord for FileReference {
     fn cmp(&self, other: &Self) -> std::cmp::Ordering {
         self.range.start().cmp(&other.range.start())
