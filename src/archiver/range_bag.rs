@@ -1,3 +1,4 @@
+use std::fmt::{Display, Formatter};
 use std::ops::Add;
 use crate::archiver::range::Range;
 
@@ -115,6 +116,22 @@ impl<R: Into<Range>> From<Vec<R>> for RangeBag {
     }
 }
 
+impl Display for RangeBag {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "[")?;
+
+        if !self.ranges.is_empty() {
+            let _ = self.ranges[0].fmt(f);
+            self.ranges.iter()
+                .skip(1)
+                .for_each(|r| {
+                    let _ = write!(f, ",");
+                    let _ = r.fmt(f);
+                });
+        }
+        write!(f, "]")
+    }
+}
 
 #[cfg(test)]
 mod tests {

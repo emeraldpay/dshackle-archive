@@ -833,7 +833,12 @@ impl<B: BlockchainTypes, TS: TargetStorage> VerifyTable<BlockOptions, B, TS> for
         }
 
         if heights.len() != range.len() {
-            tracing::error!(range = %range, "Missing blocks in the table. {} act != {} exp", heights.len(), range.len());
+            let mut heights_range = RangeBag::new();
+            for h in &heights {
+                heights_range.append(Range::Single((*h).into()));
+            }
+            let heights_range = heights_range.compact();
+            tracing::error!(range = %range, "Missing blocks in the table. actual={}", heights_range);
             return Err("Missing blocks in the table".to_string());
         }
 
@@ -845,10 +850,14 @@ impl<B: BlockchainTypes, TS: TargetStorage> VerifyTable<BlockOptions, B, TS> for
             }
             let top_block = top_block.unwrap();
             let chain = block_seq.up_to(top_block.0, top_block.1);
-            if chain.len() != range.len()
-                || chain.first().unwrap().0 != range.start()
-                || chain.last().unwrap().0 != range.end() {
-                tracing::error!(range = %range, "Table range is not consistent for blocks");
+            let chain_range = Range::new(
+                chain.first().unwrap().0,
+                chain.last().unwrap().0
+            );
+
+            // not using Eq because the ranges may contain hash info, or may be None
+            if chain_range.start() != range.start() || chain_range.end() != range.end() {
+                tracing::error!(range = %range, "Table range is not consistent for blocks. Expected range: {}, actual range: {}", range, chain_range);
                 return Err("Table range is not consistent for blocks".to_string());
             }
 

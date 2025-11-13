@@ -20,6 +20,13 @@ struct AtHeight<T: BlockchainTypes> {
 }
 
 impl<T: BlockchainTypes> AtHeight<T> {
+    pub fn at(height: u64) -> Self {
+        Self {
+            height,
+            blocks: Vec::new(),
+        }
+    }
+
     pub fn find_block(&self, hash: &T::BlockHash) -> Option<&BlockLink<T>> {
         self.blocks.iter().find(|b| &b.current == hash)
     }
@@ -121,6 +128,7 @@ impl<T: BlockchainTypes> BlockSequence<T> {
         loop {
             let link = self.get_block(current.0, &current.1);
             if link.is_none() {
+                linked.reverse();
                 return linked;
             }
             linked.push(current);
@@ -151,24 +159,19 @@ impl<T: BlockchainTypes> BlockSequence<T> {
     /// Makes sure the current values are in order (by height) and there is no missing height.
     /// If it finds any missing height, it sets a value with empty blocks for that height.
     fn reorder(&mut self) {
-        self.current.sort_by_key(|h| h.height);
-        let mut expected_height = if let Some(first) = self.current.first() {
-            first.height
-        } else {
+        if self.current.len() <= 1 {
             return;
-        };
-        let mut i = 0;
+        }
+        self.current.sort_by_key(|h| h.height);
+
+        let mut i = 1;
         while i < self.current.len() {
-            let height = self.current[i].height;
-            if height > expected_height {
-                for h in expected_height..height {
-                    self.current.insert(i, AtHeight {
-                        height: h,
-                        blocks: Vec::new(),
-                    });
-                }
+            let prev = self.current[i - 1].height;
+            let current = self.current[i].height;
+            if current != prev + 1 {
+                self.current.insert(i, AtHeight::at(prev + 1));
+                continue
             }
-            expected_height += 1;
             i += 1;
         }
         while self.current.len() > self.size {
@@ -179,6 +182,7 @@ impl<T: BlockchainTypes> BlockSequence<T> {
 
 #[cfg(test)]
 mod tests {
+    use rand::prelude::SliceRandom;
     use super::*;
     use crate::blockchain::mock::MockType;
 
@@ -320,7 +324,9 @@ mod tests {
         seq.append(1, "000".to_string(), "111".to_string());
         let hash = "111".to_string();
         let result = seq.up_to(1, &hash);
-        assert_eq!(result, vec![(1, &"111".to_string())]);
+        assert_eq!(result, vec![
+            (1, &"111".to_string())
+        ]);
     }
 
     #[test]
@@ -331,7 +337,11 @@ mod tests {
         seq.append(3, "222".to_string(), "333".to_string());
         let hash = "333".to_string();
         let result = seq.up_to(3, &hash);
-        assert_eq!(result, vec![(3, &"333".to_string()), (2, &"222".to_string()), (1, &"111".to_string())]);
+        assert_eq!(result, vec![
+            (1, &"111".to_string()),
+            (2, &"222".to_string()),
+            (3, &"333".to_string()),
+        ]);
     }
 
     #[test]
@@ -343,7 +353,9 @@ mod tests {
         let hash = "333".to_string();
         let result = seq.up_to(3, &hash);
         // Should only return the starting block, as the parent is missing
-        assert_eq!(result, vec![(3, &"333".to_string())]);
+        assert_eq!(result, vec![
+            (3, &"333".to_string())
+        ]);
     }
 
     #[test]
@@ -356,7 +368,11 @@ mod tests {
         let hash = "333".to_string();
         let result = seq.up_to(3, &hash);
 
-        assert_eq!(result, vec![(3, &"333".to_string()), (2, &"222b".to_string()), (1, &"111".to_string())]);
+        assert_eq!(result, vec![
+            (1, &"111".to_string()),
+            (2, &"222b".to_string()),
+            (3, &"333".to_string()),
+        ]);
     }
 
     #[test]
@@ -368,7 +384,174 @@ mod tests {
         let hash = "333".to_string();
         let result = seq.up_to(3, &hash);
         // Should only return the starting block, as the parent is not linked
-        assert_eq!(result, vec![(3, &"333".to_string())]);
+        assert_eq!(result, vec![
+            (3, &"333".to_string())
+        ]);
+    }
+
+    #[test]
+    fn up_to_unordered() {
+        let mut data = vec![
+            (1, "000".to_string(), "111".to_string()),
+            (2, "111".to_string(), "222a".to_string()),
+            (2, "111".to_string(), "222b".to_string()),
+            (3, "222b".to_string(), "333".to_string()),
+            (4, "333".to_string(), "444a".to_string()),
+            (4, "333".to_string(), "444b".to_string()),
+            (5, "444a".to_string(), "555".to_string()),
+            (6, "555".to_string(), "666".to_string()),
+            (7, "666".to_string(), "777".to_string())
+        ];
+
+
+        let s111 = "111".to_string();
+        let s222b = "222b".to_string();
+        let s333 = "333".to_string();
+        let s444a = "444a".to_string();
+        let s555 = "555".to_string();
+        let s666 = "666".to_string();
+        let s777 = "777".to_string();
+
+        let exp = vec![
+            (1, &s111),
+            (2, &s222b),
+            (3, &s333),
+            (4, &s444a),
+            (5, &s555),
+            (6, &s666),
+            (7, &s777),
+        ];
+
+        let mut rng = rand::rng();
+        for i in 0..100 {
+            let mut seq = BlockSequence::<MockType>::new(7);
+            data.shuffle(&mut rng);
+            for (height, parent, current) in data.iter() {
+                seq.append(*height, parent.clone(), current.clone());
+            }
+
+            let hash = "777".to_string();
+            let result = seq.up_to(7, &hash);
+
+            if result != exp {
+                println!("Data order in iteration {}:", i);
+                for (h, p, c) in data.iter() {
+                    println!("  Height: {}, Parent: {}, Current: {}", h, p, c);
+                }
+                println!("Data in sequence:");
+                for at in seq.current.iter() {
+                    println!(" Height: {}", at.height);
+                    for b in at.blocks.iter() {
+                        println!("   Parent: {}, Current: {}", b.parent, b.current);
+                    }
+                }
+            }
+
+            assert_eq!(result, exp, "Failed on iteration {}", i);
+        }
+
+
+    }
+
+    #[test]
+    fn reorder_empty() {
+        let mut seq = BlockSequence::<MockType>::new(5);
+        seq.current = vec![];
+        seq.reorder();
+        assert!(seq.current.is_empty());
+    }
+
+    #[test]
+    fn reorder_in_order() {
+        let mut seq = BlockSequence::<MockType>::new(5);
+        seq.current = vec![
+            AtHeight::at(1),
+            AtHeight::at(2),
+            AtHeight::at(3)
+        ];
+        seq.reorder();
+        assert_eq!(
+            seq.current.iter().map(|h| h.height).collect::<Vec<_>>(),
+            vec![1,2,3]
+        );
+    }
+
+    #[test]
+    fn reorder_reverse_order() {
+        let mut seq = BlockSequence::<MockType>::new(5);
+        seq.current = vec![
+            AtHeight::at(3),
+            AtHeight::at(2),
+            AtHeight::at(1)
+        ];
+        seq.reorder();
+        assert_eq!(
+            seq.current.iter().map(|h| h.height).collect::<Vec<_>>(),
+            vec![1,2,3]
+        );
+    }
+
+    #[test]
+    fn reorder_unordered() {
+        let mut seq = BlockSequence::<MockType>::new(5);
+        seq.current = vec![
+            AtHeight::at(2),
+            AtHeight::at(1),
+            AtHeight::at(3)
+        ];
+        seq.reorder();
+        assert_eq!(
+            seq.current.iter().map(|h| h.height).collect::<Vec<_>>(),
+            vec![1,2,3]
+        );
+    }
+
+    #[test]
+    fn reorder_with_gap() {
+        let mut seq = BlockSequence::<MockType>::new(5);
+        seq.current = vec![
+            AtHeight::at(1),
+            AtHeight::at(3)
+        ];
+        seq.reorder();
+        assert_eq!(
+            seq.current.iter().map(|h| h.height).collect::<Vec<_>>(),
+            vec![1,2,3]
+        );
+        assert!(seq.current[1].blocks.is_empty());
+    }
+
+    #[test]
+    fn reorder_with_multiple_gaps() {
+        let mut seq = BlockSequence::<MockType>::new(5);
+        seq.current = vec![
+            AtHeight::at(1),
+            AtHeight::at(4)
+        ];
+        seq.reorder();
+        assert_eq!(
+            seq.current.iter().map(|h| h.height).collect::<Vec<_>>(),
+            vec![1,2,3,4]
+        );
+        assert!(seq.current[1].blocks.is_empty());
+        assert!(seq.current[2].blocks.is_empty());
+    }
+
+    #[test]
+    fn reorder_with_long_gap() {
+        let mut seq = BlockSequence::<MockType>::new(10);
+        seq.current = vec![
+            AtHeight::at(1),
+            AtHeight::at(10)
+        ];
+        seq.reorder();
+        assert_eq!(
+            seq.current.iter().map(|h| h.height).collect::<Vec<_>>(),
+            vec![1,2,3,4,5,6,7,8,9,10]
+        );
+        for i in 1..9 {
+            assert!(seq.current[i].blocks.is_empty());
+        }
     }
 
 }

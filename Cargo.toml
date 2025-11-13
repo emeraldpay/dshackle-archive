@@ -44,3 +44,4 @@ shadow-rs = "1.4"
 
 [dev-dependencies]
 testcontainers = "0.25"
+rand = "0.9"

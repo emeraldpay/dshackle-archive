@@ -1965,6 +1965,7 @@ dependencies = [
  "lazy_static",
  "object_store",
  "pulsar",
+ "rand 0.9.2",
  "regex",
  "rustls-platform-verifier",
  "serde",
