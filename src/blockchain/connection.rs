@@ -17,6 +17,7 @@ use tokio::sync::{mpsc, Semaphore};
 use crate::args;
 use crate::errors::{BlockchainError};
 use futures_util::stream::StreamExt;
+use tonic::codec::CompressionEncoding;
 use tonic::transport::Channel;
 use crate::archiver::range::Height;
 
@@ -156,6 +157,9 @@ impl DshackleConn {
 
     fn client(&self) -> BlockchainClient<AuthService<Channel>> {
         blockchain::connect(&self.emerald_conn)
+            .accept_compressed(CompressionEncoding::Gzip)
+            .max_decoding_message_size(1024 * 1024 * 1024)
+            .max_decoding_message_size(1024 * 1024 * 1024)
     }
 
 }
