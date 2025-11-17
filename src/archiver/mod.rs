@@ -9,8 +9,6 @@ pub mod blocks_config;
 pub mod range_group;
 
 pub use archiver::{ArchiveAll, Archiver};
-pub use table::ArchiveTable;
-pub use block::ArchiveBlock;
 
 use crate::blockchain::BlockchainTypes;
 

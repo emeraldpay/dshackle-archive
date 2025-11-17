@@ -3,8 +3,6 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use chrono::Utc;
 use tokio::sync::mpsc::Sender;
-use crate::archiver::block::ArchiveBlock;
-use crate::archiver::table::ArchiveTable;
 use crate::blockchain::{BlockchainData, BlockchainTypes};
 use crate::archiver::datakind::{DataKind, DataOptions};
 use crate::notify::empty::EmptyNotifier;
@@ -70,15 +68,15 @@ impl<B: BlockchainTypes, TS: TargetStorage> ArchiveAll<Height> for Archiver<B, T
             location: "".to_string(),
         };
 
-        let blocks = self.process_blocks(Range::Single(what.clone()), notification.clone()).await?;
+        let blocks = self.process_blocks(Range::Single(what.clone()), notification.clone(), options).await?;
         let range = Range::Single(what.clone());
 
-        if let Some(tx_options) = &options.tx {
-            self.process_table(range.clone(), notification.clone(), &blocks, tx_options).await?;
+        if options.include_trace() {
+            self.process_txes(range.clone(), notification.clone(), &blocks, options).await?;
         }
 
-        if let Some(traces_options) = &options.trace {
-            self.process_table(range.clone(), notification.clone(), &blocks, traces_options).await?;
+        if options.include_trace() {
+            self.process_traces(range.clone(), notification.clone(), &blocks, options).await?;
         }
 
         let duration = Utc::now().signed_duration_since(start_time);
@@ -108,14 +106,14 @@ impl<B: BlockchainTypes, TS: TargetStorage> ArchiveAll<Range> for Archiver<B, TS
             location: "".to_string(),
         };
 
-        let blocks = self.process_blocks(what.clone(), notification.clone()).await?;
+        let blocks = self.process_blocks(what.clone(), notification.clone(), options).await?;
 
-        if let Some(tx_options) = &options.tx {
-            self.process_table(what.clone(), notification.clone(), &blocks, tx_options).await?;
+        if options.include_tx() {
+            self.process_txes(what.clone(), notification.clone(), &blocks, options).await?;
         }
 
-        if let Some(traces_options) = &options.trace {
-            self.process_table(what.clone(), notification.clone(), &blocks, traces_options).await?;
+        if options.include_trace() {
+            self.process_traces(what.clone(), notification.clone(), &blocks, options).await?;
         }
 
         let shutdown = global::get_shutdown();
@@ -125,9 +123,9 @@ impl<B: BlockchainTypes, TS: TargetStorage> ArchiveAll<Range> for Archiver<B, TS
 
         let duration = Utc::now().signed_duration_since(start_time);
         if duration.num_seconds() > 2 {
-            tracing::info!("Range {:?} is archived in {}sec", what, duration.num_seconds());
+            tracing::info!("Range {} is archived in {}sec", what, duration.num_seconds());
         } else {
-            tracing::info!("Range {:?} is archived in {}ms", what, duration.num_milliseconds());
+            tracing::info!("Range {} is archived in {}ms", what, duration.num_milliseconds());
         }
 
         Ok(())

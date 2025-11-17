@@ -42,9 +42,15 @@ impl<S: ObjectStore> TargetStorage for ObjectsStorage<S> {
     type Writer = NewObjectsFile<'static>;
     type Reader = ExisingObjectsFile;
 
-    async fn create(&self, kind: DataKind, range: &Range) -> anyhow::Result<NewObjectsFile<'static>> {
+    async fn create(&self, kind: DataKind, range: &Range, overwrite: bool) -> anyhow::Result<Option<NewObjectsFile<'static>>> {
         let filename = Path::from(self.filenames.path(&kind, range));
-        Ok(NewObjectsFile::new(self.os.clone(), kind, self.bucket.clone(), filename))
+        if !overwrite {
+            let exists = self.os.head(&filename).await;
+            if exists.is_ok() {
+                return Ok(None);
+            }
+        }
+        Ok(Some(NewObjectsFile::new(self.os.clone(), kind, self.bucket.clone(), filename)))
     }
 
     async fn delete(&self, path: &FileReference) -> anyhow::Result<()> {

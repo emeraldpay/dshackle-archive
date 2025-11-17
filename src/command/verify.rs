@@ -957,12 +957,12 @@ mod tests {
 
         let archiver = create_archiver_with_data(mem.clone(), data.clone());
 
-        let write = archiver.target.create(DataKind::Blocks, &Range::Single(101.into())).await.unwrap();
+        let write = archiver.target.create(DataKind::Blocks, &Range::Single(101.into()), true).await.unwrap().unwrap();
         let record = data.fetch_block(&BlockReference::Height(101.into())).await.unwrap();
         write.append(record.0).await.unwrap();
         write.close().await.unwrap();
 
-        let write = archiver.target.create(DataKind::Transactions, &Range::Single(101.into())).await.unwrap();
+        let write = archiver.target.create(DataKind::Transactions, &Range::Single(101.into()), true).await.unwrap().unwrap();
         let record = data.fetch_tx(&block101, 0).await.unwrap();
         write.append(record).await.unwrap();
         write.close().await.unwrap();
@@ -1031,22 +1031,22 @@ mod tests {
         // txes 102
         // block 103
 
-        let write = archiver.target.create(DataKind::Blocks, &Range::Single(101.into())).await.unwrap();
+        let write = archiver.target.create(DataKind::Blocks, &Range::Single(101.into()), true).await.unwrap().unwrap();
         let record = data.fetch_block(&BlockReference::Height(101.into())).await.unwrap();
         write.append(record.0).await.unwrap();
         write.close().await.unwrap();
 
-        let write = archiver.target.create(DataKind::Blocks, &Range::Single(103.into())).await.unwrap();
+        let write = archiver.target.create(DataKind::Blocks, &Range::Single(103.into()), true).await.unwrap().unwrap();
         let record = data.fetch_block(&BlockReference::Height(103.into())).await.unwrap();
         write.append(record.0).await.unwrap();
         write.close().await.unwrap();
 
-        let write = archiver.target.create(DataKind::Transactions, &Range::Single(101.into())).await.unwrap();
+        let write = archiver.target.create(DataKind::Transactions, &Range::Single(101.into()), true).await.unwrap().unwrap();
         let record = data.fetch_tx(&block101, 0).await.unwrap();
         write.append(record).await.unwrap();
         write.close().await.unwrap();
 
-        let write = archiver.target.create(DataKind::Transactions, &Range::Single(102.into())).await.unwrap();
+        let write = archiver.target.create(DataKind::Transactions, &Range::Single(102.into()), true).await.unwrap().unwrap();
         let record = data.fetch_tx(&block102, 0).await.unwrap();
         write.append(record).await.unwrap();
         write.close().await.unwrap();
@@ -1100,14 +1100,16 @@ mod tests {
         });
 
         let blocks = archiver.target
-            .create(DataKind::Blocks, &Range::Single(100.into()))
-            .await.expect("Create block");
+            .create(DataKind::Blocks, &Range::Single(100.into()), true)
+            .await.expect("Create block")
+            .expect("Writer created");
         // no date written
         blocks.close().await.unwrap();
 
         let txes = archiver.target
-            .create(DataKind::Transactions, &Range::Single(100.into()))
-            .await.expect("Create txes");
+            .create(DataKind::Transactions, &Range::Single(100.into()), true)
+            .await.expect("Create txes")
+            .expect("Writer created");
         let record = data.fetch_tx(&block100, 0).await.unwrap();
         txes.append(record).await.unwrap();
         txes.close().await.unwrap();

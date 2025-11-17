@@ -345,9 +345,10 @@ impl<B: BlockchainTypes, TS: TargetStorage> TableCompaction<BlockOptions, B, TS>
                            range: Range,
                            files: Arc<ArchivesList>,
                            status: Arc<Mutex<CopiedStatus<B::TxId>>>) -> Result<TS::Writer> {
-        let target_file = target.create(DataKind::Blocks, &range)
+        let target_file = target.create(DataKind::Blocks, &range, true)
             .await
-            .map_err(|e| anyhow!("Unable to create block file: {}", e))?;
+            .map_err(|e| anyhow!("Unable to create block file: {}", e))?
+            .ok_or_else(|| anyhow!("Target file was not created"))?;
         let shutdown = global::get_shutdown();
 
         for source_group in files.iter() {
@@ -407,9 +408,10 @@ impl<B: BlockchainTypes, TS: TargetStorage> TableCompaction<TxOptions, B, TS> fo
                            range: Range,
                            files: Arc<ArchivesList>,
                            status: Arc<Mutex<CopiedStatus<B::TxId>>>) -> Result<TS::Writer> {
-        let target_file = target.create(DataKind::Transactions, &range)
+        let target_file = target.create(DataKind::Transactions, &range, true)
             .await
-            .map_err(|e| anyhow!("Unable to create tx file: {}", e))?;
+            .map_err(|e| anyhow!("Unable to create tx file: {}", e))?
+            .ok_or_else(|| anyhow!("Target file was not created"))?;
         let shutdown = global::get_shutdown();
 
         for source_group in files.iter() {
@@ -454,9 +456,10 @@ impl<B: BlockchainTypes, TS: TargetStorage> TableCompaction<TraceOptions, B, TS>
                            range: Range,
                            files: Arc<ArchivesList>,
                            status: Arc<Mutex<CopiedStatus<B::TxId>>>) -> Result<TS::Writer> {
-        let target_file = target.create(DataKind::TransactionTraces, &range)
+        let target_file = target.create(DataKind::TransactionTraces, &range, true)
             .await
-            .map_err(|e| anyhow!("Unable to create trace file: {}", e))?;
+            .map_err(|e| anyhow!("Unable to create trace file: {}", e))?
+            .ok_or_else(|| anyhow!("Target file was not created"))?;
         let shutdown = global::get_shutdown();
 
         for source_group in files.iter() {
@@ -701,6 +704,7 @@ mod tests {
     #[test]
     fn copied_status_validate_succeeds_with_complete_traces() {
         let data_options = DataOptions {
+            overwrite: true,
             block: Some(crate::archiver::datakind::BlockOptions::default()),
             tx: None,  // Disable tx validation
             trace: Some(crate::archiver::datakind::TraceOptions::default()),
@@ -768,6 +772,7 @@ mod tests {
     #[test]
     fn copied_status_validate_skips_validation_when_data_type_not_enabled() {
         let data_options = DataOptions {
+            overwrite: true,
             block: Some(crate::archiver::datakind::BlockOptions::default()),
             tx: None,  // Disable tx validation
             trace: None,  // Disable trace validation

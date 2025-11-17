@@ -24,6 +24,7 @@ use object_store::{
 };
 use tokio::sync::mpsc::Receiver;
 use url::Url;
+use itertools::Itertools;
 
 pub mod fs;
 pub mod objects;
@@ -125,7 +126,7 @@ pub trait TargetStorage: Send + Sync {
 
     ///
     /// Create a new file (or overwrite an existing one)
-    async fn create(&self, kind: DataKind, range: &Range) -> Result<Self::Writer>;
+    async fn create(&self, kind: DataKind, range: &Range, overwrite: bool) -> Result<Option<Self::Writer>>;
 
     ///
     /// Delete the file
@@ -171,7 +172,7 @@ pub trait TargetStorage: Send + Sync {
 
             tracing::debug!("Incomplete blocks {} (sample: {:?},...)",
                 ranges.len(),
-                ranges.iter().take(5)
+                ranges.iter().take(5).join(",")
             );
 
             let incomplete_by_range: Vec<(Range, Vec<DataKind>)> = ranges.iter()
@@ -190,7 +191,7 @@ pub trait TargetStorage: Send + Sync {
             let all_kinds = tx_options.files().files.clone();
             tracing::debug!("Missing blocks (no files at all) {} (sample: {:?},...)",
                 missing_ranges.len(),
-                missing_ranges.ranges.iter().take(5)
+                missing_ranges.ranges.iter().take(5).join(",")
             );
 
             for range in missing_ranges.ranges {
@@ -397,6 +398,7 @@ mod tests {
 
         let range = Range::new(21596362, 21596362);
         let tx_options = DataOptions {
+            overwrite: true,
             block: Some(Default::default()),
             tx: Some(Default::default()),
             trace: Some(Default::default()),
@@ -417,6 +419,7 @@ mod tests {
 
         let range = Range::new(21596362, 21596362);
         let tx_options = DataOptions {
+            overwrite: true,
             block: Some(Default::default()),
             tx: Some(Default::default()),
             trace: Some(Default::default()),
@@ -439,6 +442,7 @@ mod tests {
 
         let range = Range::new(21596362, 21596363);
         let tx_options = DataOptions {
+            overwrite: true,
             block: Some(Default::default()),
             tx: None,
             trace: None,

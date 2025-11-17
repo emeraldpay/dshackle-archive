@@ -118,6 +118,7 @@ impl From<&Args> for DataTables {
 
 #[derive(Debug, Clone)]
 pub struct DataOptions {
+    pub overwrite: bool,
     pub block: Option<BlockOptions>,
     pub tx: Option<TxOptions>,
     pub trace: Option<TraceOptions>,
@@ -154,6 +155,7 @@ impl DataOptions {
             block,
             tx,
             trace,
+            ..Default::default()
         }
     }
 
@@ -175,6 +177,7 @@ impl DataOptions {
 impl Default for DataOptions {
     fn default() -> Self {
         Self {
+            overwrite: true,
             block: Some(BlockOptions::default()),
             tx: Some(TxOptions::default()),
             trace: None,
@@ -201,6 +204,7 @@ impl From<&Args> for DataOptions {
             None
         };
         Self {
+            overwrite: true,
             block,
             tx,
             trace,

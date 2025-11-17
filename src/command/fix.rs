@@ -39,9 +39,14 @@ impl<B: BlockchainTypes, TS: TargetStorage> CommandExecutor for FixCommand<B, TS
     async fn execute(&self) -> anyhow::Result<()> {
         let shutdown = global::get_shutdown();
         let range = self.blocks.to_range(self.archiver.data_provider.as_ref()).await?;
+        let dry_run = global::is_dry_run();
         tracing::info!("Fixing range: {}", range);
 
-        let options = self.tx_options.clone();
+        let options = DataOptions {
+            // we always keep existing files in Fix
+            overwrite: false,
+            ..self.tx_options.clone()
+        };
         let missing = self.archiver.target.find_incomplete_tables(range, &options).await?;
         for (range, kinds) in missing {
             if shutdown.is_signalled() {
@@ -55,7 +60,9 @@ impl<B: BlockchainTypes, TS: TargetStorage> CommandExecutor for FixCommand<B, TS
                     break;
                 }
                 tracing::info!(range = %chunk, "Fixing chunk");
-                self.archiver.archive(chunk, RunMode::Fix, None, &options).await?;
+                if !dry_run {
+                    self.archiver.archive(chunk, RunMode::Fix, None, &options).await?;
+                }
             }
         }
         Ok(())

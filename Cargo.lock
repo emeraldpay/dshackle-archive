@@ -1962,6 +1962,7 @@ dependencies = [
  "futures-util",
  "ginepro",
  "hex",
+ "itertools 0.14.0",
  "lazy_static",
  "object_store",
  "pulsar",

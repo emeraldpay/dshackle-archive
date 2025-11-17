@@ -30,7 +30,7 @@ pub struct StreamCommand<B: BlockchainTypes, TS: TargetStorage> {
     blockchain: Arc<Blockchain>,
     continue_blocks: Option<u64>,
     archiver: Archiver<B, TS>,
-    tx_options: DataOptions,
+    data_options: DataOptions,
     follow: Follow,
 }
 
@@ -46,7 +46,11 @@ impl<B: BlockchainTypes, TS: TargetStorage> StreamCommand<B, TS> {
             None
         };
 
-        let tx_options = DataOptions::from(config);
+        let data_options = DataOptions {
+            // keep existing files. ex when two stream are run simultaneously (one for Head, and one for Finalized)
+            overwrite: false,
+            ..DataOptions::from(config)
+        };
         let follow = config.follow.clone();
 
         Ok(Self {
@@ -54,7 +58,7 @@ impl<B: BlockchainTypes, TS: TargetStorage> StreamCommand<B, TS> {
             blockchain,
             continue_blocks,
             archiver,
-            tx_options,
+            data_options,
             follow,
         })
     }
@@ -64,7 +68,7 @@ impl<B: BlockchainTypes, TS: TargetStorage> StreamCommand<B, TS> {
     async fn ensure_continued(&self, height: Height) -> Result<()> {
         if let Some(len) = self.continue_blocks {
             let range = Range::up_to(len, &Range::Single(height));
-            let options = self.tx_options.clone();
+            let options = self.data_options.clone();
             let missing = self.archiver.target.find_incomplete_tables(range, &options).await?;
             for (range, kinds) in missing {
                 let range_opts= options.clone().only_include(&kinds);
@@ -124,7 +128,7 @@ impl<B: BlockchainTypes, TS: TargetStorage> CommandExecutor for StreamCommand<B,
                         }
 
                         tracing::info!("Archive block: {} {:?}", height.height, height.hash);
-                        self.archiver.archive(height, RunMode::Stream, Some(maturity.clone()), &self.tx_options).await?;
+                        self.archiver.archive(height, RunMode::Stream, Some(maturity.clone()), &self.data_options).await?;
                     } else {
                         stop = true;
                     }

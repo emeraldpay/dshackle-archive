@@ -58,16 +58,16 @@ pub async fn write_block_and_tx<TS: TargetStorage>(
 ) -> anyhow::Result<()> {
     let block = archiver.data_provider.find_block(height).unwrap();
     let file_block = archiver.target
-        .create(DataKind::Blocks, &Range::Single(height.into()))
-        .await.expect("Create block");
+        .create(DataKind::Blocks, &Range::Single(height.into()), true)
+        .await.expect("Create block").unwrap();
 
     let record = archiver.data_provider.fetch_block(&BlockReference::Height(height.into())).await?;
     file_block.append(record.0).await?;
     file_block.close().await?;
 
     let file_txes = archiver.target
-        .create(DataKind::Transactions, &Range::Single(height.into()))
-        .await.expect("Create txes");
+        .create(DataKind::Transactions, &Range::Single(height.into()), true)
+        .await.expect("Create txes").unwrap();
 
     let txes = match tx_index {
         None => block.transactions.iter().enumerate().map(|(i, _)| i).collect(),
@@ -100,8 +100,8 @@ pub async fn write_block_tx_and_traces<TS: TargetStorage>(
 
     // Write block
     let file_block = archiver.target
-        .create(DataKind::Blocks, &Range::Single(height.into()))
-        .await.expect("Create block");
+        .create(DataKind::Blocks, &Range::Single(height.into()), true)
+        .await.expect("Create block").unwrap();
 
     let record = archiver.data_provider.fetch_block(&BlockReference::Height(height.into())).await?;
     file_block.append(record.0).await?;
@@ -109,8 +109,8 @@ pub async fn write_block_tx_and_traces<TS: TargetStorage>(
 
     // Write transactions
     let file_txes = archiver.target
-        .create(DataKind::Transactions, &Range::Single(height.into()))
-        .await.expect("Create txes");
+        .create(DataKind::Transactions, &Range::Single(height.into()), true)
+        .await.expect("Create txes").unwrap();
 
     let txes = match tx_index {
         None => block.transactions.iter().enumerate().map(|(i, _)| i).collect(),
@@ -126,8 +126,8 @@ pub async fn write_block_tx_and_traces<TS: TargetStorage>(
     // Write traces if requested
     if let Some(options) = trace_options {
         let file_traces = archiver.target
-            .create(DataKind::TransactionTraces, &Range::Single(height.into()))
-            .await.expect("Create traces");
+            .create(DataKind::TransactionTraces, &Range::Single(height.into()), true)
+            .await.expect("Create traces").unwrap();
 
         for i in &txes {
             let record = archiver.data_provider.fetch_traces(&block, *i, &options).await?;

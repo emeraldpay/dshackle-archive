@@ -30,9 +30,12 @@ impl TargetStorage for FsStorage {
     type Writer = FsFileWriter<'static>;
     type Reader = FsFileReader;
 
-    async fn create(&self, kind: DataKind, range: &Range) -> Result<FsFileWriter<'static>> {
+    async fn create(&self, kind: DataKind, range: &Range, overwrite: bool) -> Result<Option<FsFileWriter<'static>>> {
         let filename = self.parent_dir.join(self.filenames.path(&kind, range));
-        Ok(FsFileWriter::new(filename.clone(), kind).context(format!("Path: {:?}", &filename))?)
+        if !overwrite && filename.exists() {
+            return Ok(None);
+        }
+        Ok(Some(FsFileWriter::new(filename.clone(), kind).context(format!("Path: {:?}", &filename))?))
     }
 
     async fn delete(&self, path: &FileReference) -> Result<()> {
