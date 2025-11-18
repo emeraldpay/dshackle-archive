@@ -170,9 +170,9 @@ pub trait TargetStorage: Send + Sync {
                 .map(|g| g.range.clone())
                 .collect::<Vec<Range>>();
 
-            tracing::debug!("Incomplete blocks {} (sample: {:?},...)",
+            tracing::debug!("Incomplete blocks {} (sample: {},...)",
                 ranges.len(),
-                ranges.iter().take(5).join(",")
+                ranges.iter().take(5).map(|r| r.to_string()).join(",")
             );
 
             let incomplete_by_range: Vec<(Range, Vec<DataKind>)> = ranges.iter()
@@ -189,9 +189,9 @@ pub trait TargetStorage: Send + Sync {
         // Add completely missing ranges (no files at all)
         if !missing_ranges.is_empty() {
             let all_kinds = tx_options.files().files.clone();
-            tracing::debug!("Missing blocks (no files at all) {} (sample: {:?},...)",
+            tracing::debug!("Missing blocks (no files at all) {} (sample: {},...)",
                 missing_ranges.len(),
-                missing_ranges.ranges.iter().take(5).join(",")
+                missing_ranges.ranges.iter().take(5).map(|r| r.to_string()).join(",")
             );
 
             for range in missing_ranges.ranges {

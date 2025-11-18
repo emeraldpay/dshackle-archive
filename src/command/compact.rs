@@ -58,11 +58,11 @@ impl<B: BlockchainTypes + 'static, TS: TargetStorage + 'static> CommandExecutor 
                     match f {
                         Some(file) => {
                             let relevant_chunk = chunks.iter().find(|c| c.is_intersected_with(&file.range));
-                            tracing::trace!("File {:?} is in chunk {:?}", file, relevant_chunk);
                             if relevant_chunk.is_none() {
                                 continue;
                             }
                             let relevant_chunk = relevant_chunk.unwrap();
+                            tracing::trace!("File {:?} is in chunk {}", file, relevant_chunk);
 
                             if current.is_none() {
                                 current = Some(relevant_chunk.clone());
@@ -83,7 +83,7 @@ impl<B: BlockchainTypes + 'static, TS: TargetStorage + 'static> CommandExecutor 
                                 }
 
                                 let compact = compact
-                                    .map_err(|e| anyhow!("Error compacting range {:?}: {}", current_chunk, e))
+                                    .map_err(|e| anyhow!("Error compacting range {}: {}", current_chunk, e))
                                     .unwrap_or(false);
 
                                 // keep feels that are not fully copied, for the next chunk

@@ -370,6 +370,10 @@ mod tests {
         let (kind, range) = Filenames::parse("021625139.b4e72a78fd2cb0e75768401a92e5258618eec892b7e4edb49b2a592e9a5de5c4.txes.avro".to_string()).unwrap();
         assert_eq!(kind, DataKind::Transactions);
         assert_eq!(range, Range::Single(Height::new(21625139, Some("b4e72a78fd2cb0e75768401a92e5258618eec892b7e4edb49b2a592e9a5de5c4".to_string()))));
+
+        let (kind, range) = Filenames::parse("009651437.8c6afe53418e6c5265113c2d3dd3ca2541817f6471c42d27e802ebdf13540f8e.txes.avro".to_string()).unwrap();
+        assert_eq!(kind, DataKind::Transactions);
+        assert_eq!(range, Range::Single(Height::new(9651437, Some("8c6afe53418e6c5265113c2d3dd3ca2541817f6471c42d27e802ebdf13540f8e".to_string()))));
     }
 
     #[test]

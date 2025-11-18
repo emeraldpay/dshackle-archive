@@ -89,7 +89,7 @@ impl<B: BlockchainTypes, TS: TargetStorage> ArchiveAll<Height> for Archiver<B, T
 impl<B: BlockchainTypes, TS: TargetStorage> ArchiveAll<Range> for Archiver<B, TS> {
     async fn archive(&self, what: Range, mode: RunMode, maturity: Option<Maturity>, options: &DataOptions) -> anyhow::Result<()> {
         let start_time = Utc::now();
-        tracing::debug!("Archiving range: {:?}", what);
+        tracing::debug!("Archiving range: {}", what);
 
         let notification = Notification {
             // common fields

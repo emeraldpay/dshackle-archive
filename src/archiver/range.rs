@@ -650,4 +650,17 @@ mod tests {
         assert!(Range::from_str("10..20..30").is_err());
         assert!(Range::from_str("").is_err());
     }
+
+    #[test]
+    fn test_logs_range_display() {
+        assert_eq!(
+            format!("{}", Range::new(1000, 2000)),
+            "1000..2000"
+        );
+
+        assert_eq!(
+            format!("{}", Range::single(1001)),
+            "1001"
+        );
+    }
 }
