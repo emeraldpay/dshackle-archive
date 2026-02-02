@@ -256,6 +256,10 @@ impl BlockchainData<EthereumType> for EthereumData {
         let tx_hash = block.transactions.as_transactions().map(|txes| txes[index])
             .ok_or_else(|| anyhow!("Transaction not found"))?;
 
+        if !options.include_trace && !options.include_state_diff {
+            return Err(anyhow!("At least one of include_trace or include_state_diff must be true"));
+        }
+
         // Fetch all transaction data in parallel
         let (trace_data, state_diff_data) = tokio::join!(
             async {
@@ -280,15 +284,29 @@ impl BlockchainData<EthereumType> for EthereumData {
         // Set trace data fields
         if let Some(trace_result) = trace_data {
             let trace_bytes = trace_result?;
-            record.put("traceJson", Value::Union(1, Box::new(Value::Bytes(trace_bytes))));
+            if trace_bytes == b"null" {
+                return Err(anyhow!("Trace data requested but got null for tx 0x{:x}", tx_hash));
+            } else {
+                record.put("traceJson", Value::Union(1, Box::new(Value::Bytes(trace_bytes))));
+            }
         } else {
+            if options.include_trace {
+                return Err(anyhow!("Trace data requested but not available for tx 0x{:x}", tx_hash));
+            }
             record.put("traceJson", Value::Union(0, Box::new(Value::Null)));
         }
 
         if let Some(state_diff_result) = state_diff_data {
             let state_diff_bytes = state_diff_result?;
-            record.put("stateDiffJson", Value::Union(1, Box::new(Value::Bytes(state_diff_bytes))));
+            if state_diff_bytes == b"null" {
+                return Err(anyhow!("State Diff data requested but got null for tx 0x{:x}", tx_hash));
+            } else {
+                record.put("stateDiffJson", Value::Union(1, Box::new(Value::Bytes(state_diff_bytes))));
+            }
         } else {
+            if options.include_state_diff {
+                return Err(anyhow!("State Diff data requested but not available for tx 0x{:x}", tx_hash));
+            }
             record.put("stateDiffJson", Value::Union(0, Box::new(Value::Null)));
         }
 
