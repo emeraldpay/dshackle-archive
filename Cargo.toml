@@ -19,6 +19,7 @@ async-trait = "0.1"
 ginepro = { git = "https://github.com/dmarteau/ginepro", branch = "tonic-0.14-support"}
 pulsar = "6.4"
 apache-avro = { version = "0.20", features = ["snappy", "zstandard"] }
+strum = "0.27"
 emerald-api = { git = "https://github.com/emeraldpay/emerald-api-rs", features = ["client-blockchain"] }
 enum-display-derive = "0.1"
 futures-util = "0.3"

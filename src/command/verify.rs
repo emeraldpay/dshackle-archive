@@ -575,10 +575,9 @@ async fn verify_content<'a, B: BlockchainTypes, TS: TargetStorage>(archiver: Arc
 }
 
 fn verify_field_exist(record: &Record, field: &str) -> Result<(), String> {
-    let value = record.fields.iter()
-        .find(|f| f.0 == field)
+    let value = record.get(field)
         .ok_or(format!("No {} in the record", field))?;
-    match &value.1 {
+    match &value {
         Value::Null => Err(format!("Null {} in the record", field)),
         Value::Bytes(v) => if v.is_empty() {
             Err(format!("Empty {} in the record", field))
@@ -591,6 +590,31 @@ fn verify_field_exist(record: &Record, field: &str) -> Result<(), String> {
             Ok(())
         },
         _ => Ok(())
+    }
+}
+
+fn verify_field_non_null(record: &Record, field: &str) -> Result<(), String> {
+    use strum::IntoDiscriminant;
+
+    let value = record.get(field)
+        .ok_or(format!("No {} in the record", field))?;
+    match &value {
+        Value::Null => Err(format!("Null {} in the record", field)),
+        Value::Bytes(v) => if v.is_empty() {
+            Err(format!("Empty {} in the record", field))
+        } else if v.as_slice() == b"null" {
+            Err(format!("`null` value {} in the record", field))
+        } else {
+            Ok(())
+        },
+        Value::String(s) => if s.is_empty() {
+            Err(format!("Empty {} in the record", field))
+        } else if s == "null" {
+            Err(format!("`null` value {} in the record", field))
+        } else {
+            Ok(())
+        },
+        _ => Err(format!("Expecting a data containing field. Got {} type in the record: {:?}", field, value.discriminant()))
     }
 }
 
@@ -655,7 +679,7 @@ impl<B: BlockchainTypes, TS: TargetStorage> VerifyTable<TxOptions, B, TS> for Tx
                             return Err(format!("Unexpected txid: {}", txid_str));
                         }
 
-                        verify_field_exist(&record, "json")?;
+                        verify_field_non_null(&record, "json")?;
                         verify_field_exist(&record, "raw")?;
                         //TODO blockchain specific verification
 
@@ -729,10 +753,10 @@ impl<B: BlockchainTypes, TS: TargetStorage> VerifyTable<TraceOptions, B, TS> for
                         }
 
                         if options.include_trace {
-                            verify_field_exist(&record, "traceJson")?;
+                            verify_field_non_null(&record, "traceJson")?;
                         }
                         if options.include_state_diff {
-                            verify_field_exist(&record, "stateDiffJson")?;
+                            verify_field_non_null(&record, "stateDiffJson")?;
                         }
 
                         let first = existing_txes.insert(txid);
@@ -881,13 +905,14 @@ impl<B: BlockchainTypes, TS: TargetStorage> VerifyTable<BlockOptions, B, TS> for
 #[cfg(test)]
 mod tests {
     use std::sync::Arc;
+    use apache_avro::types::{Record, Value};
     use object_store::memory::InMemory;
     use object_store::{ObjectMeta, ObjectStore};
     use crate::args::Args;
     use crate::blockchain::mock::{MockBlock, MockData, MockTx, MockType};
     use crate::archiver::Archiver;
     use crate::command::CommandExecutor;
-    use crate::command::verify::{merge_small, VerifyCommand};
+    use crate::command::verify::{merge_small, verify_field_non_null, VerifyCommand};
     use crate::archiver::filenames::Filenames;
     use crate::storage::objects::ObjectsStorage;
     use futures_util::StreamExt;
@@ -895,6 +920,7 @@ mod tests {
     use crate::archiver::datakind::{DataKind, DataTables};
     use crate::archiver::range::Range;
     use crate::archiver::range_group::ArchiveGroup;
+    use crate::avros::BLOCK_SCHEMA;
     use crate::storage::{FileReference, TargetFileWriter, TargetStorage};
     use crate::testing;
 
@@ -1268,5 +1294,41 @@ mod tests {
         assert_eq!(all_small[0].0, Range::new(21, 26));
         assert_eq!(all_small[0].1.len(), 2);
 
+    }
+
+    #[test]
+    fn test_verify_non_null_accent_data() {
+        let mut record = Record::new(&BLOCK_SCHEMA).unwrap();
+        record.put("json", "{}");
+        record.put("blockId", "test");
+        assert!(verify_field_non_null(&record, "json").is_ok());
+        assert!(verify_field_non_null(&record, "blockId").is_ok());
+    }
+
+    #[test]
+    fn test_verify_non_null_reject_empty_data() {
+        let mut record = Record::new(&BLOCK_SCHEMA).unwrap();
+        record.put("json", "");
+        record.put("blockId", "");
+        assert!(verify_field_non_null(&record, "json").is_err());
+        assert!(verify_field_non_null(&record, "blockId").is_err());
+    }
+
+    #[test]
+    fn test_verify_non_null_reject_null_string() {
+        let mut record = Record::new(&BLOCK_SCHEMA).unwrap();
+        record.put("json", "null");
+        record.put("blockId", "null");
+        assert!(verify_field_non_null(&record, "json").is_err());
+        assert!(verify_field_non_null(&record, "blockId").is_err());
+    }
+
+    #[test]
+    fn test_verify_non_null_reject_null_value() {
+        let mut record = Record::new(&BLOCK_SCHEMA).unwrap();
+        record.put("json", Value::Null);
+        record.put("blockId", Value::Null);
+        assert!(verify_field_non_null(&record, "json").is_err());
+        assert!(verify_field_non_null(&record, "blockId").is_err());
     }
 }
