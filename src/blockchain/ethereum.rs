@@ -144,18 +144,33 @@ impl EthereumData {
         }).await
     }
 
-    async fn get_tx_trace(&self, hash: &TxHash) -> Result<Vec<u8>> {
+    async fn get_tx_trace_expected(&self, hash: &TxHash) -> Result<Vec<u8>> {
         tracing::debug!(tx_hash = %format!("0x{:x}", hash), "Get transaction trace");
         // See https://geth.ethereum.org/docs/developers/evm-tracing/built-in-tracers#call-tracer
         let tracer = r#"{
             "tracer": "callTracer"
         }"#;
         let params = format!("[\"0x{:x}\", {}]", hash, tracer).as_bytes().to_vec();
-        let data = self.blockchain.native_call("debug_traceTransaction", params).await?;
-        Ok(data)
+        let blockchain = self.blockchain.clone();
+        let hash = hash.clone();
+
+        let retry_strategy = ExponentialFactorBackoff::from_millis(50, 1.5)
+            .max_delay(Duration::from_secs(5))
+            .map(jitter)
+            .take(10);
+        Retry::spawn(retry_strategy, async || {
+            blockchain.native_call("debug_traceTransaction", params.clone()).await
+                .map_err(|e| anyhow!("Failed to get transaction trace: {}", e))
+                .and_then(|value| if value == b"null" {
+                    Err(anyhow!("Transaction Raw not found: 0x{:x}", hash))
+                } else {
+                    Ok(value)
+                })
+                .map_err(|e| RetryError::transient(e))
+        }).await
     }
 
-    async fn get_tx_state_diff(&self, hash: &TxHash) -> Result<Vec<u8>> {
+    async fn get_tx_state_diff_expected(&self, hash: &TxHash) -> Result<Vec<u8>> {
         tracing::debug!(tx_hash = %format!("0x{:x}", hash), "Get transaction state diff");
         // See https://geth.ethereum.org/docs/developers/evm-tracing/built-in-tracers#prestate-tracer
         let tracer = r#"{
@@ -165,8 +180,23 @@ impl EthereumData {
             }
         }"#;
         let params = format!("[\"0x{:x}\", {}]", hash, tracer).as_bytes().to_vec();
-        let data = self.blockchain.native_call("debug_traceTransaction", params).await?;
-        Ok(data)
+        let blockchain = self.blockchain.clone();
+        let hash = hash.clone();
+
+        let retry_strategy = ExponentialFactorBackoff::from_millis(50, 1.5)
+            .max_delay(Duration::from_secs(5))
+            .map(jitter)
+            .take(10);
+        Retry::spawn(retry_strategy, async || {
+            blockchain.native_call("debug_traceTransaction", params.clone()).await
+                .map_err(|e| anyhow!("Failed to get transaction trace: {}", e))
+                .and_then(|value| if value == b"null" {
+                    Err(anyhow!("Transaction Raw not found: 0x{:x}", hash))
+                } else {
+                    Ok(value)
+                })
+                .map_err(|e| RetryError::transient(e))
+        }).await
     }
 }
 
@@ -264,14 +294,14 @@ impl BlockchainData<EthereumType> for EthereumData {
         let (trace_data, state_diff_data) = tokio::join!(
             async {
                 if options.include_trace {
-                    Some(self.get_tx_trace(&tx_hash).await)
+                    Some(self.get_tx_trace_expected(&tx_hash).await)
                 } else {
                     None
                 }
             },
             async {
                 if options.include_state_diff {
-                    Some(self.get_tx_state_diff(&tx_hash).await)
+                    Some(self.get_tx_state_diff_expected(&tx_hash).await)
                 } else {
                     None
                 }
