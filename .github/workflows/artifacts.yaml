@@ -18,7 +18,7 @@ jobs:
     name: Publish ${{ matrix.os }}
     strategy:
       matrix:
-        os: [ "macos-latest", "ubuntu-latest", "macos-13" ]
+        os: [ "macos-latest", "ubuntu-latest", "macos-15-intel" ]
     runs-on: ${{ matrix.os }}
     continue-on-error: true
     steps:
