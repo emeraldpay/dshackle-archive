@@ -1,6 +1,6 @@
 = Dshackle Archive
-:version: 0.4.0
-:version-short: 0.4
+:version: 0.6.0
+:version-short: 0.6
 
 image:https://github.com/emeraldpay/dshackle-archive/workflows/Tests/badge.svg["Unit Tests"]
 image:https://codecov.io/gh/emeraldpay/dshackle-archive/branch/master/graph/badge.svg["Coverage",link="https://codecov.io/gh/emeraldpay/dshackle-archive"]
@@ -314,7 +314,7 @@ Please contact splix@emerald.cash to discuss the possibility.
 
 == License
 
-Copyright 2025 EmeraldPay Ltd
+Copyright 2026 EmeraldPay Ltd
 
 Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except in compliance with the License.
 You may obtain a copy of the License at

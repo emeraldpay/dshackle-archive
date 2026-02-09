@@ -1,6 +1,6 @@
 [package]
 name = "dshackle-archive"
-version = "0.6.0-dev"
+version = "0.6.0"
 edition = "2024"
 license = "Apache-2.0"
 description = "Extract blockchain data in JSON format and archive it as Avro files for offline processing"
