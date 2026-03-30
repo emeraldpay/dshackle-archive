@@ -186,7 +186,8 @@ impl TargetFileWriter for NewObjectsFile<'_> {
 
     async fn append(&self, data: Record<'_>) -> anyhow::Result<()> {
         let mut writer = self.writer.lock().unwrap();
-        let _size: usize = writer.append(data).map_err(|e| anyhow!("IO Error: {:?}", e))?;
+        let size: usize = writer.append(data).map_err(|e| anyhow!("IO Error: {:?}", e))?;
+        crate::progress::add_bytes(size);
         Ok(())
     }
 

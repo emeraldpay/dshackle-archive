@@ -111,12 +111,15 @@ impl<B: BlockchainTypes, TS: TargetStorage> CommandExecutor for StreamCommand<B,
         let mut continued = self.continue_blocks.is_none();
         let shutdown = global::get_shutdown();
         while !stop {
+            crate::progress::pause();
             tokio::select! {
                 _ = shutdown.signalled() => {
+                    crate::progress::resume();
                     tracing::info!("Shutdown signal received");
                     stop = true;
                 }
                 next = heights.recv()  => {
+                    crate::progress::resume();
                     if let Some(height) = next {
                         // when we have learned the latest height, we ensure that the last N blocks are archived; but just once
                         if !continued {

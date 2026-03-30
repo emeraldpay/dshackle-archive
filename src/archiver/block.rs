@@ -41,6 +41,7 @@ impl<B: BlockchainTypes, TS: TargetStorage> Archiver<B, TS> {
                 let _ = file.append(record).await?;
             }
             results.push((block, txes));
+            crate::progress::add_block();
         }
 
         if !dry_run && file.is_some() {

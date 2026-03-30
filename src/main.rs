@@ -47,6 +47,7 @@ pub mod storage;
 pub mod avros;
 pub mod notify;
 mod global;
+pub(crate) mod progress;
 pub mod archiver;
 
 fn init_tracing() {
@@ -76,6 +77,7 @@ async fn main_inner() -> Result<()> {
 
     global::set_dry_run(&args);
     global::set_compression(&args);
+    progress::start();
 
     if global::is_dry_run() {
         tracing::info!("Dry run mode enabled, no changes will be made");

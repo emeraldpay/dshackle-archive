@@ -174,7 +174,8 @@ impl TargetFileWriter for FsFileWriter<'_> {
             None => Err(anyhow!("Writer is already closed")),
             Some(writer) => {
                 let mut writer = writer.lock().unwrap();
-                let _ = writer.append(data).map_err(|e| anyhow!("IO Error: {}. File: {:?}", e, self.path))?;
+                let bytes = writer.append(data).map_err(|e| anyhow!("IO Error: {}. File: {:?}", e, self.path))?;
+                crate::progress::add_bytes(bytes);
                 Ok(())
             }
         }
