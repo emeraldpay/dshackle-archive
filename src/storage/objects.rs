@@ -7,7 +7,7 @@ use apache_avro::{Writer};
 use async_trait::async_trait;
 use futures_util::{StreamExt};
 use object_store::buffered::BufWriter;
-use object_store::{GetResult, ObjectStore};
+use object_store::{GetResult, ObjectStore, ObjectStoreExt};
 use object_store::path::Path;
 use tokio::{
     sync::{
@@ -112,7 +112,7 @@ impl<S: ObjectStore> ObjectsStorage<S> {
         let mut prev: Option<Path> = None;
         while level.height() <= range.end() && !tx.is_closed() {
             let path = Path::from(level.dir().as_str());
-            let offset = path.child(file_prefix.clone());
+            let offset = path.clone().join(file_prefix.clone());
             if prev.is_some() && prev.as_ref().unwrap() == &path {
                 tracing::error!(range = display(range), "Checking the same dir twice");
                 return

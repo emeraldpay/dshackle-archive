@@ -267,7 +267,7 @@ mod tests {
     use crate::storage::objects::ObjectsStorage;
     use object_store::memory::InMemory;
     use object_store::path::Path;
-    use object_store::{ObjectStore, PutPayload};
+    use object_store::{ObjectStoreExt, PutPayload};
 
     /// Helper to create a test storage with specified files
     async fn create_test_storage(files: Vec<&str>) -> ObjectsStorage<InMemory> {
