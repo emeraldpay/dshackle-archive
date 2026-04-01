@@ -9,10 +9,10 @@
 //! all metric operations are no-ops.
 //!
 //! Metrics are organized by application zone. Each metric name follows the format
-//! `dshackleArchive_<zone>_<metric>`, with a `type` label to distinguish data kinds
-//! (e.g., `"block"`, `"transaction"`, `"trace"`).
+//! `dshackleArchive_<zone>_<metric>`, with labels to distinguish data kinds or methods.
 
 mod archive;
+mod blockchain;
 mod server;
 
 use std::net::SocketAddr;
@@ -24,6 +24,7 @@ use prometheus::Registry;
 use crate::archiver::datakind::DataKind;
 
 pub use archive::ArchiveMetrics;
+pub use blockchain::BlockchainMetrics;
 
 static ENABLED: AtomicBool = AtomicBool::new(false);
 
@@ -32,6 +33,7 @@ lazy_static! {
     static ref METRICS: Metrics = {
         let m = Metrics::new();
         m.archive.register(&REGISTRY);
+        m.blockchain.register(&REGISTRY);
         m
     };
 }
@@ -39,12 +41,14 @@ lazy_static! {
 /// Global metrics organized by application zone.
 struct Metrics {
     archive: ArchiveMetrics,
+    blockchain: BlockchainMetrics,
 }
 
 impl Metrics {
     fn new() -> Self {
         Self {
             archive: ArchiveMetrics::new("dshackleArchive"),
+            blockchain: BlockchainMetrics::new("dshackleArchive"),
         }
     }
 }
@@ -73,4 +77,12 @@ pub fn add_bytes(kind: &DataKind, n: usize) {
         return;
     }
     METRICS.archive.add_bytes(kind, n);
+}
+
+/// Observe the duration of a blockchain RPC request.
+pub fn observe_request(method: &str, blockchain: &str, duration_secs: f64) {
+    if !ENABLED.load(Ordering::Relaxed) {
+        return;
+    }
+    METRICS.blockchain.observe_request(method, blockchain, duration_secs);
 }

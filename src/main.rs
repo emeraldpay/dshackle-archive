@@ -116,9 +116,9 @@ async fn run<B: BlockchainTypes + 'static>(builder: Builder<B>, args: &Args) -> 
 }
 
 async fn run_with_target<B: BlockchainTypes + 'static, TS: TargetStorage + 'static>(builder: Builder<B>, target: TS, args: &Args) -> Result<()> {
-    let blockchain = Blockchain::new(&args.connection, args.as_dshackle_blockchain()?).await?;
     let chain_ref = ChainRef::from_str(&args.blockchain)
         .map_err(|_| anyhow!("Unsupported blockchain: {}", args.blockchain))?;
+    let blockchain = Blockchain::new(&args.connection, args.as_dshackle_blockchain()?, chain_ref.code()).await?;
 
     let builder = builder
         .with_notifier(notify::create_notifier(&args).await?)

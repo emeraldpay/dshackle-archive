@@ -25,6 +25,7 @@ pub struct Blockchain {
     parallel: Semaphore,
     dshackle: DshackleConn,
     dshackle_chain: i32,
+    blockchain_id: String,
 }
 
 #[derive(Clone)]
@@ -33,12 +34,13 @@ struct DshackleConn {
 }
 
 impl Blockchain {
-    pub async fn new(conn: &args::Connection, blockchain: i32) -> Result<Self, BlockchainError> {
+    pub async fn new(conn: &args::Connection, blockchain: i32, blockchain_id: String) -> Result<Self, BlockchainError> {
         let dshackle = DshackleConn::new(conn).await?;
         Ok(Self {
             parallel: Semaphore::new(conn.parallel),
             dshackle,
             dshackle_chain: blockchain,
+            blockchain_id,
         })
     }
 
@@ -46,6 +48,7 @@ impl Blockchain {
         let _permit = self.parallel.acquire().await.unwrap();
         let mut client = self.dshackle.client();
         let chain = self.dshackle_chain;
+        let start = std::time::Instant::now();
 
         let mut response = client
             .native_call(
@@ -65,7 +68,7 @@ impl Blockchain {
             .await?
             .into_inner();
 
-        if let Some(resp) = response.next().await {
+        let result = if let Some(resp) = response.next().await {
             match resp {
                 Ok(value) => {
                     if value.succeed {
@@ -83,7 +86,10 @@ impl Blockchain {
         } else {
             tracing::warn!("No response from blockchain. {}()", method);
             Err(BlockchainError::IO)
-        }
+        };
+
+        crate::metrics::observe_request(method, &self.blockchain_id, start.elapsed().as_secs_f64());
+        result
     }
 
     pub async fn subscribe_blocks(&self) -> Result<mpsc::Receiver<Height>, BlockchainError> {

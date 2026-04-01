@@ -38,7 +38,7 @@ impl<B: BlockchainTypes, TS: TargetStorage> StreamCommand<B, TS> {
     pub async fn new(config: &Args,
                      archiver: Archiver<B, TS>
     ) -> Result<Self> {
-        let blockchain = Arc::new(Blockchain::new(&config.connection, config.as_dshackle_blockchain()?).await?);
+        let blockchain = Arc::new(Blockchain::new(&config.connection, config.as_dshackle_blockchain()?, config.get_blockchain()?.code()).await?);
 
         let continue_blocks = if config.continue_last {
             Some(100)
