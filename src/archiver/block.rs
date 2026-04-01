@@ -42,6 +42,7 @@ impl<B: BlockchainTypes, TS: TargetStorage> Archiver<B, TS> {
             }
             results.push((block, txes));
             crate::progress::add_block();
+            crate::metrics::add_items(&DataKind::Blocks, 1);
         }
 
         if !dry_run && file.is_some() {

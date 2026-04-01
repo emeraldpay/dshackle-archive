@@ -135,6 +135,7 @@ impl TargetStorage for FsStorage {
 pub struct FsFileWriter<'a> {
     path: PathBuf,
     pub writer: Option<Mutex<Writer<'a, File>>>,
+    kind: DataKind,
 }
 
 impl FsFileWriter<'_> {
@@ -144,7 +145,7 @@ impl FsFileWriter<'_> {
         let file = File::create(path.clone())?;
         let writer = Writer::with_codec(kind.schema(), file, global::get_avro_codec());
         let writer = Mutex::new(writer);
-        Ok(Self { path, writer: Some(writer) })
+        Ok(Self { path, writer: Some(writer), kind })
     }
 }
 
@@ -176,6 +177,7 @@ impl TargetFileWriter for FsFileWriter<'_> {
                 let mut writer = writer.lock().unwrap();
                 let bytes = writer.append(data).map_err(|e| anyhow!("IO Error: {}. File: {:?}", e, self.path))?;
                 crate::progress::add_bytes(bytes);
+                crate::metrics::add_bytes(&self.kind, bytes);
                 Ok(())
             }
         }

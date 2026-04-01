@@ -173,6 +173,7 @@ pub struct NewObjectsFile<'a> {
 
     bucket: String,
     path: Path,
+    kind: DataKind,
 }
 
 impl TargetFile for NewObjectsFile<'_> {
@@ -188,6 +189,7 @@ impl TargetFileWriter for NewObjectsFile<'_> {
         let mut writer = self.writer.lock().unwrap();
         let size: usize = writer.append(data).map_err(|e| anyhow!("IO Error: {:?}", e))?;
         crate::progress::add_bytes(size);
+        crate::metrics::add_bytes(&self.kind, size);
         Ok(())
     }
 
@@ -252,6 +254,7 @@ impl NewObjectsFile<'_> {
             closed: closed_rx,
             bucket,
             path,
+            kind,
         }
     }
 

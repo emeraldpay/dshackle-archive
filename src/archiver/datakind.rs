@@ -23,6 +23,15 @@ impl DataKind {
             DataKind::TransactionTraces => &avros::TX_TRACE_SCHEMA,
         }
     }
+
+    /// Label value used in Prometheus metrics (the `type` tag).
+    pub fn metrics_label(&self) -> &'static str {
+        match self {
+            DataKind::Blocks => "block",
+            DataKind::Transactions => "transaction",
+            DataKind::TransactionTraces => "trace",
+        }
+    }
 }
 
 impl FromStr for DataKind {

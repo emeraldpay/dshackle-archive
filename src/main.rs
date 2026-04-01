@@ -47,6 +47,7 @@ pub mod storage;
 pub mod avros;
 pub mod notify;
 mod global;
+pub mod metrics;
 pub(crate) mod progress;
 pub mod archiver;
 
@@ -78,6 +79,12 @@ async fn main_inner() -> Result<()> {
     global::set_dry_run(&args);
     global::set_compression(&args);
     progress::start();
+
+    if let Some(ref addr) = args.metrics {
+        let addr: std::net::SocketAddr = addr.parse()
+            .expect("Invalid metrics address, expected HOST:PORT (e.g., 127.0.0.1:8080)");
+        metrics::init(addr);
+    }
 
     if global::is_dry_run() {
         tracing::info!("Dry run mode enabled, no changes will be made");

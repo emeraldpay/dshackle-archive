@@ -35,6 +35,7 @@ impl<B: BlockchainTypes, TS: TargetStorage> Archiver<B, TS> {
                 }
                 let data = self.data_provider.fetch_traces(&block, tx_index, &options).await?;
                 let _ = file.append(data).await?;
+                crate::metrics::add_items(&DataKind::TransactionTraces, 1);
             }
         }
 
@@ -76,6 +77,7 @@ impl<B: BlockchainTypes, TS: TargetStorage> Archiver<B, TS> {
                 if !dry_run {
                     let _ = file.append(data).await?;
                 }
+                crate::metrics::add_items(&DataKind::Transactions, 1);
             }
         }
         if !dry_run {

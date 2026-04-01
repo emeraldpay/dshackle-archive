@@ -88,6 +88,11 @@ pub struct Args {
     /// [Stream Command] Follow mode for new blocks: `latest` - follow the latest blocks (default); `finalized` - follow only finalized blocks
     #[arg(long = "follow", default_value = "latest")]
     pub follow: Follow,
+
+    /// Start a Prometheus-compatible metrics server on the given address (e.g., 127.0.0.1:8080).
+    /// Metrics are served at http://HOST:PORT/metrics
+    #[arg(long = "metrics", value_name = "HOST:PORT")]
+    pub metrics: Option<String>,
 }
 
 impl Default for Args {
@@ -109,6 +114,7 @@ impl Default for Args {
             fix_clean: false,
             compression: None,
             follow: Follow::Latest,
+            metrics: None,
         }
     }
 }
