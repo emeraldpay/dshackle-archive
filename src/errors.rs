@@ -24,6 +24,8 @@ pub enum BlockchainError {
     InvalidConnection(String),
     #[error("No connection to blockchain")]
     NoConnection,
+    #[error("Timeout calling: {0}")]
+    Timeout(String),
     #[error("Invalid response from blockchain upstream")]
     InvalidResponse,
     #[error("Blockchain Error: {0} -> {1}")]

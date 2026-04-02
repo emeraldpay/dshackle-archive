@@ -1,4 +1,5 @@
 use std::str::FromStr;
+use std::time::Duration;
 use emerald_api::{
     blockchain,
     proto::{
@@ -14,6 +15,7 @@ use emerald_api::{
 };
 use ginepro::{LoadBalancedChannelBuilder};
 use tokio::sync::{mpsc, Semaphore};
+use tokio::time::timeout;
 use crate::args;
 use crate::errors::{BlockchainError};
 use futures_util::stream::StreamExt;
@@ -44,12 +46,29 @@ impl Blockchain {
         })
     }
 
+    ///
+    /// Execute nativeCall.
+    /// Applies a 10 seconds timeout, as we think this is a few times longer than any realistic time for JSON RPC and if it takes longer there is an IO problem
     pub async fn native_call(&self, method: &str, params: Vec<u8>) -> Result<Vec<u8>, BlockchainError> {
         let _permit = self.parallel.acquire().await.unwrap();
-        let mut client = self.dshackle.client();
         let chain = self.dshackle_chain;
         let start = std::time::Instant::now();
 
+        let result = timeout(Duration::from_secs(10),
+                             Self::native_call_inner(self.dshackle.clone(), chain, method, params)
+        ).await
+            .map_err(|_| BlockchainError::Timeout(method.to_string()))?
+            .map_err(|e| {
+                tracing::error!("Error calling blockchain method {}: {:?}", method, e);
+                e
+            });
+
+        crate::metrics::observe_request(method, &self.blockchain_id, start.elapsed().as_secs_f64());
+        result
+    }
+
+    async fn native_call_inner(dshackle: DshackleConn, chain: i32, method: &str, params: Vec<u8>) -> Result<Vec<u8>, BlockchainError> {
+        let mut client = dshackle.client();
         let mut response = client
             .native_call(
                 NativeCallRequest {
@@ -87,8 +106,6 @@ impl Blockchain {
             tracing::warn!("No response from blockchain. {}()", method);
             Err(BlockchainError::IO)
         };
-
-        crate::metrics::observe_request(method, &self.blockchain_id, start.elapsed().as_secs_f64());
         result
     }
 
