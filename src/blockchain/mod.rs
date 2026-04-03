@@ -32,11 +32,11 @@ pub trait BlockchainTypes: Send + Sync + Sized {
 
     ///
     /// Type of the Block Hash / Block Identifier
-    type BlockHash: FromStr + PartialEq + Hash + Eq + Send + Sync + Debug + Clone;
+    type BlockHash: FromStr + PartialEq + Hash + Eq + Send + Sync + Debug + Clone + 'static;
 
     ///
     /// Type of the Transaction Hash / Transaction Identifier
-    type TxId: FromStr + PartialEq + Hash + Eq + Send + Sync + Debug + Clone;
+    type TxId: FromStr + PartialEq + Hash + Eq + Send + Sync + Debug + Clone + 'static;
 
     ///
     /// Block details converted from the JSON response
