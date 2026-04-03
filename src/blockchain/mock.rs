@@ -107,7 +107,7 @@ impl BlockchainData<MockType> for MockData {
         self.id.clone()
     }
 
-    async fn fetch_block(&self, height: &BlockReference<String>) -> anyhow::Result<(Record, MockBlock, Vec<String>)> {
+    async fn fetch_block(&self, height: &BlockReference<String>) -> anyhow::Result<(Record<'static>, MockBlock, Vec<String>)> {
         let blocks = self.blocks.lock().unwrap();
         let block = blocks.iter()
             .find(|b| match height {
@@ -132,7 +132,7 @@ impl BlockchainData<MockType> for MockData {
         Ok((record, block, txes))
     }
 
-    async fn fetch_tx(&self, block: &MockBlock, index: usize) -> anyhow::Result<Record> {
+    async fn fetch_tx(&self, block: &MockBlock, index: usize) -> anyhow::Result<Record<'static>> {
         let txes = self.txes.lock().unwrap();
         let tx = txes.iter()
             .find(|t| t.hash == block.transactions[index])
@@ -154,7 +154,7 @@ impl BlockchainData<MockType> for MockData {
         Ok(record)
     }
     
-    async fn fetch_traces(&self, block: &MockBlock, index: usize, options: &TraceOptions) -> anyhow::Result<Record> {
+    async fn fetch_traces(&self, block: &MockBlock, index: usize, options: &TraceOptions) -> anyhow::Result<Record<'static>> {
         let traces = self.traces.lock().unwrap();
         let tx_hash = &block.transactions[index];
         let trace = traces.iter()

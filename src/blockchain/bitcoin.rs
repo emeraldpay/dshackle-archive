@@ -106,7 +106,7 @@ impl BitcoinData {
 
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 pub struct BitcoinBlock {
     hash: BlockHash,
     #[serde(rename = "previousblockhash")]
@@ -138,7 +138,7 @@ impl BlockchainData<BitcoinType> for BitcoinData {
         self.blockchain_id.clone()
     }
 
-    async fn fetch_block(&self, height: &BlockReference<BlockHash>) -> Result<(Record, BitcoinBlock, Vec<TxHash>)> {
+    async fn fetch_block(&self, height: &BlockReference<BlockHash>) -> Result<(Record<'static>, BitcoinBlock, Vec<TxHash>)> {
         let raw_block = match height {
             BlockReference::Hash(hash) => self.get_block(hash).await?,
             BlockReference::Height(height) => self.get_block_at(height.height).await?,
@@ -161,7 +161,7 @@ impl BlockchainData<BitcoinType> for BitcoinData {
         Ok((record, parsed_block, transactions))
     }
 
-    async fn fetch_tx(&self, block: &BitcoinBlock, index: usize) -> Result<Record> {
+    async fn fetch_tx(&self, block: &BitcoinBlock, index: usize) -> Result<Record<'static>> {
         let tx_hash = block.transactions.get(index).ok_or_else(|| anyhow!("Transaction not found"))?;
 
         let (tx, tx_raw) = tokio::join!(
@@ -184,7 +184,7 @@ impl BlockchainData<BitcoinType> for BitcoinData {
         Ok(record)
     }
 
-    async fn fetch_traces(&self, _block: &BitcoinBlock, _index: usize, _options: &TraceOptions) -> Result<Record> {
+    async fn fetch_traces(&self, _block: &BitcoinBlock, _index: usize, _options: &TraceOptions) -> Result<Record<'static>> {
         Err(anyhow!("Traces are not supported for Bitcoin"))
     }
 

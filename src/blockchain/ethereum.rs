@@ -218,7 +218,7 @@ impl BlockchainData<EthereumType> for EthereumData {
         self.blockchain_id.clone()
     }
 
-    async fn fetch_block(&self, height: &BlockReference<BlockHash>) -> Result<(Record, Block<TxHash>, Vec<TxHash>)> {
+    async fn fetch_block(&self, height: &BlockReference<BlockHash>) -> Result<(Record<'static>, Block<TxHash>, Vec<TxHash>)> {
         let raw_block = match height {
             BlockReference::Hash(hash) => self.get_block(&hash).await?,
             BlockReference::Height(height) => self.get_block_at(height.height).await?,
@@ -252,7 +252,7 @@ impl BlockchainData<EthereumType> for EthereumData {
         Ok((record, parsed_block, transactions))
     }
 
-    async fn fetch_tx(&self, block: &Block<TxHash>, index: usize) -> Result<Record> {
+    async fn fetch_tx(&self, block: &Block<TxHash>, index: usize) -> Result<Record<'static>> {
         let tx_hash = block.transactions.as_transactions().map(|txes| txes[index])
             .ok_or_else(|| anyhow!("Transaction not found"))?;
 
@@ -282,7 +282,7 @@ impl BlockchainData<EthereumType> for EthereumData {
         Ok(record)
     }
 
-    async fn fetch_traces(&self, block: &Block<TxHash>, index: usize, options: &TraceOptions) -> Result<Record> {
+    async fn fetch_traces(&self, block: &Block<TxHash>, index: usize, options: &TraceOptions) -> Result<Record<'static>> {
         let tx_hash = block.transactions.as_transactions().map(|txes| txes[index])
             .ok_or_else(|| anyhow!("Transaction not found"))?;
 

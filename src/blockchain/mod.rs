@@ -40,11 +40,11 @@ pub trait BlockchainTypes: Send + Sync + Sized {
 
     ///
     /// Block details converted from the JSON response
-    type BlockParsed: BlockDetails<Self> + for<'a> Deserialize<'a> + Send + Sync;
+    type BlockParsed: BlockDetails<Self> + for<'a> Deserialize<'a> + Send + Sync + Clone + 'static;
 
     ///
     /// Data provider for the blockchain
-    type DataProvider: BlockchainData<Self> + Send + Sync + Sized + Clone;
+    type DataProvider: BlockchainData<Self> + Send + Sync + Sized + Clone + 'static;
 
     fn create_data_provider(blockchain: Blockchain, id: String) -> Self::DataProvider;
 }
@@ -87,15 +87,15 @@ pub trait BlockchainData<T: BlockchainTypes>: Send + Sync {
 
     ///
     /// Get the details for the block
-    async fn fetch_block(&self, height: &BlockReference<T::BlockHash>) -> Result<(Record, T::BlockParsed, Vec<T::TxId>)>;
+    async fn fetch_block(&self, height: &BlockReference<T::BlockHash>) -> Result<(Record<'static>, T::BlockParsed, Vec<T::TxId>)>;
 
     ///
     /// Get the details for the transaction
-    async fn fetch_tx(&self, block: &T::BlockParsed, index: usize) -> Result<Record>;
+    async fn fetch_tx(&self, block: &T::BlockParsed, index: usize) -> Result<Record<'static>>;
 
     ///
     /// Get the details for the transaction
-    async fn fetch_traces(&self, block: &T::BlockParsed, index: usize, options: &TraceOptions) -> Result<Record>;
+    async fn fetch_traces(&self, block: &T::BlockParsed, index: usize, options: &TraceOptions) -> Result<Record<'static>>;
 
     ///
     /// Get the current height

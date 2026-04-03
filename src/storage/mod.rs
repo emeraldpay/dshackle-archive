@@ -118,7 +118,7 @@ pub trait TargetStorage: Send + Sync {
 
     ///
     /// A type used for writing new records
-    type Writer: TargetFileWriter + Send + Sync;
+    type Writer: TargetFileWriter + Send + Sync + 'static;
 
     ///
     /// A type used for reading the existing records
