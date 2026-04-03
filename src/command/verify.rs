@@ -281,6 +281,7 @@ async fn delete<TS: TargetStorage + 'static>(files: Vec<FileReference>, target: 
     }
     let shutdown = global::get_shutdown();
     let semaphore = Arc::new(Semaphore::new(4));
+    let mut jobs = JoinSet::new();
     for f in &files {
         tracing::debug!(range = %f.range, dry_run = %dry_run, "Deleting file: {}", f.path);
         if shutdown.is_signalled() {
@@ -290,13 +291,18 @@ async fn delete<TS: TargetStorage + 'static>(files: Vec<FileReference>, target: 
         let semaphore = semaphore.clone();
         let target = target.clone();
         let f = f.clone();
-        tokio::spawn(async move {
+        jobs.spawn(async move {
             if shutdown.is_signalled() {
                 return;
             }
             let _permit = semaphore.acquire().await;
             let _ = target.delete(&f).await;
         });
+    }
+    while let Some(res) = jobs.join_next().await {
+        if let Err(e) = res {
+            tracing::warn!("Failed to delete file: {}", e);
+        }
     }
     Ok(())
 }
