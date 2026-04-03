@@ -1,5 +1,5 @@
 use std::io::{Write};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc};
 use std::sync::atomic::{AtomicI64, Ordering};
 use anyhow::anyhow;
 use apache_avro::types::Record;
@@ -17,6 +17,7 @@ use tokio::{
     io::AsyncWriteExt
 };
 use tokio::sync::mpsc::Sender;
+use tokio::sync::Mutex;
 use tokio_util::io::{StreamReader, SyncIoBridge};
 use crate::archiver::datakind::DataKind;
 use crate::archiver::filenames::{Filenames, Level, LevelDouble, LevelSingle};
@@ -186,10 +187,13 @@ impl TargetFile for NewObjectsFile<'_> {
 impl TargetFileWriter for NewObjectsFile<'_> {
 
     async fn append(&self, data: Record<'_>) -> anyhow::Result<()> {
-        let mut writer = self.writer.lock().unwrap();
-        let size: usize = writer.append(data).map_err(|e| anyhow!("IO Error: {:?}", e))?;
+        let size: usize = {
+            let mut writer = self.writer.lock().await;
+            writer.append(data).map_err(|e| anyhow!("IO Error: {:?}", e))?
+        };
         crate::progress::add_bytes(size);
         crate::metrics::add_bytes(&self.kind, size);
+        self.pipe.apply_backpressure().await?;
         Ok(())
     }
 
@@ -199,7 +203,7 @@ impl TargetFileWriter for NewObjectsFile<'_> {
         // Note that the flush should not be called on each append because in that case it misses some of the optimization/compaction/etc
         // that Avro uses where there are multiple records.
         {
-            let mut writer = self.writer.lock().unwrap();
+            let mut writer = self.writer.lock().await;
             let _ = writer.flush().map_err(|e| anyhow!("IO Error: {:?}", e))?;
             let _ = self.pipe.channel.send(WriteOp::Close);
         }
@@ -231,7 +235,7 @@ impl TargetFileReader for ExisingObjectsFile {
         let kind = self.kind.clone();
         tracing::trace!(path = path.to_string(), "Start reading avro file");
 
-        let stream = self.stream.into_inner().unwrap().into_stream();
+        let stream = self.stream.into_inner().into_stream();
         let std_reader = SyncIoBridge::new(StreamReader::new(stream));
 
         let rx_sync = avro_reader::consume_sync(kind.schema(), std_reader);
@@ -293,11 +297,6 @@ impl NewObjectsFile<'_> {
                         let _ = on_close.send(total_size);
                         return;
                     }
-                    WriteOp::Abort => {
-                        let _ = buf.abort().await;
-                        let _ = on_close.send(total_size);
-                        return;
-                    }
                     WriteOp::Await(tx) => {
                         let _ = tx.send(());
                     }
@@ -318,10 +317,8 @@ enum WriteOp {
     Flush,
     /// Close the writing, like flush but the writing is not possible after this
     Close,
-    /// Close the writing without flushing any unwritten data
-    Abort,
-    /// a dummy operation to wait until all the current operation in queue are applied
-    Await(std::sync::mpsc::Sender<()>)
+    /// Async-friendly operation to wait until all queued operations are applied
+    Await(oneshot::Sender<()>)
 }
 
 /// A pipe from a Synchronized writer to Async writer
@@ -341,6 +338,18 @@ impl ObjectWriterPipe {
             in_flight,
         }
     }
+
+    /// If the pipe has more than 4MB of in-flight data, wait until the background
+    /// writer drains the queue, then reset the counter.
+    async fn apply_backpressure(&self) -> anyhow::Result<()> {
+        if self.in_flight.load(Ordering::Relaxed) > 4 * 1024 * 1024 {
+            let (tx, rx) = oneshot::channel();
+            self.channel.send(WriteOp::Await(tx))?;
+            rx.await?;
+            self.in_flight.store(0, Ordering::Relaxed);
+        }
+        Ok(())
+    }
 }
 
 impl Write for ObjectWriterPipe {
@@ -349,15 +358,7 @@ impl Write for ObjectWriterPipe {
     fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
         self.channel.send(WriteOp::Data(buf.to_vec()))
             .map_err(|_| std::io::Error::new(std::io::ErrorKind::BrokenPipe, "Already closed"))?;
-        let buffer_size = self.in_flight.fetch_add(buf.len() as i64, Ordering::Relaxed);
-
-        // when we see that there is a large amount of data in-flight, we wait until it is written
-        if buffer_size > 4 * 1024 * 1024 {
-            let (tx, rx) = std::sync::mpsc::channel();
-            self.channel.send(WriteOp::Await(tx))
-                .map_err(|_| std::io::Error::new(std::io::ErrorKind::BrokenPipe, "Already closed"))?;
-            rx.recv().unwrap();
-        }
+        self.in_flight.fetch_add(buf.len() as i64, Ordering::Relaxed);
         Ok(buf.len())
     }
 
@@ -367,11 +368,6 @@ impl Write for ObjectWriterPipe {
     fn flush(&mut self) -> std::io::Result<()> {
         self.channel.send(WriteOp::Flush)
             .map_err(|_| std::io::Error::new(std::io::ErrorKind::BrokenPipe, "Already closed"))?;
-        let (tx, rx) = std::sync::mpsc::channel();
-        self.channel.send(WriteOp::Await(tx))
-            .map_err(|_| std::io::Error::new(std::io::ErrorKind::BrokenPipe, "Already closed"))?;
-        // MUST BLOCK the current thread until all the in-flight data is written
-        rx.recv().unwrap();
         Ok(())
     }
 }
