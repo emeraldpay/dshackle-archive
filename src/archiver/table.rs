@@ -34,7 +34,7 @@ impl<B: BlockchainTypes, TS: TargetStorage> Archiver<B, TS> {
         let file = Arc::new(file);
 
         let mut jobs = JoinSet::new();
-        let semaphore = Arc::new(Semaphore::new(4));
+        let semaphore = Arc::new(Semaphore::new(global::get_threads().trace));
         let options = Arc::new(options.clone());
         for (block, txes) in blocks.iter() {
             let block = Arc::new(block.clone());
@@ -101,7 +101,7 @@ impl<B: BlockchainTypes, TS: TargetStorage> Archiver<B, TS> {
         let file = Arc::new(file);
 
         let mut jobs = JoinSet::new();
-        let semaphore = Arc::new(Semaphore::new(16));
+        let semaphore = Arc::new(Semaphore::new(global::get_threads().tx));
         for (block, txes) in blocks.iter() {
             let block = Arc::new(block.clone());
             for tx_index in 0..txes.len() {

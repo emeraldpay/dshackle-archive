@@ -38,8 +38,9 @@ struct DshackleConn {
 impl Blockchain {
     pub async fn new(conn: &args::Connection, blockchain: i32, blockchain_id: String) -> Result<Self, BlockchainError> {
         let dshackle = DshackleConn::new(conn).await?;
+        let threads = crate::global::get_threads();
         Ok(Self {
-            parallel: Semaphore::new(conn.parallel),
+            parallel: Semaphore::new(threads.api),
             dshackle,
             dshackle_chain: blockchain,
             blockchain_id,

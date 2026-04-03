@@ -156,9 +156,9 @@ pub struct Connection {
     #[arg(long = "connection.notls")]
     pub connection_no_tls: bool,
 
-    /// How many requests to make in parallel. Range: 1..512. Default: 8
-    #[arg(long = "parallel", default_value = "8")]
-    pub parallel: usize,
+    /// How many API requests to make in parallel. Range: 1..512. Default: 16
+    #[arg(long = "parallel")]
+    pub parallel: Option<usize>,
 }
 
 impl Default for Connection {
@@ -166,7 +166,7 @@ impl Default for Connection {
         Self {
             connection: "localhost:2448".to_string(),
             connection_no_tls: true,
-            parallel: 8,
+            parallel: None,
         }
     }
 }

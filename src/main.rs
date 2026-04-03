@@ -78,6 +78,7 @@ async fn main_inner() -> Result<()> {
 
     global::set_dry_run(&args);
     global::set_compression(&args);
+    global::set_threads(&args);
     progress::start();
 
     if let Some(ref addr) = args.metrics {
