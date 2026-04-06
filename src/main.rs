@@ -71,6 +71,7 @@ async fn main() -> Result<()>{
 
 async fn main_inner() -> Result<()> {
     init_tracing();
+    args::print_banner();
     let args = Args::parse();
     tracing::info!("Run: {}", args.command);
     tracing::debug!("debug");
