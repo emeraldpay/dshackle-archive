@@ -70,22 +70,35 @@ impl<B: BlockchainTypes, TS: TargetStorage> ArchiveAll<Height> for Archiver<B, T
 
         let blocks = self.process_blocks(Range::Single(what.clone()), notification.clone(), options).await?;
         let range = Range::Single(what.clone());
-        let mut success = true;
 
-        if options.include_tx() {
-            if let Err(e) = self.process_txes(range.clone(), notification.clone(), &blocks, options).await {
-                tracing::warn!("Failed to archive txes for block {}: {}", what, e);
-                success = false;
+        let (success_tx, success_trace) = tokio::join! {
+             async {
+                if options.include_tx() {
+                    if let Err(e) = self.process_txes(range.clone(), notification.clone(), &blocks, options).await {
+                        tracing::warn!("Failed to archive txes for block {}: {}", what, e);
+                        false
+                    } else {
+                        true
+                    }
+                } else {
+                    true
+                }
+            },
+            async {
+                if options.include_trace() {
+                    if let Err(e) = self.process_traces(range.clone(), notification.clone(), &blocks, options).await {
+                        tracing::warn!("Failed to archive traces for block {}: {}", what, e);
+                        false
+                    } else {
+                        true
+                    }
+                } else {
+                    true
+                }
             }
-        }
+        };
 
-        if options.include_trace() {
-            if let Err(e) = self.process_traces(range.clone(), notification.clone(), &blocks, options).await {
-                tracing::warn!("Failed to archive traces for block {}: {}", what, e);
-                success = false;
-            }
-        }
-
+        let success = success_tx & success_trace;
         let duration = Utc::now().signed_duration_since(start_time);
         if success {
             tracing::info!("Blocks {} is archived in {}ms", what, duration.num_milliseconds());
