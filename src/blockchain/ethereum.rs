@@ -24,6 +24,11 @@ pub struct EthereumData {
     blockchain_id: String,
 }
 
+fn create_exp_retry() -> ExponentialFactorBackoff {
+    ExponentialFactorBackoff::from_millis(100, 1.75)
+        .max_delay(Duration::from_secs(2))
+}
+
 impl EthereumData {
 
     pub fn new(blockchain: Blockchain, blockchain_id: String) -> Self {
@@ -97,8 +102,7 @@ impl EthereumData {
     }
 
     async fn get_tx_expected(&self, hash: &TxHash) -> Result<Vec<u8>> {
-        let retry_strategy = ExponentialFactorBackoff::from_millis(50, 1.5)
-            .max_delay(Duration::from_secs(1))
+        let retry_strategy = create_exp_retry()
             .map(jitter)
             .take(10);
         Retry::spawn(retry_strategy, async || {
@@ -113,8 +117,7 @@ impl EthereumData {
     }
 
     async fn get_tx_receipt_expected(&self, hash: &TxHash) -> Result<Vec<u8>> {
-        let retry_strategy = ExponentialFactorBackoff::from_millis(50, 1.5)
-            .max_delay(Duration::from_secs(1))
+        let retry_strategy = create_exp_retry()
             .map(jitter)
             .take(10);
         Retry::spawn(retry_strategy, async || {
@@ -129,8 +132,7 @@ impl EthereumData {
     }
 
     async fn get_tx_raw_expected(&self, hash: &TxHash) -> Result<Vec<u8>> {
-        let retry_strategy = ExponentialFactorBackoff::from_millis(50, 1.5)
-            .max_delay(Duration::from_secs(1))
+        let retry_strategy = create_exp_retry()
             .map(jitter)
             .take(10);
         Retry::spawn(retry_strategy, async || {
@@ -154,7 +156,7 @@ impl EthereumData {
         let blockchain = self.blockchain.clone();
         let hash = hash.clone();
 
-        let retry_strategy = ExponentialFactorBackoff::from_millis(50, 1.5)
+        let retry_strategy = create_exp_retry()
             .max_delay(Duration::from_secs(5))
             .map(jitter)
             .take(10);
@@ -183,7 +185,7 @@ impl EthereumData {
         let blockchain = self.blockchain.clone();
         let hash = hash.clone();
 
-        let retry_strategy = ExponentialFactorBackoff::from_millis(50, 1.5)
+        let retry_strategy = create_exp_retry()
             .max_delay(Duration::from_secs(5))
             .map(jitter)
             .take(10);
