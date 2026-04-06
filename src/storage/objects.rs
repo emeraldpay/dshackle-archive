@@ -191,7 +191,7 @@ impl TargetFileWriter for NewObjectsFile<'_> {
             let mut writer = self.writer.lock().await;
             writer.append(data).map_err(|e| anyhow!("IO Error: {:?}", e))?
         };
-        crate::progress::add_bytes(size);
+        crate::progress::on_bytes(size);
         crate::metrics::add_bytes(&self.kind, size);
         self.pipe.apply_backpressure().await?;
         Ok(())

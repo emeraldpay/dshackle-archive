@@ -176,7 +176,7 @@ impl TargetFileWriter for FsFileWriter<'_> {
             Some(writer) => {
                 let mut writer = writer.lock().unwrap();
                 let bytes = writer.append(data).map_err(|e| anyhow!("IO Error: {}. File: {:?}", e, self.path))?;
-                crate::progress::add_bytes(bytes);
+                crate::progress::on_bytes(bytes);
                 crate::metrics::add_bytes(&self.kind, bytes);
                 Ok(())
             }

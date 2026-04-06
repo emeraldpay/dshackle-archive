@@ -6,23 +6,16 @@ use apache_avro::types::{Record, Value};
 use async_trait::async_trait;
 use tokio::sync::Semaphore;
 use tokio::task::JoinSet;
-use crate::{
-    archiver::{
-        datakind::DataOptions,
-        blocks_config::Blocks,
-        Archiver,
-        range::Range,
-        range_group::{ArchiveGroup, ArchivesList}
-    },
-    avros,
-    blockchain::{BlockDetails, BlockchainTypes},
-    command::{CommandExecutor},
-    global,
-    storage::{
-        TargetFileReader,
-        TargetStorage
-    },
-};
+use crate::{archiver::{
+    datakind::DataOptions,
+    blocks_config::Blocks,
+    Archiver,
+    range::Range,
+    range_group::{ArchiveGroup, ArchivesList}
+}, avros, blockchain::{BlockDetails, BlockchainTypes}, command::{CommandExecutor}, global, progress, storage::{
+    TargetFileReader,
+    TargetStorage
+}};
 use crate::archiver::datakind::{BlockOptions, DataKind, TraceOptions, TxOptions};
 use crate::archiver::range_bag::RangeBag;
 use crate::archiver::range_group::RangeGroupError;
@@ -150,6 +143,7 @@ impl<B: BlockchainTypes + 'static, TS: TargetStorage + 'static> VerifyCommand<B,
     }
 
     async fn verify_chunk(&self, archived: ArchivesList, stat: Arc<Mutex<VerificationStat>>) -> anyhow::Result<()> {
+        progress::pause();
         let mut jobs = JoinSet::new();
 
         for g in archived.iter() {
@@ -187,6 +181,7 @@ impl<B: BlockchainTypes + 'static, TS: TargetStorage + 'static> VerifyCommand<B,
             delete(preprocess.for_deletion, target).await
         });
 
+        progress::resume();
         process_data(
             grouped,
             self.archiver.clone(), self.data_options.clone(), self.delete_whole_groups,
@@ -415,6 +410,7 @@ impl<B: BlockchainTypes + 'static, FR: TargetStorage + 'static> CommandExecutor 
         let full_range = self.blocks.to_range(self.archiver.data_provider.as_ref()).await?;
         tracing::info!(range = %full_range, "Verifying range");
 
+        progress::pause();
         let ranges = full_range.split_chunks(self.chunk, false);
         let shutdown = global::get_shutdown();
         let dry_run = global::is_dry_run();
@@ -671,6 +667,7 @@ impl<B: BlockchainTypes, TS: TargetStorage> VerifyTable<TxOptions, B, TS> for Tx
                             break
                         }
                         let record = record.unwrap();
+                        crate::progress::on_record();
                         let txid = record.fields.iter()
                             .find(|f| f.0 == "txid")
                             .ok_or(format!("No txid in the record"))?;
@@ -744,6 +741,7 @@ impl<B: BlockchainTypes, TS: TargetStorage> VerifyTable<TraceOptions, B, TS> for
                             break
                         }
                         let record = record.unwrap();
+                        crate::progress::on_record();
                         let txid = record.fields.iter()
                             .find(|f| f.0 == "txid")
                             .ok_or("No txid in the record".to_string())?;
@@ -824,6 +822,7 @@ impl<B: BlockchainTypes, TS: TargetStorage> VerifyTable<BlockOptions, B, TS> for
                             break
                         }
                         let record = record.unwrap();
+                        progress::on_record();
 
                         let height = avros::get_height(&record).map_err(|e| format!("Failed to get height: {}", e))?;
                         if !range.contains(&Range::Single(height.into())) {

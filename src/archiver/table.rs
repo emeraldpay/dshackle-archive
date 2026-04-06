@@ -54,6 +54,7 @@ impl<B: BlockchainTypes, TS: TargetStorage> Archiver<B, TS> {
                     if !dry_run {
                         file.append(data).await?;
                     }
+                    crate::progress::on_record();
                     crate::metrics::add_items(&DataKind::TransactionTraces, 1);
                     Ok::<_, anyhow::Error>(())
                 });
@@ -119,6 +120,7 @@ impl<B: BlockchainTypes, TS: TargetStorage> Archiver<B, TS> {
                     if !dry_run {
                         file.append(data).await?;
                     }
+                    crate::progress::on_record();
                     crate::metrics::add_items(&DataKind::Transactions, 1);
                     Ok::<_, anyhow::Error>(())
                 });

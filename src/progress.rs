@@ -26,7 +26,7 @@ lazy_static! {
 /// speed calculations reflect only active processing time.
 struct Progress {
     /// Total number of blocks processed since start
-    blocks: AtomicU64,
+    records: AtomicU64,
     /// Total number of bytes written to storage since start
     bytes: AtomicU64,
     /// Whether the background reporter has been started
@@ -58,7 +58,7 @@ impl Progress {
     fn new() -> Self {
         let initial = Snapshot { blocks: 0, bytes: 0, active: Duration::ZERO };
         Self {
-            blocks: AtomicU64::new(0),
+            records: AtomicU64::new(0),
             bytes: AtomicU64::new(0),
             started: AtomicBool::new(false),
             state: Mutex::new(ProgressState {
@@ -103,12 +103,12 @@ pub fn start() {
 }
 
 /// Record that one block has been processed.
-pub fn add_block() {
-    PROGRESS.blocks.fetch_add(1, Ordering::Relaxed);
+pub fn on_record() {
+    PROGRESS.records.fetch_add(1, Ordering::Relaxed);
 }
 
 /// Record that `n` bytes have been written to storage.
-pub fn add_bytes(n: usize) {
+pub fn on_bytes(n: usize) {
     PROGRESS.bytes.fetch_add(n as u64, Ordering::Relaxed);
 }
 
@@ -133,7 +133,7 @@ pub fn resume() {
 
 /// Take a snapshot and log the sliding-window speed report.
 fn report() {
-    let blocks = PROGRESS.blocks.load(Ordering::Relaxed);
+    let blocks = PROGRESS.records.load(Ordering::Relaxed);
     let bytes = PROGRESS.bytes.load(Ordering::Relaxed);
 
     if blocks == 0 {
@@ -166,7 +166,7 @@ fn report() {
 
     let active_secs = delta_active.as_secs_f64();
     if active_secs < 0.001 {
-        tracing::info!("Progress: {} blocks total (paused)", blocks);
+        tracing::info!("Progress: {} records total", blocks);
         return;
     }
 
@@ -175,7 +175,7 @@ fn report() {
     let throughput = format_throughput(bytes_per_sec);
 
     tracing::info!(
-        "Progress: {} blocks; {:.1} blocks/min; {}",
+        "Progress: {} records; {:.1} recs/min; {}",
         blocks, blocks_per_min, throughput
     );
 }
