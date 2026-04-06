@@ -32,7 +32,7 @@ The general idea it to use Dshackle Archive to copy data from a blockchain to a 
 
 NOTE: It takes several weeks to archive the whole blockchain. It's a very IO intensive operation, but can be scaled by using multiple nodes.
 
-NOTE: It uses https://github.com/emeraldpay/dshackle[Dshackle] protocol to connect to the blockchain, not a plain HTTP/JSON RPC. So a Dshackle instance is required to be running.
+NOTE: It uses https://github.com/emeraldpay/dshackle[Dshackle] protocol to connect to the blockchain, not a plain HTTP/JSON RPC. A Dshackle instance is required to be running.
 
 == Usage
 
@@ -47,45 +47,45 @@ Arguments:
 Options:
   -b, --blockchain <BLOCKCHAIN>
           Blockchain
-      --dryRun
+      --dry-run
           Do not modify the storage
   -c, --connection <HOST:PORT>
           Connection (host:port)
       --connection.notls
           Disable TLS
       --parallel <PARALLEL>
-          How many requests to make in parallel. Range: 1..512. Default: 8 [default: 8]
+          How many API requests to make in parallel. Range: 1..512. Default: 16
       --notify.dir <NOTIFY_DIR>
           Write notifications as JSON line to the specified dir in a file <dshackle-archive-%STARTTIME.jsonl>
       --notify.pulsar.topic <PULSAR_TOPIC>
           Send notifications as JSON to the Pulsar to the specified topic (notify.pulsar.url must be specified)
       --notify.pulsar.url <PULSAR_URL>
           Send notifications as JSON to the Pulsar with specified URL (notify.pulsar.topic must be specified)
-      --auth.aws.accessKey <ACCESS_KEY>
+      --auth.aws.access-key <ACCESS_KEY>
           AWS / S3 Access Key
-      --auth.aws.secretKey <SECRET_KEY>
+      --auth.aws.secret-key <SECRET_KEY>
           AWS / S3 Secret Key
       --aws.endpoint <ENDPOINT>
           AWS / S3 endpoint url instead of the default one
       --aws.region <REGION>
           AWS / S3 region ID to use for requests
-      --aws.s3.pathStyle
+      --aws.s3.path-style
           Enable S3 Path Style access (default is false). Use this flag for a no-AWS service
-      --aws.trustTls
+      --aws.trust-tls
           Trust any TLS certificate for AWS / S3 (default is false)
   -d, --dir <DIR>
           Target directory
       --continue
           [Stream Command] Continue from the last archived block; i.e., not the latest in blockchain
       --tail <TAIL>
-          [Fix Command] Ensure that the latest T blocks are archived
+          [Verify/Fix Commands] Use the latest T blocks instead of a range
   -r, --range <RANGE>
           Blocks Range (`N...M`)
-      --rangeChunk <RANGE_CHUNK>
+      --range.chunk <RANGE_CHUNK>
           Range chunk size (default 1000)
   -t, --tables <TABLES>
           Types of tables to archive (comma-separated list of `blocks`, `txes`, `traces`). Default: blocks,txes
-      --fieldsTrace <FIELDS_TRACE>
+      --fields.trace <FIELDS_TRACE>
           List of data to include into tracing archive table (comma-separated list of `calls`, `stateDiff`). Default: calls,stateDiff; Used only if `traces` are included into the archived tables (see `--tables` option); Details: `calls` - debug_traceTransaction with `callTracer` tracing; `stateDiff` - debug_traceTransaction with `prestateTracer` tracing
       --fix.clean
           [Fix Command] Set to remove any existing data in whole chunk if any of tables is missing a block in the chunk or has broken values. Default is `false`, which deleted only tables with missing / corrupted data
@@ -93,10 +93,13 @@ Options:
           Compression algorithm to use when writing new Avro files. Default is `zstd` [possible values: snappy, zstd]
       --follow <FOLLOW>
           [Stream Command] Follow mode for new blocks: `latest` - follow the latest blocks (default); `finalized` - follow only finalized blocks [default: latest] [possible values: latest, finalized]
+      --metrics <HOST:PORT>
+          Start a Prometheus-compatible metrics server on the given address (e.g., 127.0.0.1:8080). Metrics are served at http://HOST:PORT/metrics
   -h, --help
           Print help
   -V, --version
           Print version
+
 ----
 
 === Commands

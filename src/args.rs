@@ -48,7 +48,7 @@ pub struct Args {
     pub blockchain: String,
 
     /// Do not modify the storage
-    #[arg(long = "dryRun")]
+    #[arg(long = "dry-run", aliases = vec!["dryRun", "dryrun"])]
     pub dry_run: bool,
 
     #[command(flatten)]
@@ -77,7 +77,7 @@ pub struct Args {
     pub range: Option<String>,
 
     /// Range chunk size (default 1000)
-    #[arg(long = "rangeChunk")]
+    #[arg(long = "range.chunk", aliases = vec!["rangeChunk", "range-chunk"])]
     pub range_chunk: Option<usize>,
 
     /// Types of tables to archive (comma-separated list of `blocks`, `txes`, `traces`). Default: blocks,txes
@@ -89,13 +89,13 @@ pub struct Args {
     /// Details:
     /// `calls` - debug_traceTransaction with `callTracer` tracing;
     /// `stateDiff` - debug_traceTransaction with `prestateTracer` tracing
-    #[arg(long = "fieldsTrace")]
+    #[arg(long = "fields.trace", aliases = vec!["fieldsTrace", "fields-trace"])]
     pub fields_trace: Option<String>,
 
     ///
     /// [Fix Command] Set to remove any existing data in whole chunk if any of tables is missing a block in the chunk or has broken values.
     /// Default is `false`, which deleted only tables with missing / corrupted data.
-    #[arg(long = "fix.clean")]
+    #[arg(long = "fix.clean", alias = "fix-clean")]
     pub fix_clean: bool,
 
     ///
@@ -172,7 +172,7 @@ pub struct Connection {
     pub connection: String,
 
     /// Disable TLS
-    #[arg(long = "connection.notls")]
+    #[arg(long = "connection.notls", alias = "connection-notls")]
     pub connection_no_tls: bool,
 
     /// How many API requests to make in parallel. Range: 1..512. Default: 16
@@ -194,15 +194,15 @@ impl Default for Connection {
 pub struct Notify {
 
     /// Write notifications as JSON line to the specified dir in a file <dshackle-archive-%STARTTIME.jsonl>
-    #[arg(long = "notify.dir", required = false)]
+    #[arg(long = "notify.dir", required = false, alias = "notify-dir")]
     pub notify_dir: Option<String>,
 
     /// Send notifications as JSON to the Pulsar to the specified topic (notify.pulsar.url must be specified)
-    #[arg(long = "notify.pulsar.topic", required = false)]
+    #[arg(long = "notify.pulsar.topic", required = false, alias = "notify-pulsar-topic")]
     pub pulsar_topic: Option<String>,
 
     /// Send notifications as JSON to the Pulsar with specified URL (notify.pulsar.topic must be specified)
-    #[arg(long = "notify.pulsar.url", required = false)]
+    #[arg(long = "notify.pulsar.url", required = false, alias = "notify-pulsar-url")]
     pub pulsar_url: Option<String>,
 }
 
@@ -219,27 +219,27 @@ impl Default for Notify {
 #[derive(Parser, Debug, Clone)]
 pub struct Aws {
     /// AWS / S3 Access Key
-    #[arg(long = "auth.aws.accessKey", required = false)]
+    #[arg(long = "auth.aws.access-key", required = false, aliases = vec!["auth.aws.accessKey", "auth.aws.accesskey", "auth-aws-access-key"])]
     pub access_key: String,
 
     /// AWS / S3 Secret Key
-    #[arg(long = "auth.aws.secretKey", required = false)]
+    #[arg(long = "auth.aws.secret-key", required = false, aliases = vec!["auth.aws.secretKey", "auth.aws.secretkey", "auth-aws-secret-key"])]
     pub secret_key: String,
 
     /// AWS / S3 endpoint url instead of the default one
-    #[arg(long = "aws.endpoint", required = false)]
+    #[arg(long = "aws.endpoint", required = false, alias = "aws.endpoint")]
     pub endpoint: Option<String>,
 
     /// AWS / S3 region ID to use for requests
-    #[arg(long = "aws.region", required = false)]
+    #[arg(long = "aws.region", required = false, alias = "aws-region")]
     pub region: Option<String>,
 
     /// Enable S3 Path Style access (default is false). Use this flag for a no-AWS service
-    #[arg(long = "aws.s3.pathStyle")]
+    #[arg(long = "aws.s3.path-style", aliases = vec!["aws.s3.pathStyle", "aws.s3.pathstyle", "aws-s3-path-style"])]
     pub path_style: bool,
 
     /// Trust any TLS certificate for AWS / S3 (default is false)
-    #[arg(long = "aws.trustTls")]
+    #[arg(long = "aws.trust-tls", aliases = vec!["aws.trustTls", "aws.trusttls", "aws-trust-tls"])]
     pub trust_tls: bool,
 }
 
