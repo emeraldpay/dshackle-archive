@@ -63,6 +63,14 @@ pub fn init(addr: SocketAddr) {
     server::start(addr, &REGISTRY);
 }
 
+/// Wait for one final metrics scrape before the process exits.
+///
+/// Keeps the metrics server alive until Prometheus (or another scraper) collects the
+/// final values, a 60-second timeout elapses, or a termination signal arrives.
+pub async fn await_last_scrape() {
+    server::await_last_scrape().await;
+}
+
 /// Record that `n` items of the given data kind have been processed.
 pub fn add_items(kind: &DataKind, n: usize) {
     if !ENABLED.load(Ordering::Relaxed) {

@@ -95,6 +95,8 @@ Options:
           [Stream Command] Follow mode for new blocks: `latest` - follow the latest blocks (default); `finalized` - follow only finalized blocks [default: latest] [possible values: latest, finalized]
       --metrics <HOST:PORT>
           Start a Prometheus-compatible metrics server on the given address (e.g., 127.0.0.1:8080). Metrics are served at http://HOST:PORT/metrics
+      --metrics.await
+          After the main command finishes, keep the metrics server running until one final scrape completes (or 60 seconds elapse). Useful for short-lived commands (fix, verify, compact) to ensure Prometheus collects the final metrics before the process exits
   -h, --help
           Print help
   -V, --version

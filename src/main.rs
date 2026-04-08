@@ -102,6 +102,11 @@ async fn main_inner() -> Result<()> {
     };
 
     tracing::info!("Done: {}", args.command);
+
+    if args.metrics.is_some() && args.metrics_await {
+        metrics::await_last_scrape().await;
+    }
+
     Ok(())
 }
 

@@ -112,6 +112,12 @@ pub struct Args {
     /// Metrics are served at http://HOST:PORT/metrics
     #[arg(long = "metrics", value_name = "HOST:PORT")]
     pub metrics: Option<String>,
+
+    /// After the main command finishes, keep the metrics server running until one final scrape
+    /// completes (or 60 seconds elapse). Useful for short-lived commands (fix, verify, compact)
+    /// to ensure Prometheus collects the final metrics before the process exits.
+    #[arg(long = "metrics.await", alias = "metrics-await")]
+    pub metrics_await: bool,
 }
 
 impl Default for Args {
@@ -134,6 +140,7 @@ impl Default for Args {
             compression: None,
             follow: Follow::Latest,
             metrics: None,
+            metrics_await: false,
         }
     }
 }
