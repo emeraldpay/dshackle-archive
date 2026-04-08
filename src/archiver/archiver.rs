@@ -100,6 +100,8 @@ impl<B: BlockchainTypes, TS: TargetStorage> ArchiveAll<Height> for Archiver<B, T
 
         let success = success_tx & success_trace;
         let duration = Utc::now().signed_duration_since(start_time);
+        let duration_secs = duration.num_milliseconds() as f64 / 1000.0;
+        crate::metrics::observe_block_archive(duration_secs);
         if success {
             tracing::info!("Blocks {} is archived in {}ms", what, duration.num_milliseconds());
         } else {
@@ -159,6 +161,10 @@ impl<B: BlockchainTypes, TS: TargetStorage> ArchiveAll<Range> for Archiver<B, TS
         }
 
         let duration = Utc::now().signed_duration_since(start_time);
+        if what.len() == 1 {
+            let duration_secs = duration.num_milliseconds() as f64 / 1000.0;
+            crate::metrics::observe_block_archive(duration_secs);
+        }
         if duration.num_seconds() > 2 {
             tracing::info!("Range {} is archived in {}sec", what, duration.num_seconds());
         } else {

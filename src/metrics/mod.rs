@@ -104,6 +104,14 @@ pub fn add_bytes(kind: &DataKind, direction: Direction, n: usize) {
     METRICS.archive.add_bytes(kind, &direction, n);
 }
 
+/// Record the time it took to archive a single block (including txes and traces).
+pub fn observe_block_archive(duration_secs: f64) {
+    if !ENABLED.load(Ordering::Relaxed) {
+        return;
+    }
+    METRICS.archive.observe_block_archive(duration_secs);
+}
+
 /// Observe the duration of a blockchain RPC request.
 pub fn observe_request(method: &str, blockchain: &str, duration_secs: f64) {
     if !ENABLED.load(Ordering::Relaxed) {
