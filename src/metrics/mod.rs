@@ -26,6 +26,23 @@ use crate::archiver::datakind::DataKind;
 pub use archive::ArchiveMetrics;
 pub use blockchain::BlockchainMetrics;
 
+/// Whether data is being read from or written to storage.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Direction {
+    Read,
+    Write,
+}
+
+impl Direction {
+    /// Label value used in Prometheus metrics (the `direction` tag).
+    pub fn metrics_label(&self) -> &'static str {
+        match self {
+            Direction::Read => "read",
+            Direction::Write => "write",
+        }
+    }
+}
+
 static ENABLED: AtomicBool = AtomicBool::new(false);
 
 lazy_static! {
@@ -72,19 +89,19 @@ pub async fn await_last_scrape() {
 }
 
 /// Record that `n` items of the given data kind have been processed.
-pub fn add_items(kind: &DataKind, n: usize) {
+pub fn add_items(kind: &DataKind, direction: Direction, n: usize) {
     if !ENABLED.load(Ordering::Relaxed) {
         return;
     }
-    METRICS.archive.add_items(kind, n);
+    METRICS.archive.add_items(kind, &direction, n);
 }
 
-/// Record that `n` bytes of the given data kind have been written to storage.
-pub fn add_bytes(kind: &DataKind, n: usize) {
+/// Record that `n` bytes of the given data kind have been transferred.
+pub fn add_bytes(kind: &DataKind, direction: Direction, n: usize) {
     if !ENABLED.load(Ordering::Relaxed) {
         return;
     }
-    METRICS.archive.add_bytes(kind, n);
+    METRICS.archive.add_bytes(kind, &direction, n);
 }
 
 /// Observe the duration of a blockchain RPC request.

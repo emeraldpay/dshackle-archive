@@ -54,7 +54,7 @@ impl<B: BlockchainTypes, TS: TargetStorage> Archiver<B, TS> {
                     }
                 }
                 crate::progress::on_record();
-                crate::metrics::add_items(&DataKind::Blocks, 1);
+                crate::metrics::add_items(&DataKind::Blocks, crate::metrics::Direction::Write, 1);
                 Ok::<_, anyhow::Error>(Some((block_height, block, txes)))
             });
         }

@@ -4,16 +4,17 @@
 
 use prometheus::{CounterVec, Opts, Registry};
 use crate::archiver::datakind::DataKind;
+use super::Direction;
 
 /// Metrics for the archive processing zone.
 ///
-/// Uses two `CounterVec` metrics with a `type` label (`"block"`, `"transaction"`, `"trace"`):
+/// Uses two `CounterVec` metrics with `type` and `direction` labels:
 /// - `items` — total number of items (blocks, transactions, traces) processed
-/// - `bytes` — total number of bytes written to storage
+/// - `bytes` — total number of bytes transferred to/from storage
 pub struct ArchiveMetrics {
-    /// Total items processed, labeled by type
+    /// Total items processed, labeled by type and direction
     pub items: CounterVec,
-    /// Total bytes written to storage, labeled by type
+    /// Total bytes transferred, labeled by type and direction
     pub bytes: CounterVec,
 }
 
@@ -25,15 +26,15 @@ impl ArchiveMetrics {
                     format!("{}_archive_items_total", app_name),
                     "Total number of items processed",
                 ),
-                &["type"],
+                &["type", "direction"],
             )
             .unwrap(),
             bytes: CounterVec::new(
                 Opts::new(
                     format!("{}_archive_bytes_total", app_name),
-                    "Total number of bytes written to storage",
+                    "Total number of bytes transferred",
                 ),
-                &["type"],
+                &["type", "direction"],
             )
             .unwrap(),
         }
@@ -45,12 +46,16 @@ impl ArchiveMetrics {
     }
 
     /// Record that `n` items of the given data kind have been processed.
-    pub fn add_items(&self, kind: &DataKind, n: usize) {
-        self.items.with_label_values(&[kind.metrics_label()]).inc_by(n as f64);
+    pub fn add_items(&self, kind: &DataKind, direction: &Direction, n: usize) {
+        self.items
+            .with_label_values(&[kind.metrics_label(), direction.metrics_label()])
+            .inc_by(n as f64);
     }
 
-    /// Record that `n` bytes of the given data kind have been written to storage.
-    pub fn add_bytes(&self, kind: &DataKind, n: usize) {
-        self.bytes.with_label_values(&[kind.metrics_label()]).inc_by(n as f64);
+    /// Record that `n` bytes of the given data kind have been transferred.
+    pub fn add_bytes(&self, kind: &DataKind, direction: &Direction, n: usize) {
+        self.bytes
+            .with_label_values(&[kind.metrics_label(), direction.metrics_label()])
+            .inc_by(n as f64);
     }
 }

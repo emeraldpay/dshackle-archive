@@ -192,7 +192,7 @@ impl TargetFileWriter for NewObjectsFile<'_> {
             writer.append(data).map_err(|e| anyhow!("IO Error: {:?}", e))?
         };
         crate::progress::on_bytes(size);
-        crate::metrics::add_bytes(&self.kind, size);
+        crate::metrics::add_bytes(&self.kind, crate::metrics::Direction::Write, size);
         self.pipe.apply_backpressure().await?;
         Ok(())
     }
@@ -238,7 +238,7 @@ impl TargetFileReader for ExisingObjectsFile {
         let stream = self.stream.into_inner().into_stream();
         let std_reader = SyncIoBridge::new(StreamReader::new(stream));
 
-        let rx_sync = avro_reader::consume_sync(kind.schema(), std_reader);
+        let rx_sync = avro_reader::consume_sync(kind, kind.schema(), std_reader);
         let rx = copy::copy_from_sync(rx_sync);
 
         Ok(rx)

@@ -177,7 +177,7 @@ impl TargetFileWriter for FsFileWriter<'_> {
                 let mut writer = writer.lock().unwrap();
                 let bytes = writer.append(data).map_err(|e| anyhow!("IO Error: {}. File: {:?}", e, self.path))?;
                 crate::progress::on_bytes(bytes);
-                crate::metrics::add_bytes(&self.kind, bytes);
+                crate::metrics::add_bytes(&self.kind, crate::metrics::Direction::Write, bytes);
                 Ok(())
             }
         }
@@ -195,7 +195,7 @@ impl TargetFileWriter for FsFileWriter<'_> {
 
 impl TargetFileReader for FsFileReader {
     fn read(self) -> Result<Receiver<Record<'static>>> {
-        let rx_sync = avro_reader::consume_sync(self.kind.schema(), self.file);
+        let rx_sync = avro_reader::consume_sync(self.kind, self.kind.schema(), self.file);
         let rx = copy::copy_from_sync(rx_sync);
         Ok(rx)
     }

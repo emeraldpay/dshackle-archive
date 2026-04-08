@@ -3,13 +3,29 @@ use anyhow::anyhow;
 use apache_avro::Schema;
 use apache_avro::types::Record;
 use tokio::sync::mpsc::{unbounded_channel, UnboundedReceiver};
-use crate::{avros, global};
+use crate::{avros, global, metrics};
+use crate::archiver::datakind::DataKind;
 
-pub(super) fn consume_sync<R: Read + Send + 'static>(schema: &'static Schema, reader: R) -> UnboundedReceiver<Record<'static>> {
+/// Wraps a `Read` and reports bytes read to metrics as they flow through.
+struct CountingReader<R> {
+    inner: R,
+    kind: DataKind,
+}
+
+impl<R: Read> Read for CountingReader<R> {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        let n = self.inner.read(buf)?;
+        metrics::add_bytes(&self.kind, metrics::Direction::Read, n);
+        Ok(n)
+    }
+}
+
+pub(super) fn consume_sync<R: Read + Send + 'static>(kind: DataKind, schema: &'static Schema, reader: R) -> UnboundedReceiver<Record<'static>> {
     let (tx, rx) = unbounded_channel();
 
     tokio::task::spawn_blocking(move || {
         tracing::trace!("Reading avro file...");
+        let reader = CountingReader { inner: reader, kind };
         let avro_reader = apache_avro::Reader::with_schema(&schema, reader);
         if avro_reader.is_err() {
             tracing::error!("Error reading avro file: {:?}", avro_reader.err().unwrap());
@@ -38,6 +54,7 @@ pub(super) fn consume_sync<R: Read + Send + 'static>(schema: &'static Schema, re
                 tracing::error!("Error sending record to channel: {:?}", e);
                 break
             }
+            metrics::add_items(&kind, metrics::Direction::Read, 1);
         }
         tracing::trace!("Read avro file...");
     });
@@ -48,6 +65,7 @@ pub(super) fn consume_sync<R: Read + Send + 'static>(schema: &'static Schema, re
 
 #[cfg(test)]
 mod tests {
+    use crate::archiver::datakind::DataKind;
     use crate::avros::{BLOCK_SCHEMA, TX_SCHEMA};
     use crate::testing;
 
@@ -56,7 +74,7 @@ mod tests {
         testing::start_test();
         let file = std::fs::File::open("testdata/fullAvroFiles/000723743.block.avro").unwrap();
         let schema = &BLOCK_SCHEMA;
-        let mut rx = super::consume_sync(schema, file);
+        let mut rx = super::consume_sync(DataKind::Blocks, schema, file);
         let mut count = 0;
         while let Some(_record) = rx.recv().await {
             count += 1;
@@ -69,7 +87,7 @@ mod tests {
         testing::start_test();
         let file = std::fs::File::open("testdata/fullAvroFiles/000723743.txes.avro").unwrap();
         let schema = &TX_SCHEMA;
-        let mut rx = super::consume_sync(schema, file);
+        let mut rx = super::consume_sync(DataKind::Transactions, schema, file);
         let mut count = 0;
         while let Some(_record) = rx.recv().await {
             count += 1;
