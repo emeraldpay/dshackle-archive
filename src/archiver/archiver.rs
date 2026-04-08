@@ -132,15 +132,26 @@ impl<B: BlockchainTypes, TS: TargetStorage> ArchiveAll<Range> for Archiver<B, TS
 
         let blocks = self.process_blocks(what.clone(), notification.clone(), options).await?;
 
-        if options.include_tx() {
-            tracing::debug!(range = %what, "Process txes");
-            self.process_txes(what.clone(), notification.clone(), &blocks, options).await?;
-        }
-
-        if options.include_trace() {
-            tracing::debug!(range = %what, "Process traces");
-            self.process_traces(what.clone(), notification.clone(), &blocks, options).await?;
-        }
+        let (result_tx, result_trace) = tokio::join!(
+            async {
+                if options.include_tx() {
+                    tracing::debug!(range = %what, "Process txes");
+                    self.process_txes(what.clone(), notification.clone(), &blocks, options).await
+                } else {
+                    Ok(())
+                }
+            },
+            async {
+                if options.include_trace() {
+                    tracing::debug!(range = %what, "Process traces");
+                    self.process_traces(what.clone(), notification.clone(), &blocks, options).await
+                } else {
+                    Ok(())
+                }
+            }
+        );
+        result_tx?;
+        result_trace?;
 
         let shutdown = global::get_shutdown();
         if shutdown.is_signalled() {
