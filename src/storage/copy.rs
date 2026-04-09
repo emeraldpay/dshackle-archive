@@ -1,7 +1,6 @@
-use tokio::sync::mpsc::UnboundedReceiver;
 use crate::global;
 
-pub(super) fn copy_from_sync<T: Send + 'static>(mut source: UnboundedReceiver<T>) -> tokio::sync::mpsc::Receiver<T> {
+pub(super) fn copy_from_sync<T: Send + 'static>(mut source: tokio::sync::mpsc::Receiver<T>) -> tokio::sync::mpsc::Receiver<T> {
     let (tx, rx) = tokio::sync::mpsc::channel(2);
     tokio::spawn(async move {
         let shutdown = global::get_shutdown();

@@ -2,9 +2,14 @@ use std::io::Read;
 use anyhow::anyhow;
 use apache_avro::Schema;
 use apache_avro::types::Record;
-use tokio::sync::mpsc::{unbounded_channel, UnboundedReceiver};
+use tokio::sync::mpsc;
 use crate::{avros, global, metrics};
 use crate::archiver::datakind::DataKind;
+
+/// How many deserialized records the reader may buffer before it blocks waiting
+/// for the consumer to catch up. Keeps memory bounded while still allowing the
+/// reader thread to stay ahead of the consumer.
+const READ_CHANNEL_CAPACITY: usize = 16;
 
 /// Wraps a `Read` and reports bytes read to metrics as they flow through.
 struct CountingReader<R> {
@@ -20,8 +25,8 @@ impl<R: Read> Read for CountingReader<R> {
     }
 }
 
-pub(super) fn consume_sync<R: Read + Send + 'static>(kind: DataKind, schema: &'static Schema, reader: R) -> UnboundedReceiver<Record<'static>> {
-    let (tx, rx) = unbounded_channel();
+pub(super) fn consume_sync<R: Read + Send + 'static>(kind: DataKind, schema: &'static Schema, reader: R) -> mpsc::Receiver<Record<'static>> {
+    let (tx, rx) = mpsc::channel(READ_CHANNEL_CAPACITY);
 
     tokio::task::spawn_blocking(move || {
         tracing::trace!("Reading avro file...");
@@ -50,7 +55,9 @@ pub(super) fn consume_sync<R: Read + Send + 'static>(kind: DataKind, schema: &'s
                 continue
             }
             let record = record.unwrap();
-            if let Err(e) = tx.send(record) {
+            // blocking_send applies backpressure — the reader thread pauses when
+            // the channel is full, preventing unbounded memory growth
+            if let Err(e) = tx.blocking_send(record) {
                 tracing::error!("Error sending record to channel: {:?}", e);
                 break
             }
