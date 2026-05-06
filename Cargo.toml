@@ -1,6 +1,6 @@
 [package]
 name = "dshackle-archive"
-version = "0.7.0-dev"
+version = "0.7.0"
 edition = "2024"
 license = "Apache-2.0"
 description = "Extract blockchain data in JSON format and archive it as Avro files for offline processing"
@@ -20,7 +20,7 @@ ginepro = { git = "https://github.com/dmarteau/ginepro", branch = "tonic-0.14-su
 pulsar = "6.7"
 apache-avro = { version = "0.21", features = ["snappy", "zstandard"] }
 strum = "0.27"
-emerald-api = { git = "https://github.com/emeraldpay/emerald-api-rs", features = ["client-blockchain"] }
+emerald-api = { version = "0.1", features = ["client-blockchain"] }
 enum-display-derive = "0.1"
 futures-util = "0.3"
 lazy_static = "1.5"

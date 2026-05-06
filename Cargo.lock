@@ -2017,7 +2017,7 @@ dependencies = [
 
 [[package]]
 name = "dshackle-archive"
-version = "0.7.0-dev"
+version = "0.7.0"
 dependencies = [
  "alloy",
  "anyhow",
@@ -2153,8 +2153,9 @@ dependencies = [
 
 [[package]]
 name = "emerald-api"
-version = "0.1.0-dev"
-source = "git+https://github.com/emeraldpay/emerald-api-rs#890edc752ffb398af2bb8ebd0de0f0597259b33e"
+version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "10c5752530c6c3b3576a5ac4ec5cd99c7d993ecc5b4efd97217ef40fdbcb1586"
 dependencies = [
  "bytes",
  "chrono",
