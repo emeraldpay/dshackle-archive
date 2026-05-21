@@ -10,9 +10,9 @@ use crate::archiver::datakind::{DataKind, DataOptions};
 use crate::notify::Notification;
 use crate::archiver::range::{Height, Range};
 use crate::global;
-use crate::storage::{TargetFile, TargetFileWriter, TargetStorage};
+use crate::storage::{TargetFile, TargetFileWriter, WriteTarget};
 
-impl<B: BlockchainTypes, TS: TargetStorage> Archiver<B, TS> {
+impl<B: BlockchainTypes, TS: WriteTarget> Archiver<B, TS> {
 
     ///
     /// Archive the blocks and return all the blocks in that the archive for reference in other tables.

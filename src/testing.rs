@@ -10,7 +10,7 @@ use crate::blockchain::mock::{MockType};
 use crate::archiver::Archiver;
 use crate::archiver::datakind::{DataKind, TraceOptions};
 use crate::archiver::range::Range;
-use crate::storage::{TargetFileWriter, TargetStorage};
+use crate::storage::{TargetFileWriter, ReadTarget};
 
 static INIT: std::sync::Once = std::sync::Once::new();
 
@@ -52,7 +52,7 @@ pub async fn list_mem_filenames(mem: Arc<InMemory>) -> Vec<String> {
         .collect()
 }
 
-pub async fn write_block_and_tx<TS: TargetStorage>(
+pub async fn write_block_and_tx<TS: ReadTarget>(
     archiver: &Archiver<MockType, TS>,
     height: u64, tx_index: Option<Vec<usize>>
 ) -> anyhow::Result<()> {
@@ -90,7 +90,7 @@ pub async fn write_block_and_tx<TS: TargetStorage>(
 /// * `height` - Block height to write
 /// * `tx_index` - Optional list of transaction indices to write (None = write all)
 /// * `trace_options` - Optional trace options (None = no traces)
-pub async fn write_block_tx_and_traces<TS: TargetStorage>(
+pub async fn write_block_tx_and_traces<TS: ReadTarget>(
     archiver: &Archiver<MockType, TS>,
     height: u64,
     tx_index: Option<Vec<usize>>,

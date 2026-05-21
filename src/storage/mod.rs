@@ -16,6 +16,7 @@ use crate::{
     },
     args::Args,
     global,
+    record::ArchiveRow,
 };
 use anyhow::{anyhow, Result};
 use object_store::{
@@ -113,20 +114,40 @@ pub fn create_fs(value: &Args) -> Result<FsStorage> {
     Ok(FsStorage::new(PathBuf::from(dir), Filenames::with_dir(blockchain_dir)))
 }
 
+///
+/// Capability trait for targets that can have new records appended.
+///
+/// All targets (Avro/JSON files, future Pulsar/Kafka topics) implement this.
+/// `archive` requires only this capability. The `stream` command currently also
+/// requires [`ReadTarget`] (it uses `find_incomplete_tables` to honour
+/// `--continue`); when streaming-only targets land in Phase 3 it will branch on
+/// the target type and the file-based path will be the one that needs read
+/// capabilities.
 #[async_trait]
-pub trait TargetStorage: Send + Sync {
-
+pub trait WriteTarget: Send + Sync {
     ///
-    /// A type used for writing new records
+    /// A type used for writing new records.
     type Writer: TargetFileWriter + Send + Sync + 'static;
 
     ///
-    /// A type used for reading the existing records
-    type Reader: TargetFileReader + Send + Sync;
-
+    /// Create a new file/session (or overwrite an existing one).
     ///
-    /// Create a new file (or overwrite an existing one)
+    /// Returns `None` when `overwrite` is false and the destination already exists.
     async fn create(&self, kind: DataKind, range: &Range, overwrite: bool) -> Result<Option<Self::Writer>>;
+}
+
+///
+/// Capability trait for targets that can list, open, and delete existing files.
+///
+/// Implemented by file-based targets (filesystem, S3) but **not** by streaming
+/// targets (Pulsar, Kafka), which are append-only logs. Commands that need to
+/// inspect or rewrite existing data (`verify`, `fix`, `compact`) bound on this
+/// trait.
+#[async_trait]
+pub trait ReadTarget: WriteTarget {
+    ///
+    /// A type used for reading the existing records.
+    type Reader: TargetFileReader + Send + Sync;
 
     ///
     /// Delete the file
@@ -214,8 +235,28 @@ pub trait TargetFile {
 #[async_trait]
 pub trait TargetFileWriter: TargetFile {
     ///
-    /// Append a new record to the file
-    async fn append(&self, data: Record<'_>) -> Result<()>;
+    /// Append a new row to the file/session.
+    ///
+    /// The row is format-neutral; backends encode it to their on-the-wire
+    /// representation internally (Avro Record, JSON bytes, Kafka message, ...).
+    async fn append(&self, row: ArchiveRow) -> Result<()>;
+
+    ///
+    /// Append a pre-encoded Avro [`Record`] without going through [`ArchiveRow`].
+    ///
+    /// Used by the `compact` command, which reads existing Avro files and copies
+    /// records into new range files. Going through [`ArchiveRow`] would require
+    /// decoding then re-encoding every record; this method short-circuits that.
+    ///
+    /// File-based Avro backends override this; future non-Avro backends (JSON
+    /// files, Pulsar, Kafka) keep the default `Err` since they have no `Record`
+    /// concept. Such backends are not [`ReadTarget`]s, so `compact` cannot run
+    /// against them anyway.
+    async fn append_avro_record(&self, _data: Record<'_>) -> Result<()> {
+        Err(anyhow!(
+            "append_avro_record is not supported by this target"
+        ))
+    }
 
     ///
     /// MUST BE called if everything is written ok. Otherwise, the file is deleted on Drop.

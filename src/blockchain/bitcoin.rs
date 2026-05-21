@@ -4,14 +4,13 @@ use std::sync::Arc;
 use anyhow::anyhow;
 use crate::blockchain::connection::Blockchain;
 use anyhow::{Result, Error};
-use apache_avro::types::Record;
 use async_trait::async_trait;
-use chrono::Utc;
+use chrono::{DateTime, Utc};
 use serde::{Deserialize, Deserializer};
-use crate::avros::{BLOCK_SCHEMA, TX_SCHEMA};
 use crate::blockchain::{BitcoinType, BlockDetails, BlockReference, BlockchainData, BlockchainTypes, JsonString};
-use crate::archiver::datakind::TraceOptions;
+use crate::archiver::datakind::{DataKind, TraceOptions};
 use crate::blockchain::next_block::NextBlock;
+use crate::record::{ArchiveRow, BlockchainType as ArchiveBlockchainType, Field};
 
 #[derive(Clone)]
 pub struct BitcoinData {
@@ -138,30 +137,32 @@ impl BlockchainData<BitcoinType> for BitcoinData {
         self.blockchain_id.clone()
     }
 
-    async fn fetch_block(&self, height: &BlockReference<BlockHash>) -> Result<(Record<'static>, BitcoinBlock, Vec<TxHash>)> {
+    async fn fetch_block(&self, height: &BlockReference<BlockHash>) -> Result<(ArchiveRow, BitcoinBlock, Vec<TxHash>)> {
         let raw_block = match height {
             BlockReference::Hash(hash) => self.get_block(hash).await?,
             BlockReference::Height(height) => self.get_block_at(height.height).await?,
         };
         let parsed_block = serde_json::from_slice::<BitcoinBlock>(&raw_block)?;
 
-        let mut record = Record::new(&BLOCK_SCHEMA).unwrap();
-        record.put("blockchainType", "BITCOIN");
-        record.put("blockchainId", self.blockchain_id());
-        record.put("archiveTimestamp", Utc::now().timestamp_millis());
-        record.put("height", parsed_block.height as i64);
-        record.put("blockId", format!("{:x}", &parsed_block.hash));
-        record.put("parentId", format!("{:x}", &parsed_block.previous_block_hash));
-        record.put("timestamp", (parsed_block.time * 1000) as i64);
-        record.put("json", raw_block);
-        record.put("unclesCount", 0);
+        let row = ArchiveRow {
+            kind: DataKind::Blocks,
+            blockchain_type: ArchiveBlockchainType::Bitcoin,
+            blockchain_id: self.blockchain_id(),
+            archive_ts: Utc::now(),
+            height: parsed_block.height,
+            block_id: format!("{:x}", &parsed_block.hash),
+            timestamp: block_timestamp(parsed_block.time),
+            parent_id: Some(format!("{:x}", &parsed_block.previous_block_hash)),
+            tx_index: None,
+            tx_id: None,
+            fields: vec![Field::BlockJson(raw_block)],
+        };
 
         let transactions = parsed_block.transactions.clone();
-
-        Ok((record, parsed_block, transactions))
+        Ok((row, parsed_block, transactions))
     }
 
-    async fn fetch_tx(&self, block: &BitcoinBlock, index: usize) -> Result<Record<'static>> {
+    async fn fetch_tx(&self, block: &BitcoinBlock, index: usize) -> Result<ArchiveRow> {
         let tx_hash = block.transactions.get(index).ok_or_else(|| anyhow!("Transaction not found"))?;
 
         let (tx, tx_raw) = tokio::join!(
@@ -169,22 +170,25 @@ impl BlockchainData<BitcoinType> for BitcoinData {
             self.get_tx_raw(tx_hash)
         );
 
-        let mut record = Record::new(&TX_SCHEMA).unwrap();
-        record.put("blockchainType", "BITCOIN");
-        record.put("blockchainId", self.blockchain_id());
-        record.put("archiveTimestamp", Utc::now().timestamp_millis());
-        record.put("height", block.height as i64);
-        record.put("blockId", format!("{:x}", &block.hash));
-        record.put("timestamp", (block.time * 1000) as i64);
-        record.put("index", index as i64);
-        record.put("txid", format!("{:x}", &tx_hash));
-        record.put("json", tx?);
-        record.put("raw", tx_raw?);
-
-        Ok(record)
+        Ok(ArchiveRow {
+            kind: DataKind::Transactions,
+            blockchain_type: ArchiveBlockchainType::Bitcoin,
+            blockchain_id: self.blockchain_id(),
+            archive_ts: Utc::now(),
+            height: block.height,
+            block_id: format!("{:x}", &block.hash),
+            timestamp: block_timestamp(block.time),
+            parent_id: None,
+            tx_index: Some(index as u64),
+            tx_id: Some(format!("{:x}", tx_hash)),
+            fields: vec![
+                Field::TxJson(tx?),
+                Field::TxRaw(tx_raw?),
+            ],
+        })
     }
 
-    async fn fetch_traces(&self, _block: &BitcoinBlock, _index: usize, _options: &TraceOptions) -> Result<Record<'static>> {
+    async fn fetch_traces(&self, _block: &BitcoinBlock, _index: usize, _options: &TraceOptions) -> Result<ArchiveRow> {
         Err(anyhow!("Traces are not supported for Bitcoin"))
     }
 
@@ -198,4 +202,10 @@ impl BlockchainData<BitcoinType> for BitcoinData {
     fn next_finalized_blocks(&self) -> Result<Box<dyn NextBlock>> {
         Err(anyhow!("Next finalized blocks are not supported for Bitcoin"))
     }
+}
+
+/// Convert the node's block timestamp (Unix seconds) into a UTC `DateTime`.
+fn block_timestamp(secs: u64) -> DateTime<Utc> {
+    DateTime::<Utc>::from_timestamp(secs as i64, 0)
+        .unwrap_or_else(|| DateTime::<Utc>::from_timestamp(0, 0).unwrap())
 }

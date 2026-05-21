@@ -8,7 +8,9 @@ use async_trait::async_trait;
 use crate::archiver::datakind::DataKind;
 use crate::archiver::filenames::{Filenames, Level, LevelDouble};
 use crate::archiver::range::Range;
-use crate::storage::{avro_reader, copy, FileReference, TargetFile, TargetFileReader, TargetFileWriter, TargetStorage};
+use crate::formats::avro;
+use crate::record::ArchiveRow;
+use crate::storage::{avro_reader, copy, FileReference, ReadTarget, TargetFile, TargetFileReader, TargetFileWriter, WriteTarget};
 use anyhow::{anyhow, Context, Result};
 use tokio::sync::mpsc::Receiver;
 use crate::global;
@@ -25,10 +27,9 @@ impl FsStorage {
 }
 
 #[async_trait]
-impl TargetStorage for FsStorage {
+impl WriteTarget for FsStorage {
 
     type Writer = FsFileWriter<'static>;
-    type Reader = FsFileReader;
 
     async fn create(&self, kind: DataKind, range: &Range, overwrite: bool) -> Result<Option<FsFileWriter<'static>>> {
         let filename = self.parent_dir.join(self.filenames.path(&kind, range));
@@ -37,6 +38,12 @@ impl TargetStorage for FsStorage {
         }
         Ok(Some(FsFileWriter::new(filename.clone(), kind).context(format!("Path: {:?}", &filename))?))
     }
+}
+
+#[async_trait]
+impl ReadTarget for FsStorage {
+
+    type Reader = FsFileReader;
 
     async fn delete(&self, path: &FileReference) -> Result<()> {
         let path = PathBuf::from(&path.path);
@@ -107,7 +114,7 @@ impl TargetStorage for FsStorage {
                     if let Ok(file) = file {
                         let path = file.path();
                         let filename = path.file_name().unwrap().to_str().unwrap();
-                        let is_archive = Filenames::parse(filename.to_string());
+                        let is_archive = filenames.parse(filename);
                         if is_archive.is_none() {
                             tracing::debug!("Not an archive: {}", filename);
                             continue
@@ -143,9 +150,26 @@ impl FsFileWriter<'_> {
         tracing::debug!("Create file: {:?}", path);
         let _ = fs::create_dir_all(path.parent().unwrap())?;
         let file = File::create(path.clone())?;
-        let writer = Writer::with_codec(kind.schema(), file, global::get_avro_codec());
+        let writer = Writer::with_codec(avro::schema_for(kind), file, global::get_avro_codec());
         let writer = Mutex::new(writer);
         Ok(Self { path, writer: Some(writer), kind })
+    }
+
+    ///
+    /// Append a pre-encoded Avro [`Record`] to the file. Used by code paths that
+    /// read existing Avro files and copy records (e.g., compaction) where converting
+    /// through [`ArchiveRow`] would be redundant.
+    pub(crate) fn append_record(&self, data: Record<'_>) -> Result<()> {
+        match &self.writer {
+            None => Err(anyhow!("Writer is already closed")),
+            Some(writer) => {
+                let mut writer = writer.lock().unwrap();
+                let bytes = writer.append(data).map_err(|e| anyhow!("IO Error: {}. File: {:?}", e, self.path))?;
+                crate::progress::on_bytes(bytes);
+                crate::metrics::add_bytes(&self.kind, crate::metrics::Direction::Write, bytes);
+                Ok(())
+            }
+        }
     }
 }
 
@@ -170,17 +194,13 @@ impl TargetFile for FsFileReader {
 #[async_trait]
 impl TargetFileWriter for FsFileWriter<'_> {
 
-    async fn append(&self, data: Record<'_>) -> Result<()> {
-        match &self.writer {
-            None => Err(anyhow!("Writer is already closed")),
-            Some(writer) => {
-                let mut writer = writer.lock().unwrap();
-                let bytes = writer.append(data).map_err(|e| anyhow!("IO Error: {}. File: {:?}", e, self.path))?;
-                crate::progress::on_bytes(bytes);
-                crate::metrics::add_bytes(&self.kind, crate::metrics::Direction::Write, bytes);
-                Ok(())
-            }
-        }
+    async fn append(&self, row: ArchiveRow) -> Result<()> {
+        let record = avro::encode_row(&row)?;
+        self.append_record(record)
+    }
+
+    async fn append_avro_record(&self, data: Record<'_>) -> Result<()> {
+        self.append_record(data)
     }
 
     async fn close(mut self: Self) -> Result<()> {
@@ -195,7 +215,7 @@ impl TargetFileWriter for FsFileWriter<'_> {
 
 impl TargetFileReader for FsFileReader {
     fn read(self) -> Result<Receiver<Record<'static>>> {
-        let rx_sync = avro_reader::consume_sync(self.kind, self.kind.schema(), self.file);
+        let rx_sync = avro_reader::consume_sync(self.kind, avro::schema_for(self.kind), self.file);
         let rx = copy::copy_from_sync(rx_sync);
         Ok(rx)
     }

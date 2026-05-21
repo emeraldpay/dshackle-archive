@@ -32,7 +32,7 @@ use crate::{
     },
     blockchain::{BitcoinType, BlockchainTypes, EthereumType},
     notify::Notifier,
-    storage::TargetStorage,
+    storage::ReadTarget,
     archiver::Archiver,
 };
 
@@ -45,11 +45,13 @@ pub mod errors;
 pub mod blockchain;
 pub mod storage;
 pub mod avros;
+pub mod formats;
 pub mod notify;
 mod global;
 pub mod metrics;
 pub(crate) mod progress;
 pub mod archiver;
+pub mod record;
 
 fn init_tracing() {
     let filter = EnvFilter::builder()
@@ -122,7 +124,7 @@ async fn run<B: BlockchainTypes + 'static>(builder: Builder<B>, args: &Args) -> 
     }
 }
 
-async fn run_with_target<B: BlockchainTypes + 'static, TS: TargetStorage + 'static>(builder: Builder<B>, target: TS, args: &Args) -> Result<()> {
+async fn run_with_target<B: BlockchainTypes + 'static, TS: ReadTarget + 'static>(builder: Builder<B>, target: TS, args: &Args) -> Result<()> {
     let chain_ref = ChainRef::from_str(&args.blockchain)
         .map_err(|_| anyhow!("Unsupported blockchain: {}", args.blockchain))?;
     let blockchain = Blockchain::new(&args.connection, args.as_dshackle_blockchain()?, chain_ref.code()).await?;
@@ -161,12 +163,12 @@ struct Builder<B: BlockchainTypes> {
     notifier: Option<Box<dyn Notifier>>,
 }
 
-struct BuilderWithTarget<B: BlockchainTypes, TS: TargetStorage> {
+struct BuilderWithTarget<B: BlockchainTypes, TS: ReadTarget> {
     parent: Builder<B>,
     target: TS,
 }
 
-struct BuilderWithData<B: BlockchainTypes, TS: TargetStorage> {
+struct BuilderWithData<B: BlockchainTypes, TS: ReadTarget> {
     parent: BuilderWithTarget<B, TS>,
     data: B::DataProvider,
 }
@@ -186,7 +188,7 @@ impl<B> Builder<B> where B: BlockchainTypes {
         }
     }
 
-    fn with_target<TS>(self, target: TS) -> BuilderWithTarget<B, TS> where TS: TargetStorage {
+    fn with_target<TS>(self, target: TS) -> BuilderWithTarget<B, TS> where TS: ReadTarget {
         BuilderWithTarget {
             target,
             parent: self,
@@ -194,7 +196,7 @@ impl<B> Builder<B> where B: BlockchainTypes {
     }
 }
 
-impl<B, TS> BuilderWithTarget<B, TS> where B: BlockchainTypes, TS: TargetStorage {
+impl<B, TS> BuilderWithTarget<B, TS> where B: BlockchainTypes, TS: ReadTarget {
     fn with_data(self, blockchain: Blockchain, id: String) -> BuilderWithData<B, TS> {
         BuilderWithData {
             parent: self,
@@ -203,7 +205,7 @@ impl<B, TS> BuilderWithTarget<B, TS> where B: BlockchainTypes, TS: TargetStorage
     }
 }
 
-impl<B, TS> BuilderWithData<B, TS> where B: BlockchainTypes + 'static, TS: TargetStorage + 'static {
+impl<B, TS> BuilderWithData<B, TS> where B: BlockchainTypes + 'static, TS: ReadTarget + 'static {
 
     async fn stream(self, args: &Args) -> StreamCommand<B, TS> {
         let notifier = self.parent.parent.notifier.unwrap();
