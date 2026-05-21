@@ -95,7 +95,14 @@ pub enum Field {
     // ---- Transaction-kind fields ----
     /// JSON of the transaction as returned by the node.
     TxJson(Vec<u8>),
-    /// Raw bytes of the transaction (binary, not JSON).
+    /// Raw transaction bytes (binary, not JSON).
+    ///
+    /// Stored decoded to save memory — the wire format is a hex string, but its
+    /// presence/absence of an `0x` prefix is fully determined by the blockchain
+    /// (Ethereum uses `0x`, Bitcoin does not), so format adapters can reconstruct
+    /// the wire form from the row's [`crate::record::BlockchainType`] when
+    /// writing it back out (e.g., the JSON layout writes `raw-<HASH>.hex` as a
+    /// hex string with the appropriate prefix).
     TxRaw(Vec<u8>),
     /// Ethereum-only: the transaction receipt JSON.
     Receipt(Vec<u8>),

@@ -47,60 +47,102 @@ Arguments:
 Options:
   -b, --blockchain <BLOCKCHAIN>
           Blockchain
+
       --dry-run
           Do not modify the storage
+
   -c, --connection <HOST:PORT>
           Connection (host:port)
+
       --connection.notls
           Disable TLS
+
       --parallel <PARALLEL>
           How many API requests to make in parallel. Range: 1..512. Default: 16
+
       --notify.dir <NOTIFY_DIR>
           Write notifications as JSON line to the specified dir in a file <dshackle-archive-%STARTTIME.jsonl>
+
       --notify.pulsar.topic <PULSAR_TOPIC>
           Send notifications as JSON to the Pulsar to the specified topic (notify.pulsar.url must be specified)
+
       --notify.pulsar.url <PULSAR_URL>
           Send notifications as JSON to the Pulsar with specified URL (notify.pulsar.topic must be specified)
+
       --auth.aws.access-key <ACCESS_KEY>
           AWS / S3 Access Key
+
       --auth.aws.secret-key <SECRET_KEY>
           AWS / S3 Secret Key
+
       --aws.endpoint <ENDPOINT>
           AWS / S3 endpoint url instead of the default one
+
       --aws.region <REGION>
           AWS / S3 region ID to use for requests
+
       --aws.s3.path-style
           Enable S3 Path Style access (default is false). Use this flag for a no-AWS service
+
       --aws.trust-tls
           Trust any TLS certificate for AWS / S3 (default is false)
+
   -d, --dir <DIR>
           Target directory
+
       --continue
           [Stream Command] Continue from the last archived block; i.e., not the latest in blockchain
+
       --tail <TAIL>
           [Verify/Fix Commands] Use the latest T blocks instead of a range
+
   -r, --range <RANGE>
           Blocks Range (`N...M`)
+
       --range.chunk <RANGE_CHUNK>
           Range chunk size (default 1000)
+
   -t, --tables <TABLES>
           Types of tables to archive (comma-separated list of `blocks`, `txes`, `traces`). Default: blocks,txes
+
       --fields.trace <FIELDS_TRACE>
           List of data to include into tracing archive table (comma-separated list of `calls`, `stateDiff`). Default: calls,stateDiff; Used only if `traces` are included into the archived tables (see `--tables` option); Details: `calls` - debug_traceTransaction with `callTracer` tracing; `stateDiff` - debug_traceTransaction with `prestateTracer` tracing
+
       --fix.clean
           [Fix Command] Set to remove any existing data in whole chunk if any of tables is missing a block in the chunk or has broken values. Default is `false`, which deleted only tables with missing / corrupted data
+
       --compression <COMPRESSION>
-          Compression algorithm to use when writing new Avro files. Default is `zstd` [possible values: snappy, zstd]
+          Compression algorithm to use when writing new Avro files. Default is `zstd`
+
+          [possible values: snappy, zstd]
+
       --follow <FOLLOW>
-          [Stream Command] Follow mode for new blocks: `latest` - follow the latest blocks (default); `finalized` - follow only finalized blocks [default: latest] [possible values: latest, finalized]
+          [Stream Command] Follow mode for new blocks: `latest` - follow the latest blocks (default); `finalized` - follow only finalized blocks
+
+          [default: latest]
+          [possible values: latest, finalized]
+
+      --format <FORMAT>
+          Output format. `avro` (default) writes one row-batched Avro file per (kind, range) under the historical layout. `json` writes one JSON file per field (block.json, tx-<HASH>.json, receipt-<HASH>.json, raw-<HASH>.hex, …) inside a directory per height. `compact` and `verify` are not supported with `json`
+
+          Possible values:
+          - avro: One Avro file per (kind, range). Historical layout — supports all commands
+          - json: One JSON file per field under a per-height directory. `archive`, `stream`, and `fix` are supported; `compact` and `verify` are rejected at startup
+
+          [default: avro]
+
       --metrics <HOST:PORT>
           Start a Prometheus-compatible metrics server on the given address (e.g., 127.0.0.1:8080). Metrics are served at http://HOST:PORT/metrics
+
       --metrics.await
           After the main command finishes, keep the metrics server running until one final scrape completes (or 60 seconds elapse). Useful for short-lived commands (fix, verify, compact) to ensure Prometheus collects the final metrics before the process exits
+
   -h, --help
-          Print help
+          Print help (see a summary with '-h')
+
   -V, --version
           Print version
+
 
 ----
 

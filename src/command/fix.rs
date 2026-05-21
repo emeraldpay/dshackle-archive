@@ -1,6 +1,6 @@
 use std::marker::PhantomData;
 use async_trait::async_trait;
-use crate::{archiver::{ArchiveAll, Archiver}, args::Args, blockchain::BlockchainTypes, command::CommandExecutor, global, notify::RunMode, storage::ReadTarget};
+use crate::{archiver::{ArchiveAll, Archiver}, args::Args, blockchain::BlockchainTypes, command::CommandExecutor, global, notify::RunMode, storage::ScanTarget};
 use crate::archiver::blocks_config::Blocks;
 use crate::archiver::datakind::DataOptions;
 
@@ -9,7 +9,7 @@ use crate::archiver::datakind::DataOptions;
 /// It checks the archive for the specified range and add missing data
 ///
 #[derive(Clone)]
-pub struct FixCommand<B: BlockchainTypes, TS: ReadTarget> {
+pub struct FixCommand<B: BlockchainTypes, TS: ScanTarget> {
     b: PhantomData<B>,
     blocks: Blocks,
     chunk_size: usize,
@@ -17,7 +17,7 @@ pub struct FixCommand<B: BlockchainTypes, TS: ReadTarget> {
     tx_options: DataOptions,
 }
 
-impl<B: BlockchainTypes, TS: ReadTarget> FixCommand<B, TS> {
+impl<B: BlockchainTypes, TS: ScanTarget> FixCommand<B, TS> {
     pub fn new(config: &Args,
                archiver: Archiver<B, TS>) -> anyhow::Result<Self> {
 
@@ -34,7 +34,7 @@ impl<B: BlockchainTypes, TS: ReadTarget> FixCommand<B, TS> {
 }
 
 #[async_trait]
-impl<B: BlockchainTypes, TS: ReadTarget> CommandExecutor for FixCommand<B, TS> {
+impl<B: BlockchainTypes, TS: ScanTarget> CommandExecutor for FixCommand<B, TS> {
 
     async fn execute(&self) -> anyhow::Result<()> {
         let shutdown = global::get_shutdown();

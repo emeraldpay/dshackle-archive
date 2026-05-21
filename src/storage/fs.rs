@@ -5,12 +5,15 @@ use std::sync::{Mutex};
 use apache_avro::types::Record;
 use apache_avro::{Writer};
 use async_trait::async_trait;
-use crate::archiver::datakind::DataKind;
+use crate::archiver::datakind::{DataKind, DataOptions};
 use crate::archiver::filenames::{Filenames, Level, LevelDouble};
 use crate::archiver::range::Range;
 use crate::formats::avro;
 use crate::record::ArchiveRow;
-use crate::storage::{avro_reader, copy, FileReference, ReadTarget, TargetFile, TargetFileReader, TargetFileWriter, WriteTarget};
+use crate::storage::{
+    avro_reader, copy, find_incomplete_by_listing, FileReference, ReadTarget, ScanTarget,
+    TargetFile, TargetFileReader, TargetFileWriter, WriteTarget,
+};
 use anyhow::{anyhow, Context, Result};
 use tokio::sync::mpsc::Receiver;
 use crate::global;
@@ -37,6 +40,17 @@ impl WriteTarget for FsStorage {
             return Ok(None);
         }
         Ok(Some(FsFileWriter::new(filename.clone(), kind).context(format!("Path: {:?}", &filename))?))
+    }
+}
+
+#[async_trait]
+impl ScanTarget for FsStorage {
+    async fn find_incomplete_tables(
+        &self,
+        blocks: Range,
+        tx_options: &DataOptions,
+    ) -> Result<Vec<(Range, Vec<DataKind>)>> {
+        find_incomplete_by_listing(self, blocks, tx_options).await
     }
 }
 

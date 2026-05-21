@@ -10,3 +10,4 @@
 //! future modules will add JSON-per-field files and Pulsar/Kafka stream encoding.
 
 pub mod avro;
+pub mod json;
