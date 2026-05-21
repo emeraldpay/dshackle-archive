@@ -10,10 +10,10 @@ use crate::archiver::datakind::{DataKind, DataOptions};
 use crate::notify::Notification;
 use crate::archiver::range::Range;
 use crate::global;
-use crate::storage::{TargetFile, TargetFileWriter, TargetStorage};
+use crate::storage::{TargetFile, TargetFileWriter, WriteTarget};
 
 
-impl<B: BlockchainTypes, TS: TargetStorage> Archiver<B, TS> {
+impl<B: BlockchainTypes, TS: WriteTarget> Archiver<B, TS> {
     pub async fn process_traces(&self, range: Range, notification: Notification, blocks: &BlockTransactions<B>, options: &DataOptions) -> anyhow::Result<()> {
         let shutdown = global::get_shutdown();
         if shutdown.is_signalled() {

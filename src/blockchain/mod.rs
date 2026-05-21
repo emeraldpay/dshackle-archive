@@ -9,7 +9,6 @@ pub mod block_seq;
 use std::fmt::Debug;
 use std::hash::Hash;
 use std::str::FromStr;
-use apache_avro::types::Record;
 use async_trait::async_trait;
 use anyhow::{anyhow, Error, Result};
 use serde::Deserialize;
@@ -22,7 +21,8 @@ use crate::{
     },
     archiver::{
         datakind::TraceOptions,
-    }
+    },
+    record::ArchiveRow,
 };
 use crate::archiver::range::Height;
 
@@ -86,16 +86,17 @@ pub trait BlockchainData<T: BlockchainTypes>: Send + Sync {
     fn blockchain_id(&self) -> String;
 
     ///
-    /// Get the details for the block
-    async fn fetch_block(&self, height: &BlockReference<T::BlockHash>) -> Result<(Record<'static>, T::BlockParsed, Vec<T::TxId>)>;
+    /// Get the details for the block. Returns the format-neutral [`ArchiveRow`] alongside
+    /// the parsed block (used to enumerate transactions) and the list of transaction ids.
+    async fn fetch_block(&self, height: &BlockReference<T::BlockHash>) -> Result<(ArchiveRow, T::BlockParsed, Vec<T::TxId>)>;
 
     ///
-    /// Get the details for the transaction
-    async fn fetch_tx(&self, block: &T::BlockParsed, index: usize) -> Result<Record<'static>>;
+    /// Get the details for the transaction.
+    async fn fetch_tx(&self, block: &T::BlockParsed, index: usize) -> Result<ArchiveRow>;
 
     ///
-    /// Get the details for the transaction
-    async fn fetch_traces(&self, block: &T::BlockParsed, index: usize, options: &TraceOptions) -> Result<Record<'static>>;
+    /// Get the details for the transaction trace.
+    async fn fetch_traces(&self, block: &T::BlockParsed, index: usize, options: &TraceOptions) -> Result<ArchiveRow>;
 
     ///
     /// Get the current height

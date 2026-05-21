@@ -14,7 +14,7 @@ use crate::{archiver::{
     range_group::{ArchiveGroup, ArchivesList}
 }, avros, blockchain::{BlockDetails, BlockchainTypes}, command::{CommandExecutor}, global, progress, storage::{
     TargetFileReader,
-    TargetStorage
+    ReadTarget
 }};
 use crate::archiver::datakind::{BlockOptions, DataKind, TraceOptions, TxOptions};
 use crate::archiver::range_bag::RangeBag;
@@ -48,7 +48,7 @@ use crate::storage::FileReference;
 ///     i.e., if a tx for just one of the blocks is missing then it deletes all files with txes in that group;
 ///
 #[derive(Clone)]
-pub struct VerifyCommand<B: BlockchainTypes, TS: TargetStorage> {
+pub struct VerifyCommand<B: BlockchainTypes, TS: ReadTarget> {
     b: PhantomData<B>,
     blocks: Blocks,
     archiver: Arc<Archiver<B, TS>>,
@@ -127,7 +127,7 @@ impl Preprocess {
     }
 }
 
-impl<B: BlockchainTypes + 'static, TS: TargetStorage + 'static> VerifyCommand<B, TS> {
+impl<B: BlockchainTypes + 'static, TS: ReadTarget + 'static> VerifyCommand<B, TS> {
     pub fn new(config: &crate::args::Args,
                archiver: Archiver<B, TS>,
     ) -> anyhow::Result<Self> {
@@ -210,7 +210,7 @@ impl<B: BlockchainTypes + 'static, TS: TargetStorage + 'static> VerifyCommand<B,
 
 ///
 /// verify data in each group
-fn process_data<B: BlockchainTypes + 'static, TS: TargetStorage + 'static>(
+fn process_data<B: BlockchainTypes + 'static, TS: ReadTarget + 'static>(
     ranges: Vec<(Range, Vec<ArchiveGroup>)>,
     archiver: Arc<Archiver<B, TS>>,
     data_options: DataOptions,
@@ -269,7 +269,7 @@ fn merge_small(groups: Vec<ArchiveGroup>) -> Vec<(Range, Vec<ArchiveGroup>)> {
 ///
 /// Delete the list of files
 /// Does nothing is dry-run mode is enabled
-async fn delete<TS: TargetStorage + 'static>(files: Vec<FileReference>, target: Arc<TS>) -> anyhow::Result<()> {
+async fn delete<TS: ReadTarget + 'static>(files: Vec<FileReference>, target: Arc<TS>) -> anyhow::Result<()> {
     let dry_run = global::is_dry_run();
     if dry_run {
         tracing::info!("Dry run mode, no files will be deleted");
@@ -404,7 +404,7 @@ fn deduplicate(data: &mut Preprocess) -> anyhow::Result<()> {
 }
 
 #[async_trait]
-impl<B: BlockchainTypes + 'static, FR: TargetStorage + 'static> CommandExecutor for VerifyCommand<B, FR> {
+impl<B: BlockchainTypes + 'static, FR: ReadTarget + 'static> CommandExecutor for VerifyCommand<B, FR> {
 
     async fn execute(&self) -> anyhow::Result<()> {
         let full_range = self.blocks.to_range(self.archiver.data_provider.as_ref()).await?;
@@ -476,7 +476,7 @@ impl<B: BlockchainTypes + 'static, FR: TargetStorage + 'static> CommandExecutor 
     }
 }
 
-async fn verify_table_group<B: BlockchainTypes + , TS: TargetStorage + 'static>(
+async fn verify_table_group<B: BlockchainTypes + , TS: ReadTarget + 'static>(
     delete_whole_chunk: bool,
     archiver: Arc<Archiver<B, TS>>,
     range: Range,
@@ -513,7 +513,7 @@ async fn verify_table_group<B: BlockchainTypes + , TS: TargetStorage + 'static>(
     Ok(())
 }
 
-async fn verify_content<'a, B: BlockchainTypes, TS: TargetStorage>(archiver: Arc<Archiver<B, TS>>, range: &Range, groups: &'a Vec<ArchiveGroup>, data_options: DataOptions) -> anyhow::Result<Vec<&'a FileReference>> {
+async fn verify_content<'a, B: BlockchainTypes, TS: ReadTarget>(archiver: Arc<Archiver<B, TS>>, range: &Range, groups: &'a Vec<ArchiveGroup>, data_options: DataOptions) -> anyhow::Result<Vec<&'a FileReference>> {
     tracing::trace!(range = %range, "Verify table data");
     let shutdown = global::get_shutdown();
     let mut broken_files = vec![];
@@ -621,7 +621,7 @@ fn verify_field_non_null(record: &Record, field: &str) -> Result<(), String> {
 }
 
 #[async_trait]
-trait VerifyTable<T, B: BlockchainTypes, TS: TargetStorage> {
+trait VerifyTable<T, B: BlockchainTypes, TS: ReadTarget> {
     type Returns;
     type Params;
 
@@ -629,19 +629,19 @@ trait VerifyTable<T, B: BlockchainTypes, TS: TargetStorage> {
 }
 
 
-struct TxVerify<B, TS> where B: BlockchainTypes, TS: TargetStorage {
+struct TxVerify<B, TS> where B: BlockchainTypes, TS: ReadTarget {
     _b: PhantomData<B>,
     _ts: PhantomData<TS>,
 }
 
-impl<B: BlockchainTypes, TS: TargetStorage> TxVerify<B, TS> {
+impl<B: BlockchainTypes, TS: ReadTarget> TxVerify<B, TS> {
     pub fn new() -> Self {
         Self { _b: Default::default(), _ts: Default::default() }
     }
 }
 
 #[async_trait]
-impl<B: BlockchainTypes, TS: TargetStorage> VerifyTable<TxOptions, B, TS> for TxVerify<B, TS> {
+impl<B: BlockchainTypes, TS: ReadTarget> VerifyTable<TxOptions, B, TS> for TxVerify<B, TS> {
     type Returns = ();
     type Params = Vec<B::TxId>;
 
@@ -702,19 +702,19 @@ impl<B: BlockchainTypes, TS: TargetStorage> VerifyTable<TxOptions, B, TS> for Tx
     }
 }
 
-struct TraceVerify<B, TS> where B: BlockchainTypes, TS: TargetStorage {
+struct TraceVerify<B, TS> where B: BlockchainTypes, TS: ReadTarget {
     _b: PhantomData<B>,
     _ts: PhantomData<TS>,
 }
 
-impl<B: BlockchainTypes, TS: TargetStorage> TraceVerify<B, TS> {
+impl<B: BlockchainTypes, TS: ReadTarget> TraceVerify<B, TS> {
     pub fn new() -> Self {
         Self { _b: Default::default(), _ts: Default::default() }
     }
 }
 
 #[async_trait]
-impl<B: BlockchainTypes, TS: TargetStorage> VerifyTable<TraceOptions, B, TS> for TraceVerify<B, TS> {
+impl<B: BlockchainTypes, TS: ReadTarget> VerifyTable<TraceOptions, B, TS> for TraceVerify<B, TS> {
     type Returns = ();
     type Params = Vec<B::TxId>;
 
@@ -779,19 +779,19 @@ impl<B: BlockchainTypes, TS: TargetStorage> VerifyTable<TraceOptions, B, TS> for
     }
 }
 
-struct BlockVerify<B, TS> where B: BlockchainTypes, TS: TargetStorage {
+struct BlockVerify<B, TS> where B: BlockchainTypes, TS: ReadTarget {
     _b: PhantomData<B>,
     _ts: PhantomData<TS>,
 }
 
-impl<B: BlockchainTypes, TS: TargetStorage> BlockVerify<B, TS> {
+impl<B: BlockchainTypes, TS: ReadTarget> BlockVerify<B, TS> {
     pub fn new() -> Self {
         Self { _b: Default::default(), _ts: Default::default() }
     }
 }
 
 #[async_trait]
-impl<B: BlockchainTypes, TS: TargetStorage> VerifyTable<BlockOptions, B, TS> for BlockVerify<B, TS> {
+impl<B: BlockchainTypes, TS: ReadTarget> VerifyTable<BlockOptions, B, TS> for BlockVerify<B, TS> {
     type Returns = Vec<B::TxId>;
     type Params = B::DataProvider;
 
@@ -926,7 +926,7 @@ mod tests {
     use crate::archiver::range::Range;
     use crate::archiver::range_group::ArchiveGroup;
     use crate::avros::BLOCK_SCHEMA;
-    use crate::storage::{FileReference, TargetFileWriter, TargetStorage};
+    use crate::storage::{FileReference, TargetFileWriter, WriteTarget};
     use crate::testing;
 
     fn create_archiver(mem: Arc<InMemory>) -> Archiver<MockType, ObjectsStorage<InMemory>> {

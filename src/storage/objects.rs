@@ -22,8 +22,10 @@ use tokio_util::io::{StreamReader, SyncIoBridge};
 use crate::archiver::datakind::DataKind;
 use crate::archiver::filenames::{Filenames, Level, LevelDouble, LevelSingle};
 use crate::archiver::range::Range;
+use crate::formats::avro;
 use crate::global;
-use crate::storage::{avro_reader, copy, sorted_files, FileReference, TargetFile, TargetFileReader, TargetFileWriter, TargetStorage};
+use crate::record::ArchiveRow;
+use crate::storage::{avro_reader, copy, sorted_files, FileReference, ReadTarget, TargetFile, TargetFileReader, TargetFileWriter, WriteTarget};
 
 pub struct ObjectsStorage<S: ObjectStore> {
     os: Arc<S>,
@@ -38,10 +40,9 @@ impl<S: ObjectStore>  ObjectsStorage<S>{
 }
 
 #[async_trait]
-impl<S: ObjectStore> TargetStorage for ObjectsStorage<S> {
+impl<S: ObjectStore> WriteTarget for ObjectsStorage<S> {
 
     type Writer = NewObjectsFile<'static>;
-    type Reader = ExisingObjectsFile;
 
     async fn create(&self, kind: DataKind, range: &Range, overwrite: bool) -> anyhow::Result<Option<NewObjectsFile<'static>>> {
         let filename = Path::from(self.filenames.path(&kind, range));
@@ -53,6 +54,12 @@ impl<S: ObjectStore> TargetStorage for ObjectsStorage<S> {
         }
         Ok(Some(NewObjectsFile::new(self.os.clone(), kind, self.bucket.clone(), filename)))
     }
+}
+
+#[async_trait]
+impl<S: ObjectStore> ReadTarget for ObjectsStorage<S> {
+
+    type Reader = ExisingObjectsFile;
 
     async fn delete(&self, path: &FileReference) -> anyhow::Result<()> {
         let path = Path::from(path.path.clone());
@@ -101,15 +108,17 @@ impl<S: ObjectStore> TargetStorage for ObjectsStorage<S> {
 impl<S: ObjectStore> ObjectsStorage<S> {
     async fn list_single(os: Arc<S>, tx: Sender<FileReference>, filenames: Filenames, range: &Range) {
         let level = LevelDouble::new(&filenames, range.start());
-        Self::list_by_steps(os, tx, range, level, filenames.offset(&range.first())).await;
+        let offset = filenames.offset(&range.first());
+        Self::list_by_steps(os, tx, range, level, offset, &filenames).await;
     }
 
     async fn list_ranges(os: Arc<S>, tx: Sender<FileReference>, filenames: Filenames, range: &Range) {
         let level = LevelSingle::new(&filenames, range.start());
-        Self::list_by_steps(os, tx, range, level, filenames.offset(range)).await;
+        let offset = filenames.offset(range);
+        Self::list_by_steps(os, tx, range, level, offset, &filenames).await;
     }
 
-    async fn list_by_steps<L: Level>(os: Arc<S>, tx: Sender<FileReference>, range: &Range, mut level: L, file_prefix: String) {
+    async fn list_by_steps<L: Level>(os: Arc<S>, tx: Sender<FileReference>, range: &Range, mut level: L, file_prefix: String, filenames: &Filenames) {
         let mut prev: Option<Path> = None;
         while level.height() <= range.end() && !tx.is_closed() {
             let path = Path::from(level.dir().as_str());
@@ -137,7 +146,7 @@ impl<S: ObjectStore> ObjectsStorage<S> {
                     continue
                 }
                 let filename = filename.unwrap();
-                let is_archive = Filenames::parse(filename.to_string());
+                let is_archive = filenames.parse(filename);
                 if is_archive.is_none() {
                     tracing::debug!(range = display(range), "Not an archive: {}", filename);
                     continue
@@ -183,10 +192,12 @@ impl TargetFile for NewObjectsFile<'_> {
     }
 }
 
-#[async_trait]
-impl TargetFileWriter for NewObjectsFile<'_> {
-
-    async fn append(&self, data: Record<'_>) -> anyhow::Result<()> {
+impl NewObjectsFile<'_> {
+    ///
+    /// Append a pre-encoded Avro [`Record`] to the object. Used by code paths that
+    /// read existing Avro files and copy records (e.g., compaction) where converting
+    /// through [`ArchiveRow`] would be redundant.
+    pub(crate) async fn append_record(&self, data: Record<'_>) -> anyhow::Result<()> {
         let size: usize = {
             let mut writer = self.writer.lock().await;
             writer.append(data).map_err(|e| anyhow!("IO Error: {:?}", e))?
@@ -195,6 +206,19 @@ impl TargetFileWriter for NewObjectsFile<'_> {
         crate::metrics::add_bytes(&self.kind, crate::metrics::Direction::Write, size);
         self.pipe.apply_backpressure().await?;
         Ok(())
+    }
+}
+
+#[async_trait]
+impl TargetFileWriter for NewObjectsFile<'_> {
+
+    async fn append(&self, row: ArchiveRow) -> anyhow::Result<()> {
+        let record = avro::encode_row(&row)?;
+        self.append_record(record).await
+    }
+
+    async fn append_avro_record(&self, data: Record<'_>) -> anyhow::Result<()> {
+        self.append_record(data).await
     }
 
     async fn close(self: Self) -> anyhow::Result<()> {
@@ -238,7 +262,7 @@ impl TargetFileReader for ExisingObjectsFile {
         let stream = self.stream.into_inner().into_stream();
         let std_reader = SyncIoBridge::new(StreamReader::new(stream));
 
-        let rx_sync = avro_reader::consume_sync(kind, kind.schema(), std_reader);
+        let rx_sync = avro_reader::consume_sync(kind, avro::schema_for(kind), std_reader);
         let rx = copy::copy_from_sync(rx_sync);
 
         Ok(rx)
@@ -251,7 +275,7 @@ impl NewObjectsFile<'_> {
         let buf = BufWriter::new(storage, path.clone());
         let (closed_tx, closed_rx) = oneshot::channel();
         let pipe = Self::pipe_start(buf, closed_tx);
-        let writer = Writer::with_codec(kind.schema(), pipe.clone(), global::get_avro_codec());
+        let writer = Writer::with_codec(avro::schema_for(kind), pipe.clone(), global::get_avro_codec());
         Self {
             pipe,
             writer: Mutex::new(writer),
@@ -376,14 +400,30 @@ impl Write for ObjectWriterPipe {
 mod tests {
     use super::*;
     use std::sync::Arc;
-    use apache_avro::types::Value;
     use chrono::Utc;
     use object_store::memory::InMemory;
     use object_store::PutPayload;
     use tonic::codegen::tokio_stream::wrappers::ReceiverStream;
-    use crate::avros::BLOCK_SCHEMA;
+    use crate::record::{BlockchainType as ArchiveBlockchainType, Field};
     use futures::stream::StreamExt;
     use crate::testing;
+
+    fn sample_block_row(height: u64) -> ArchiveRow {
+        use chrono::TimeZone;
+        ArchiveRow {
+            kind: DataKind::Blocks,
+            blockchain_type: ArchiveBlockchainType::Ethereum,
+            blockchain_id: "ETH".to_string(),
+            archive_ts: Utc::now(),
+            height,
+            block_id: "0xdfe2e70d6c116a541101cecbb256d7402d62125f6ddc9b607d49edc989825c64".to_string(),
+            timestamp: Utc.timestamp_millis_opt(0x55ba43eb_i64 * 1000).unwrap(),
+            parent_id: Some("0xdb10afd3efa45327eb284c83cc925bd9bd7966aea53067c1eebe0724d124ec1e".to_string()),
+            tx_index: None,
+            tx_id: None,
+            fields: vec![Field::BlockJson(vec![1, 2, 3])],
+        }
+    }
 
     #[tokio::test(flavor = "multi_thread")]
     pub async fn can_write() {
@@ -392,18 +432,7 @@ mod tests {
         let file = Box::new(NewObjectsFile::new(mem.clone(), DataKind::Blocks, "test".to_string(), Path::from("test.avro")));
         tokio::time::sleep(std::time::Duration::from_secs(1)).await;
 
-        let mut record = Record::new(&BLOCK_SCHEMA).unwrap();
-        record.put("blockchainType", "ETHEREUM");
-        record.put("blockchainId", "ETH");
-        record.put("archiveTimestamp", Utc::now().timestamp_millis());
-        record.put("height", 100);
-        record.put("blockId", "0xdfe2e70d6c116a541101cecbb256d7402d62125f6ddc9b607d49edc989825c64");
-        record.put("parentId", "0xdb10afd3efa45327eb284c83cc925bd9bd7966aea53067c1eebe0724d124ec1e");
-        record.put("timestamp", 0x55ba43eb_i64 * 1000);
-        record.put("json", Value::Bytes(vec![1, 2, 3]));
-        record.put("unclesCount", 0);
-
-        let added = file.append(record).await;
+        let added = file.append(sample_block_row(100)).await;
         if let Err(e) = added {
             panic!("Error: {:?}", e);
         }
@@ -579,18 +608,13 @@ mod tests {
 
 
         let file = NewObjectsFile::new(mem.clone(), DataKind::Blocks, bucket.clone(), path.clone());
-        for i in 0..10_000 {
-            let mut record = Record::new(&BLOCK_SCHEMA).unwrap();
-            record.put("blockchainType", "ETHEREUM");
-            record.put("blockchainId", "ETH");
-            record.put("archiveTimestamp", Utc::now().timestamp_millis());
-            record.put("height", i);
-            record.put("blockId", "0xdfe2e70d6c116a541101cecbb256d7402d62125f6ddc9b607d49edc989825c64");
-            record.put("parentId", "0xdb10afd3efa45327eb284c83cc925bd9bd7966aea53067c1eebe0724d124ec1e");
-            record.put("timestamp", 0x55ba43eb_i64 * 1000 + i * 12);
-            record.put("json", Value::Bytes(vec![1, 2, 3]));
-            record.put("unclesCount", 0);
-            file.append(record).await.unwrap();
+        for i in 0..10_000u64 {
+            use chrono::TimeZone;
+            let mut row = sample_block_row(i);
+            row.timestamp = Utc
+                .timestamp_millis_opt(0x55ba43eb_i64 * 1000 + (i as i64) * 12)
+                .unwrap();
+            file.append(row).await.unwrap();
         }
         Box::new(file).close().await.unwrap();
 

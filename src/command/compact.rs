@@ -24,12 +24,12 @@ use crate::{
         CommandExecutor
     },
     global,
-    storage::{FileReference, TargetFileReader, TargetFileWriter, TargetStorage},
+    storage::{FileReference, TargetFileReader, TargetFileWriter, ReadTarget},
 };
 use crate::archiver::datakind::{BlockOptions, TraceOptions, TxOptions};
 
 #[derive(Clone)]
-pub struct CompactCommand<B: BlockchainTypes, TS: TargetStorage> {
+pub struct CompactCommand<B: BlockchainTypes, TS: ReadTarget> {
     b: PhantomData<B>,
     archiver: Archiver<B, TS>,
     
@@ -39,7 +39,7 @@ pub struct CompactCommand<B: BlockchainTypes, TS: TargetStorage> {
 }
 
 #[async_trait]
-impl<B: BlockchainTypes + 'static, TS: TargetStorage + 'static> CommandExecutor for CompactCommand<B, TS> {
+impl<B: BlockchainTypes + 'static, TS: ReadTarget + 'static> CommandExecutor for CompactCommand<B, TS> {
 
     async fn execute(&self) -> Result<()> {
         let shutdown = global::get_shutdown();
@@ -121,7 +121,7 @@ impl<B: BlockchainTypes + 'static, TS: TargetStorage + 'static> CommandExecutor 
     }
 }
 
-impl<B: BlockchainTypes+ 'static, TS: TargetStorage + 'static> CompactCommand<B, TS> {
+impl<B: BlockchainTypes+ 'static, TS: ReadTarget + 'static> CompactCommand<B, TS> {
     pub fn new(config: &Args,
                archiver: Archiver<B, TS>
     ) -> Result<Self> {
@@ -320,7 +320,7 @@ impl<TXID: Hash + Eq + Debug> CopiedStatus<TXID> {
     }
 }
 
-trait TableCompaction<T, B: BlockchainTypes, TS: TargetStorage> {
+trait TableCompaction<T, B: BlockchainTypes, TS: ReadTarget> {
     async fn compact_table(target: Arc<TS>,
                            range: Range,
                            files: Arc<ArchivesList>,
@@ -340,7 +340,7 @@ fn parse_block<B: BlockchainTypes>(record: &Record) -> Result<B::BlockParsed> {
         .map_err(|e| anyhow!("Unable to parse block: {}", e))
 }
 
-impl<B: BlockchainTypes, TS: TargetStorage> TableCompaction<BlockOptions, B, TS> for CompactCommand<B, TS> {
+impl<B: BlockchainTypes, TS: ReadTarget> TableCompaction<BlockOptions, B, TS> for CompactCommand<B, TS> {
     async fn compact_table(target: Arc<TS>,
                            range: Range,
                            files: Arc<ArchivesList>,
@@ -370,7 +370,7 @@ impl<B: BlockchainTypes, TS: TargetStorage> TableCompaction<BlockOptions, B, TS>
                                 let height = avros::get_height(&record)?;
                                 if range.contains(&height.into()) {
                                     let txes = parse_block::<B>(&record)?.txes();
-                                    let _ = target_file.append(record).await;
+                                    let _ = target_file.append_avro_record(record).await;
                                     {
                                         let mut status = status.lock().unwrap();
                                         status.on_copied_block(height, txes);
@@ -403,7 +403,7 @@ fn parse_tx_id<B: BlockchainTypes>(record: &Record) -> Result<B::TxId> {
         .map_err(|_| anyhow!("Unable to parse txid"))
 }
 
-impl<B: BlockchainTypes, TS: TargetStorage> TableCompaction<TxOptions, B, TS> for CompactCommand<B, TS> {
+impl<B: BlockchainTypes, TS: ReadTarget> TableCompaction<TxOptions, B, TS> for CompactCommand<B, TS> {
     async fn compact_table(target: Arc<TS>,
                            range: Range,
                            files: Arc<ArchivesList>,
@@ -432,7 +432,7 @@ impl<B: BlockchainTypes, TS: TargetStorage> TableCompaction<TxOptions, B, TS> fo
                                 let height = avros::get_height(&record)?;
                                 let txid = parse_tx_id::<B>(&record)?;
                                 if range.contains(&height.into()) {
-                                    let _ = target_file.append(record).await;
+                                    let _ = target_file.append_avro_record(record).await;
                                     {
                                         let mut status = status.lock().unwrap();
                                         status.on_copied_tx(txid);
@@ -451,7 +451,7 @@ impl<B: BlockchainTypes, TS: TargetStorage> TableCompaction<TxOptions, B, TS> fo
     }
 }
 
-impl<B: BlockchainTypes, TS: TargetStorage> TableCompaction<TraceOptions, B, TS> for CompactCommand<B, TS> {
+impl<B: BlockchainTypes, TS: ReadTarget> TableCompaction<TraceOptions, B, TS> for CompactCommand<B, TS> {
     async fn compact_table(target: Arc<TS>,
                            range: Range,
                            files: Arc<ArchivesList>,
@@ -480,7 +480,7 @@ impl<B: BlockchainTypes, TS: TargetStorage> TableCompaction<TraceOptions, B, TS>
                                 let height = avros::get_height(&record)?;
                                 let txid = parse_tx_id::<B>(&record)?;
                                 if range.contains(&height.into()) {
-                                    let _ = target_file.append(record).await;
+                                    let _ = target_file.append_avro_record(record).await;
                                     {
                                         let mut status = status.lock().unwrap();
                                         status.on_copied_trace(txid);

@@ -1,10 +1,13 @@
 use std::fmt::Display;
 use std::str::FromStr;
-use apache_avro::Schema;
 use serde::{Deserialize, Serialize};
 use crate::args::Args;
-use crate::avros;
 
+/// The kind of data carried by an archive row or stored in an archive file.
+///
+/// `DataKind` is intentionally format-neutral: format-specific lookups (e.g. the
+/// Avro schema) live in their respective format modules
+/// (see [`crate::formats::avro::schema_for`]).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub enum DataKind {
     #[serde(rename = "blocks")]
@@ -16,14 +19,6 @@ pub enum DataKind {
 }
 
 impl DataKind {
-    pub fn schema(&self) -> &'static Schema {
-        match self {
-            DataKind::Blocks => &avros::BLOCK_SCHEMA,
-            DataKind::Transactions => &avros::TX_SCHEMA,
-            DataKind::TransactionTraces => &avros::TX_TRACE_SCHEMA,
-        }
-    }
-
     /// Label value used in Prometheus metrics (the `type` tag).
     pub fn metrics_label(&self) -> &'static str {
         match self {

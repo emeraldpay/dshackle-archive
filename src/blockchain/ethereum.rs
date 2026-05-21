@@ -1,11 +1,9 @@
 use std::sync::{Arc};
 use std::time::Duration;
-use apache_avro::types::{Record, Value};
 use async_trait::async_trait;
-use crate::avros::{BLOCK_SCHEMA, TX_SCHEMA, TX_TRACE_SCHEMA};
 use crate::errors::{BlockchainError};
 use crate::blockchain::connection::{Blockchain};
-use chrono::Utc;
+use chrono::{DateTime, Utc};
 use alloy::{
     primitives::{TxHash, BlockHash},
     rpc::types::{Transaction as TransactionJson, Block as BlockJson, Block, TransactionTrait}
@@ -15,8 +13,9 @@ use crate::blockchain::{BlockDetails, BlockReference, BlockchainData, Blockchain
 use anyhow::{Result, anyhow};
 use tokio_retry2::{Retry, RetryError};
 use tokio_retry2::strategy::{jitter, ExponentialFactorBackoff};
-use crate::archiver::datakind::TraceOptions;
+use crate::archiver::datakind::{DataKind, TraceOptions};
 use crate::blockchain::next_block::{NextBlock, NextFinalizedBlock};
+use crate::record::{ArchiveRow, BlockchainType as ArchiveBlockchainType, Field};
 
 #[derive(Clone)]
 pub struct EthereumData {
@@ -202,15 +201,29 @@ impl EthereumData {
     }
 }
 
-fn set_tx_common(record: &mut Record, blockchain_id: String, block: &Block<TxHash>, index: usize, tx_hash: &TxHash) {
-    record.put("blockchainType", "ETHEREUM");
-    record.put("blockchainId", blockchain_id);
-    record.put("archiveTimestamp", Utc::now().timestamp_millis());
-    record.put("height", block.header.number as i64);
-    record.put("blockId", format!("0x{:x}", &block.header.hash));
-    record.put("timestamp", (block.header.timestamp * 1000) as i64);
-    record.put("index", index as i64);
-    record.put("txid", format!("0x{:x}", &tx_hash));
+/// Build an [`ArchiveRow`] skeleton for a per-tx row (Transactions or TransactionTraces),
+/// populated with the common (block + tx) identification fields. Per-kind fields are
+/// added by the caller.
+fn tx_row(kind: DataKind, blockchain_id: String, block: &Block<TxHash>, index: usize, tx_hash: &TxHash) -> ArchiveRow {
+    ArchiveRow {
+        kind,
+        blockchain_type: ArchiveBlockchainType::Ethereum,
+        blockchain_id,
+        archive_ts: Utc::now(),
+        height: block.header.number,
+        block_id: format!("0x{:x}", &block.header.hash),
+        timestamp: block_timestamp(block.header.timestamp),
+        parent_id: None,
+        tx_index: Some(index as u64),
+        tx_id: Some(format!("0x{:x}", tx_hash)),
+        fields: Vec::new(),
+    }
+}
+
+/// Convert the node's block timestamp (Unix seconds) into a UTC `DateTime`.
+fn block_timestamp(secs: u64) -> DateTime<Utc> {
+    DateTime::<Utc>::from_timestamp(secs as i64, 0)
+        .unwrap_or_else(|| DateTime::<Utc>::from_timestamp(0, 0).unwrap())
 }
 
 #[async_trait]
@@ -220,7 +233,7 @@ impl BlockchainData<EthereumType> for EthereumData {
         self.blockchain_id.clone()
     }
 
-    async fn fetch_block(&self, height: &BlockReference<BlockHash>) -> Result<(Record<'static>, Block<TxHash>, Vec<TxHash>)> {
+    async fn fetch_block(&self, height: &BlockReference<BlockHash>) -> Result<(ArchiveRow, Block<TxHash>, Vec<TxHash>)> {
         let raw_block = match height {
             BlockReference::Hash(hash) => self.get_block(&hash).await?,
             BlockReference::Height(height) => self.get_block_at(height.height).await?,
@@ -228,33 +241,37 @@ impl BlockchainData<EthereumType> for EthereumData {
         let parsed_block = serde_json::from_slice::<BlockJson<TxHash>>(raw_block.as_slice())
             .map_err(|_| BlockchainError::InvalidResponse)?;
 
-        let mut transactions = vec![];
-
-        let mut record = Record::new(&BLOCK_SCHEMA).unwrap();
-        record.put("blockchainType", "ETHEREUM");
-        record.put("blockchainId", self.blockchain_id());
-        record.put("archiveTimestamp", Utc::now().timestamp_millis());
-        record.put("height", parsed_block.header.number as i64);
-        record.put("blockId", format!("0x{:x}", &parsed_block.header.hash));
-        record.put("parentId", format!("0x{:x}", &parsed_block.header.parent_hash));
-        record.put("timestamp", (parsed_block.header.timestamp * 1000) as i64);
-        record.put("json", raw_block);
-        record.put("unclesCount", parsed_block.uncles.len() as i32);
-
+        let mut fields = vec![Field::BlockJson(raw_block)];
         for (i, _uncle) in parsed_block.uncles.iter().enumerate() {
             let uncle = self.get_uncle(&parsed_block.header.hash, i).await?;
             // TODO should it verify if it has the same hash as expected?
-            record.put(format!("uncle{}Json", i).as_str(), Value::Union(1, Box::new(Value::Bytes(uncle))));
+            fields.push(Field::Uncle { index: i as u8, json: uncle });
         }
 
-        for transaction in parsed_block.transactions.txns() {
-            transactions.push(transaction.clone());
-        }
+        let row = ArchiveRow {
+            kind: DataKind::Blocks,
+            blockchain_type: ArchiveBlockchainType::Ethereum,
+            blockchain_id: self.blockchain_id(),
+            archive_ts: Utc::now(),
+            height: parsed_block.header.number,
+            block_id: format!("0x{:x}", &parsed_block.header.hash),
+            timestamp: block_timestamp(parsed_block.header.timestamp),
+            parent_id: Some(format!("0x{:x}", &parsed_block.header.parent_hash)),
+            tx_index: None,
+            tx_id: None,
+            fields,
+        };
 
-        Ok((record, parsed_block, transactions))
+        let transactions: Vec<TxHash> = parsed_block
+            .transactions
+            .txns()
+            .cloned()
+            .collect();
+
+        Ok((row, parsed_block, transactions))
     }
 
-    async fn fetch_tx(&self, block: &Block<TxHash>, index: usize) -> Result<Record<'static>> {
+    async fn fetch_tx(&self, block: &Block<TxHash>, index: usize) -> Result<ArchiveRow> {
         let tx_hash = block.transactions.as_transactions().map(|txes| txes[index])
             .ok_or_else(|| anyhow!("Transaction not found"))?;
 
@@ -264,27 +281,24 @@ impl BlockchainData<EthereumType> for EthereumData {
             self.get_tx_raw_expected(&tx_hash),
             self.get_tx_receipt_expected(&tx_hash),
         );
-        let mut record = Record::new(&TX_SCHEMA).unwrap();
-        set_tx_common(&mut record, self.blockchain_id(), block, index, &tx_hash);
 
         let tx_json_bytes = tx_json_bytes?;
         let parsed_tx = serde_json::from_slice::<TransactionJson>(tx_json_bytes.as_slice())
             .map_err(|e| anyhow!("Invalid Transaction JSON: {}", e))?;
-        record.put("json", tx_json_bytes);
-        record.put("raw", tx_raw?);
 
-        record.put("from",  Value::Union(1, Box::new(Value::String(format!("0x{:x}", parsed_tx.from())))));
+        let mut row = tx_row(DataKind::Transactions, self.blockchain_id(), block, index, &tx_hash);
+        row.fields.push(Field::TxJson(tx_json_bytes));
+        row.fields.push(Field::TxRaw(tx_raw?));
+        row.fields.push(Field::From(format!("0x{:x}", parsed_tx.from())));
         if let Some(to) = parsed_tx.inner.to() {
-            record.put("to", Value::Union(1, Box::new(Value::String(format!("0x{:x}", to)))));
-        } else {
-            record.put("to", Value::Union(0, Box::new(Value::Null)));
+            row.fields.push(Field::To(format!("0x{:x}", to)));
         }
-        record.put("receiptJson", Value::Union(1, Box::new(Value::Bytes(tx_receipt?))));
+        row.fields.push(Field::Receipt(tx_receipt?));
 
-        Ok(record)
+        Ok(row)
     }
 
-    async fn fetch_traces(&self, block: &Block<TxHash>, index: usize, options: &TraceOptions) -> Result<Record<'static>> {
+    async fn fetch_traces(&self, block: &Block<TxHash>, index: usize, options: &TraceOptions) -> Result<ArchiveRow> {
         let tx_hash = block.transactions.as_transactions().map(|txes| txes[index])
             .ok_or_else(|| anyhow!("Transaction not found"))?;
 
@@ -310,39 +324,29 @@ impl BlockchainData<EthereumType> for EthereumData {
             }
         );
 
-        let mut record = Record::new(&TX_TRACE_SCHEMA).unwrap();
-        set_tx_common(&mut record, self.blockchain_id(), block, index, &tx_hash);
+        let mut row = tx_row(DataKind::TransactionTraces, self.blockchain_id(), block, index, &tx_hash);
 
-        // Set trace data fields
         if let Some(trace_result) = trace_data {
             let trace_bytes = trace_result?;
             if trace_bytes == b"null" {
                 return Err(anyhow!("Trace data requested but got null for tx 0x{:x}", tx_hash));
-            } else {
-                record.put("traceJson", Value::Union(1, Box::new(Value::Bytes(trace_bytes))));
             }
-        } else {
-            if options.include_trace {
-                return Err(anyhow!("Trace data requested but not available for tx 0x{:x}", tx_hash));
-            }
-            record.put("traceJson", Value::Union(0, Box::new(Value::Null)));
+            row.fields.push(Field::Trace(trace_bytes));
+        } else if options.include_trace {
+            return Err(anyhow!("Trace data requested but not available for tx 0x{:x}", tx_hash));
         }
 
         if let Some(state_diff_result) = state_diff_data {
             let state_diff_bytes = state_diff_result?;
             if state_diff_bytes == b"null" {
                 return Err(anyhow!("State Diff data requested but got null for tx 0x{:x}", tx_hash));
-            } else {
-                record.put("stateDiffJson", Value::Union(1, Box::new(Value::Bytes(state_diff_bytes))));
             }
-        } else {
-            if options.include_state_diff {
-                return Err(anyhow!("State Diff data requested but not available for tx 0x{:x}", tx_hash));
-            }
-            record.put("stateDiffJson", Value::Union(0, Box::new(Value::Null)));
+            row.fields.push(Field::StateDiff(state_diff_bytes));
+        } else if options.include_state_diff {
+            return Err(anyhow!("State Diff data requested but not available for tx 0x{:x}", tx_hash));
         }
 
-        Ok(record)
+        Ok(row)
     }
 
 

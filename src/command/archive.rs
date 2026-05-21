@@ -9,7 +9,7 @@ use crate::{
     command::CommandExecutor,
     global,
     notify::RunMode,
-    storage::TargetStorage
+    storage::WriteTarget
 };
 use crate::archiver::datakind::DataOptions;
 use crate::archiver::range::Range;
@@ -19,7 +19,7 @@ use crate::archiver::range::Range;
 /// It builds a large archive from the blockchain by putting multiple blocks (ex., 1000) into one file
 ///
 #[derive(Clone)]
-pub struct ArchiveCommand<B: BlockchainTypes, TS: TargetStorage> {
+pub struct ArchiveCommand<B: BlockchainTypes, TS: WriteTarget> {
     b: PhantomData<B>,
     archiver: Archiver<B, TS>,
 
@@ -29,7 +29,7 @@ pub struct ArchiveCommand<B: BlockchainTypes, TS: TargetStorage> {
 }
 
 #[async_trait]
-impl<B: BlockchainTypes, TS: TargetStorage> CommandExecutor for ArchiveCommand<B, TS> {
+impl<B: BlockchainTypes, TS: WriteTarget> CommandExecutor for ArchiveCommand<B, TS> {
 
     async fn execute(&self) -> anyhow::Result<()> {
         let shutdown = global::get_shutdown();
@@ -46,7 +46,7 @@ impl<B: BlockchainTypes, TS: TargetStorage> CommandExecutor for ArchiveCommand<B
     }
 }
 
-impl<B: BlockchainTypes, TS: TargetStorage> ArchiveCommand<B, TS> {
+impl<B: BlockchainTypes, TS: WriteTarget> ArchiveCommand<B, TS> {
 
     pub fn new(config: &Args,
                      archiver: Archiver<B, TS>

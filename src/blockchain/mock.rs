@@ -1,14 +1,13 @@
 use std::sync::{Arc, Mutex};
 use anyhow::anyhow;
-use apache_avro::types::Record;
 use async_trait::async_trait;
-use chrono::Utc;
+use chrono::{TimeZone, Utc};
 use serde::{Deserialize, Serialize};
-use crate::avros::{BLOCK_SCHEMA, TX_SCHEMA, TX_TRACE_SCHEMA};
 use crate::blockchain::{BlockDetails, BlockReference, BlockchainData, BlockchainTypes};
 use crate::blockchain::connection::Blockchain;
-use crate::archiver::datakind::TraceOptions;
+use crate::archiver::datakind::{DataKind, TraceOptions};
 use crate::blockchain::next_block::{NextBlock};
+use crate::record::{ArchiveRow, BlockchainType as ArchiveBlockchainType, Field};
 
 #[derive(Clone)]
 pub struct MockType {}
@@ -107,7 +106,7 @@ impl BlockchainData<MockType> for MockData {
         self.id.clone()
     }
 
-    async fn fetch_block(&self, height: &BlockReference<String>) -> anyhow::Result<(Record<'static>, MockBlock, Vec<String>)> {
+    async fn fetch_block(&self, height: &BlockReference<String>) -> anyhow::Result<(ArchiveRow, MockBlock, Vec<String>)> {
         let blocks = self.blocks.lock().unwrap();
         let block = blocks.iter()
             .find(|b| match height {
@@ -117,44 +116,51 @@ impl BlockchainData<MockType> for MockData {
             .ok_or(anyhow!("Block not found: {:?}", height))?
             .clone();
 
-        let mut record = Record::new(&BLOCK_SCHEMA).unwrap();
-        record.put("blockchainType", "ETHEREUM");
-        record.put("blockchainId", self.blockchain_id());
-        record.put("archiveTimestamp", Utc::now().timestamp_millis());
-        record.put("height", block.height as i64);
-        record.put("blockId", block.hash.clone());
-        record.put("parentId", "");
-        record.put("timestamp", 1_i64);
-        record.put("json", serde_json::to_vec(&block).unwrap());
-        record.put("unclesCount", 0);
+        let row = ArchiveRow {
+            kind: DataKind::Blocks,
+            blockchain_type: ArchiveBlockchainType::Ethereum,
+            blockchain_id: self.blockchain_id(),
+            archive_ts: Utc::now(),
+            height: block.height,
+            block_id: block.hash.clone(),
+            timestamp: Utc.timestamp_millis_opt(1).unwrap(),
+            parent_id: Some(String::new()),
+            tx_index: None,
+            tx_id: None,
+            fields: vec![Field::BlockJson(serde_json::to_vec(&block).unwrap())],
+        };
 
         let txes = block.transactions.clone();
-        Ok((record, block, txes))
+        Ok((row, block, txes))
     }
 
-    async fn fetch_tx(&self, block: &MockBlock, index: usize) -> anyhow::Result<Record<'static>> {
+    async fn fetch_tx(&self, block: &MockBlock, index: usize) -> anyhow::Result<ArchiveRow> {
         let txes = self.txes.lock().unwrap();
         let tx = txes.iter()
             .find(|t| t.hash == block.transactions[index])
             .ok_or(anyhow!("Tx not found"))?
             .clone();
 
-        let mut record = Record::new(&TX_SCHEMA).unwrap();
-        record.put("blockchainType", "ETHEREUM");
-        record.put("blockchainId", self.blockchain_id());
-        record.put("archiveTimestamp", Utc::now().timestamp_millis());
-        record.put("height", block.height as i64);
-        record.put("blockId", block.hash.clone());
-        record.put("timestamp", 1_i64);
-        record.put("index", index as i64);
-        record.put("txid", tx.hash.clone());
-        record.put("json", serde_json::to_vec(&tx).unwrap());
-        record.put("raw", serde_json::to_vec(&tx).unwrap());
-
-        Ok(record)
+        let json = serde_json::to_vec(&tx).unwrap();
+        Ok(ArchiveRow {
+            kind: DataKind::Transactions,
+            blockchain_type: ArchiveBlockchainType::Ethereum,
+            blockchain_id: self.blockchain_id(),
+            archive_ts: Utc::now(),
+            height: block.height,
+            block_id: block.hash.clone(),
+            timestamp: Utc.timestamp_millis_opt(1).unwrap(),
+            parent_id: None,
+            tx_index: Some(index as u64),
+            tx_id: Some(tx.hash.clone()),
+            fields: vec![
+                Field::TxJson(json.clone()),
+                Field::TxRaw(json),
+            ],
+        })
     }
-    
-    async fn fetch_traces(&self, block: &MockBlock, index: usize, options: &TraceOptions) -> anyhow::Result<Record<'static>> {
+
+    async fn fetch_traces(&self, block: &MockBlock, index: usize, options: &TraceOptions) -> anyhow::Result<ArchiveRow> {
         let traces = self.traces.lock().unwrap();
         let tx_hash = &block.transactions[index];
         let trace = traces.iter()
@@ -162,37 +168,32 @@ impl BlockchainData<MockType> for MockData {
             .ok_or(anyhow!("Trace not found for tx: {}", tx_hash))?
             .clone();
 
-        let mut record = Record::new(&TX_TRACE_SCHEMA).unwrap();
-        record.put("blockchainType", "ETHEREUM");
-        record.put("blockchainId", self.blockchain_id());
-        record.put("archiveTimestamp", Utc::now().timestamp_millis());
-        record.put("height", block.height as i64);
-        record.put("blockId", block.hash.clone());
-        record.put("timestamp", 1_i64);
-        record.put("index", index as i64);
-        record.put("txid", tx_hash.clone());
+        let mut row = ArchiveRow {
+            kind: DataKind::TransactionTraces,
+            blockchain_type: ArchiveBlockchainType::Ethereum,
+            blockchain_id: self.blockchain_id(),
+            archive_ts: Utc::now(),
+            height: block.height,
+            block_id: block.hash.clone(),
+            timestamp: Utc.timestamp_millis_opt(1).unwrap(),
+            parent_id: None,
+            tx_index: Some(index as u64),
+            tx_id: Some(tx_hash.clone()),
+            fields: Vec::new(),
+        };
 
         if options.include_trace {
             if let Some(trace_json) = trace.trace_json {
-                record.put("traceJson", apache_avro::types::Value::Union(1, Box::new(apache_avro::types::Value::Bytes(trace_json))));
-            } else {
-                record.put("traceJson", apache_avro::types::Value::Union(0, Box::new(apache_avro::types::Value::Null)));
+                row.fields.push(Field::Trace(trace_json));
             }
-        } else {
-            record.put("traceJson", apache_avro::types::Value::Union(0, Box::new(apache_avro::types::Value::Null)));
         }
-
         if options.include_state_diff {
             if let Some(state_diff_json) = trace.state_diff_json {
-                record.put("stateDiffJson", apache_avro::types::Value::Union(1, Box::new(apache_avro::types::Value::Bytes(state_diff_json))));
-            } else {
-                record.put("stateDiffJson", apache_avro::types::Value::Union(0, Box::new(apache_avro::types::Value::Null)));
+                row.fields.push(Field::StateDiff(state_diff_json));
             }
-        } else {
-            record.put("stateDiffJson", apache_avro::types::Value::Union(0, Box::new(apache_avro::types::Value::Null)));
         }
 
-        Ok(record)
+        Ok(row)
     }
 
     async fn height(&self) -> anyhow::Result<(u64, String)> {

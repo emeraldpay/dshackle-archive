@@ -9,17 +9,17 @@ use crate::notify::empty::EmptyNotifier;
 use crate::notify::{Maturity, Notification, Notifier, RunMode};
 use crate::archiver::range::{Height, Range};
 use crate::global;
-use crate::storage::TargetStorage;
+use crate::storage::WriteTarget;
 
 #[derive(Clone)]
-pub struct Archiver<B: BlockchainTypes, TS: TargetStorage> {
+pub struct Archiver<B: BlockchainTypes, TS: WriteTarget> {
     b: PhantomData<B>,
     pub target: Arc<TS>,
     pub data_provider: Arc<B::DataProvider>,
     pub notifications: Sender<Notification>,
 }
 
-impl<B: BlockchainTypes, TS: TargetStorage> Archiver<B, TS> {
+impl<B: BlockchainTypes, TS: WriteTarget> Archiver<B, TS> {
 
     pub fn new_simple(target: Arc<TS>, data_provider: Arc<B::DataProvider>) -> Self {
         Self::new(
@@ -49,7 +49,7 @@ pub trait ArchiveAll<T> {
 }
 
 #[async_trait]
-impl<B: BlockchainTypes, TS: TargetStorage> ArchiveAll<Height> for Archiver<B, TS> {
+impl<B: BlockchainTypes, TS: WriteTarget> ArchiveAll<Height> for Archiver<B, TS> {
     async fn archive(&self, what: Height, mode: RunMode, maturity: Option<Maturity>, options: &DataOptions) -> anyhow::Result<()> {
         let start_time = Utc::now();
 
@@ -112,7 +112,7 @@ impl<B: BlockchainTypes, TS: TargetStorage> ArchiveAll<Height> for Archiver<B, T
 }
 
 #[async_trait]
-impl<B: BlockchainTypes, TS: TargetStorage> ArchiveAll<Range> for Archiver<B, TS> {
+impl<B: BlockchainTypes, TS: WriteTarget> ArchiveAll<Range> for Archiver<B, TS> {
     async fn archive(&self, what: Range, mode: RunMode, maturity: Option<Maturity>, options: &DataOptions) -> anyhow::Result<()> {
         let start_time = Utc::now();
         tracing::debug!("Archiving range: {}", what);
