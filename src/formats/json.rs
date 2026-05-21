@@ -162,7 +162,7 @@ where
 }
 
 /// Collapse a per-height missing-kinds map into the shape that
-/// [`crate::storage::ReadTarget::find_incomplete_tables`] returns: one
+/// [`crate::storage::ScanTarget::find_incomplete_tables`] returns: one
 /// `(Range, Vec<DataKind>)` entry per contiguous run of heights that share the
 /// same missing-kinds set.
 pub fn collapse_missing(per_height: HashMap<u64, Vec<DataKind>>) -> Vec<(Range, Vec<DataKind>)> {

@@ -45,33 +45,37 @@ pub fn is_fs(args: &Args) -> bool {
     args.dir.is_some() && !is_s3(args)
 }
 
-pub fn create_aws(value: &Args) -> Result<ObjectsStorage<AmazonS3>> {
-    // inside the archive we create a subdirectory for each blockchain
+///
+/// Compute the S3 key prefix (without bucket) under which the archive lives.
+///
+/// Joins the user-supplied `--dir` URL path with the lowercased blockchain code
+/// (e.g. `eth`), trimming any leading/trailing slashes on the URL path so
+/// `s3://bucket/`, `s3://bucket/archive`, and `s3://bucket/archive/` all
+/// produce the expected `archive/eth` (or just `eth` for the bucket root).
+fn s3_parent_dir(value: &Args) -> Result<String> {
     let blockchain_dir = value.get_blockchain()?.code().to_lowercase();
+    if value.dir.is_none() {
+        return Err(anyhow!("Please set target dir as a s3://bucket/path"));
+    }
+    let raw = url::Url::parse(value.dir.as_ref().unwrap())
+        .map_err(|_| anyhow!("Please specify a --dir as s3://bucket/path"))?
+        .path()
+        .to_string();
+    let trimmed = raw.trim_matches('/');
+    Ok(if trimmed.is_empty() {
+        blockchain_dir
+    } else {
+        format!("{}/{}", trimmed, blockchain_dir)
+    })
+}
+
+pub fn create_aws(value: &Args) -> Result<ObjectsStorage<AmazonS3>> {
     let aws = value.aws.as_ref().unwrap();
 
     tracing::info!("Using S3 storage");
 
-    let parent_dir = if let Some(dir) = &value.dir {
-        url::Url::parse(dir)
-            .map_err(|_| anyhow!("Please specify a --dir as s3://bucket/path"))?
-            .path()
-            .to_string()
-    } else {
-        "".to_string()
-    };
-
-    let parent_dir = if parent_dir.ends_with('/') {
-        blockchain_dir
-    } else {
-        format!("{}/{}", parent_dir, blockchain_dir)
-    };
-
-    let filenames = Filenames::with_dir(parent_dir);
-
-    if value.dir.is_none() {
-        return Err(anyhow!("Please set target dir as a s3://bucket/path"));
-    }
+    // s3_parent_dir errors if --dir is missing, so subsequent unwraps are safe.
+    let filenames = Filenames::with_dir(s3_parent_dir(value)?);
 
     let mut builder = AmazonS3Builder::new()
         .with_access_key_id(aws.access_key.clone())
@@ -136,29 +140,12 @@ pub fn create_fs_json(value: &Args) -> Result<JsonFsStorage> {
 /// Build a [`JsonObjectsStorage`] backed by AWS S3 (or any S3-compatible service),
 /// sharing the same authentication and URL-parsing logic as [`create_aws`].
 pub fn create_aws_json(value: &Args) -> Result<JsonObjectsStorage<AmazonS3>> {
-    let blockchain_dir = value.get_blockchain()?.code().to_lowercase();
     let aws = value.aws.as_ref().unwrap();
 
     tracing::info!("Using S3 storage (JSON per-field layout)");
 
-    let parent_dir = if let Some(dir) = &value.dir {
-        url::Url::parse(dir)
-            .map_err(|_| anyhow!("Please specify a --dir as s3://bucket/path"))?
-            .path()
-            .to_string()
-    } else {
-        "".to_string()
-    };
-    let parent_dir = if parent_dir.ends_with('/') {
-        blockchain_dir
-    } else {
-        format!("{}/{}", parent_dir, blockchain_dir)
-    };
-    let filenames = Filenames::with_dir(parent_dir);
-
-    if value.dir.is_none() {
-        return Err(anyhow!("Please set target dir as a s3://bucket/path"));
-    }
+    // s3_parent_dir errors if --dir is missing, so subsequent unwraps are safe.
+    let filenames = Filenames::with_dir(s3_parent_dir(value)?);
 
     let mut builder = AmazonS3Builder::new()
         .with_access_key_id(aws.access_key.clone())
@@ -410,6 +397,60 @@ mod tests {
     use object_store::memory::InMemory;
     use object_store::path::Path;
     use object_store::{ObjectStoreExt, PutPayload};
+
+    fn args_with_dir(dir: &str) -> Args {
+        Args {
+            blockchain: "ethereum".to_string(),
+            dir: Some(dir.to_string()),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn s3_parent_dir_trims_trailing_slash() {
+        assert_eq!(
+            s3_parent_dir(&args_with_dir("s3://bucket/archive/")).unwrap(),
+            "archive/eth"
+        );
+    }
+
+    #[test]
+    fn s3_parent_dir_keeps_prefix_without_trailing_slash() {
+        assert_eq!(
+            s3_parent_dir(&args_with_dir("s3://bucket/archive")).unwrap(),
+            "archive/eth"
+        );
+    }
+
+    #[test]
+    fn s3_parent_dir_handles_nested_prefix() {
+        assert_eq!(
+            s3_parent_dir(&args_with_dir("s3://bucket/foo/bar/")).unwrap(),
+            "foo/bar/eth"
+        );
+    }
+
+    #[test]
+    fn s3_parent_dir_bucket_root() {
+        assert_eq!(
+            s3_parent_dir(&args_with_dir("s3://bucket/")).unwrap(),
+            "eth"
+        );
+        assert_eq!(
+            s3_parent_dir(&args_with_dir("s3://bucket")).unwrap(),
+            "eth"
+        );
+    }
+
+    #[test]
+    fn s3_parent_dir_errors_without_dir() {
+        let args = Args {
+            blockchain: "ethereum".to_string(),
+            dir: None,
+            ..Default::default()
+        };
+        assert!(s3_parent_dir(&args).is_err());
+    }
 
     /// Helper to create a test storage with specified files
     async fn create_test_storage(files: Vec<&str>) -> ObjectsStorage<InMemory> {

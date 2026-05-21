@@ -40,8 +40,9 @@ impl<S: ObjectStore> JsonObjectsStorage<S> {
     }
 
     fn height_prefix(&self, height: u64) -> String {
-        // height_dir returns no trailing slash; add one so `list_with_offset` scopes
-        // to the height's directory.
+        // height_dir returns no trailing slash; add one so `list` scopes the
+        // prefix to the height's directory rather than matching sibling
+        // directories that happen to share a prefix.
         format!("{}/", self.filenames.height_dir(height))
     }
 
