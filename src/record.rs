@@ -8,15 +8,15 @@
 //! `ArchiveRow` is what blockchain providers (e.g., [`crate::blockchain::ethereum::EthereumData`])
 //! emit and what target writers (e.g., Avro file, JSON file, Pulsar topic) consume.
 //! It carries one logical row (one block, one transaction, or one trace) as a set of
-//! named fields. Each output format decides how to lay the fields out:
+//! typed [`Field`]s. Each output format decides how to lay the fields out:
 //!
 //! - **Row-batched formats** (Avro, Parquet): collapse the fields into one row,
-//!   one column per [`FieldName`].
+//!   one column per [`Field`] variant.
 //! - **Fan-out formats** (JSON files, Pulsar/Kafka): write each [`Field`] to its
 //!   own destination — a separate file or a separate topic.
 //!
 //! Using a single row type across blockchains keeps format adapters chain-agnostic.
-//! Bitcoin rows simply contain a smaller set of [`FieldName`] variants than Ethereum.
+//! Bitcoin rows simply contain a smaller set of [`Field`] variants than Ethereum.
 
 use chrono::{DateTime, Utc};
 
@@ -47,8 +47,8 @@ impl BlockchainType {
 /// - [`DataKind::TransactionTraces`]: one trace. `tx_index`/`tx_id` are set; `parent_id` is `None`.
 ///
 /// Per-kind payload lives in [`fields`](ArchiveRow::fields), which carries one or more
-/// [`Field`]s. Fan-out formats route fields to separate destinations based on
-/// [`FieldName`].
+/// [`Field`]s. Fan-out formats route fields to separate destinations based on the
+/// [`Field`] variant.
 #[derive(Debug, Clone)]
 pub struct ArchiveRow {
     pub kind: DataKind,

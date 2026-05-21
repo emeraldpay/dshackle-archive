@@ -32,9 +32,9 @@ pub fn schema_for(kind: DataKind) -> &'static apache_avro::Schema {
 /// Encode an [`ArchiveRow`] into an Avro [`Record`] ready to be appended to an Avro writer.
 ///
 /// The row's [`DataKind`] selects the schema. Common columns (blockchain, height, timestamps)
-/// come from the row's top-level fields; per-kind columns are looked up by [`FieldName`] in
-/// the row's `fields` collection. Nullable columns default to `Value::Union(0, Null)` when
-/// the row omits them.
+/// come from the row's top-level fields; per-kind columns are matched against the row's
+/// [`Field`] variants. Nullable columns default to `Value::Union(0, Null)` when the row
+/// omits them.
 pub fn encode_row(row: &ArchiveRow) -> Result<Record<'static>> {
     match row.kind {
         DataKind::Blocks => encode_block(row),

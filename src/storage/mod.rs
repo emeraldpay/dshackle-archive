@@ -117,8 +117,12 @@ pub fn create_fs(value: &Args) -> Result<FsStorage> {
 ///
 /// Capability trait for targets that can have new records appended.
 ///
-/// All targets (Avro/JSON files, Pulsar/Kafka topics) implement this. Writing is
-/// the minimum capability required by the `archive` and `stream` commands.
+/// All targets (Avro/JSON files, future Pulsar/Kafka topics) implement this.
+/// `archive` requires only this capability. The `stream` command currently also
+/// requires [`ReadTarget`] (it uses `find_incomplete_tables` to honour
+/// `--continue`); when streaming-only targets land in Phase 3 it will branch on
+/// the target type and the file-based path will be the one that needs read
+/// capabilities.
 #[async_trait]
 pub trait WriteTarget: Send + Sync {
     ///
