@@ -117,3 +117,27 @@ pub enum Field {
     /// `debug_traceTransaction` with `prestateTracer`.
     StateDiff(Vec<u8>),
 }
+
+impl Field {
+    /// Canonical kebab-case identifier for this field variant.
+    ///
+    /// Provides a stable, format-neutral name that callers can use to label
+    /// the field externally. The streaming layout uses it directly as the
+    /// per-field topic label (`<prefix>-<name>`); other formats compose their
+    /// own presentations (e.g. the JSON file layout builds filenames like
+    /// `block.json` and `tx-<HASH>.json` rather than reusing this string), so
+    /// changes here are visible to consumers — keep the values stable.
+    pub fn name(&self) -> &'static str {
+        match self {
+            Field::BlockJson(_) => "blocks",
+            Field::Uncle { .. } => "blocks-uncles",
+            Field::TxJson(_) => "tx-json",
+            Field::TxRaw(_) => "tx-raw",
+            Field::Receipt(_) => "tx-receipts",
+            Field::From(_) => "tx-from",
+            Field::To(_) => "tx-to",
+            Field::Trace(_) => "trace-calls",
+            Field::StateDiff(_) => "trace-statediff",
+        }
+    }
+}

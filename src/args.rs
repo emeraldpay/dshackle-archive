@@ -60,6 +60,9 @@ pub struct Args {
     #[command(flatten)]
     pub aws: Option<Aws>,
 
+    #[command(flatten)]
+    pub stream: Option<Stream>,
+
     /// Target directory
     #[arg(long = "dir", short)]
     pub dir: Option<String>,
@@ -137,6 +140,7 @@ impl Default for Args {
             connection: Connection::default(),
             notify: None,
             aws: None,
+            stream: None,
             dir: None,
             continue_last: false,
             tail: None,
@@ -257,6 +261,53 @@ pub struct Aws {
     /// Trust any TLS certificate for AWS / S3 (default is false)
     #[arg(long = "aws.trust-tls", aliases = vec!["aws.trustTls", "aws.trusttls", "aws-trust-tls"])]
     pub trust_tls: bool,
+}
+
+/// Streaming-target options. Picked up only by the `stream` command.
+///
+/// The broker is identified by the URL scheme on `--stream.url`: `pulsar://`
+/// selects Apache Pulsar. When `--stream.url` is set the archive runs against
+/// a topic-per-field broker target instead of a file backend, so `--dir`,
+/// `--auth.aws.*`, and `--format` are ignored.
+#[derive(Parser, Debug, Clone)]
+pub struct Stream {
+    /// Publish stream data to a broker at the given URL. The scheme selects
+    /// the backend:
+    ///
+    /// - `pulsar://HOST:PORT` — Apache Pulsar.
+    ///
+    /// Selecting a streaming target restricts the run to the `stream` command —
+    /// `archive`, `fix`, `verify`, and `compact` are rejected at startup
+    /// because topics are append-only.
+    #[arg(long = "stream.url", required = false, alias = "stream-url")]
+    pub stream_url: Option<String>,
+
+    /// Prefix used to build the per-field topic names. Each field is published
+    /// to `<prefix>-<field>` (e.g. `<prefix>-blocks`, `<prefix>-tx-json`).
+    /// For Pulsar, include the full topic path up to the prefix, e.g.
+    /// `persistent://public/default/archive-eth`.
+    #[arg(long = "stream.topics", required = false, alias = "stream-topics")]
+    pub stream_topics: Option<String>,
+}
+
+impl Default for Stream {
+    fn default() -> Self {
+        Self {
+            stream_url: None,
+            stream_topics: None,
+        }
+    }
+}
+
+impl Stream {
+    /// True when the args carry a Pulsar streaming target (URL scheme
+    /// `pulsar://`). Other schemes will route to other backends in the future.
+    pub fn is_pulsar(&self) -> bool {
+        self.stream_url
+            .as_deref()
+            .map(|u| u.starts_with("pulsar://"))
+            .unwrap_or(false)
+    }
 }
 
 impl Default for Aws {

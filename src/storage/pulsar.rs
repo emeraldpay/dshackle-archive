@@ -1,0 +1,367 @@
+// Copyright 2026 EmeraldPay Ltd
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+
+//! Apache Pulsar streaming target.
+//!
+//! Implements [`WriteTarget`] only — by design topics are append-only logs,
+//! so this target intentionally does not implement [`crate::storage::ScanTarget`]
+//! or [`crate::storage::ReadTarget`]. The trait surface enforces that only the
+//! `stream` command can run against a Pulsar target; `archive`, `fix`,
+//! `verify`, and `compact` are rejected upfront in [`crate::main`].
+//!
+//! ## Topic layout
+//!
+//! One topic per field. Each topic name is `<prefix>-<field>` where `<field>`
+//! is one of [`crate::formats::stream::TOPIC_LABELS`]. Producers for the full
+//! set of field topics are created eagerly at startup so the writer never has
+//! to deal with first-write latency.
+//!
+//! ## Ordering
+//!
+//! Pulsar guarantees per-partition publish order *as long as the producer
+//! submits messages in order*. The archiver fetches transactions in parallel,
+//! so multiple [`PulsarWriter::append`] calls can race for the same topic at
+//! the same time. A per-producer [`tokio::sync::Mutex`] serializes the
+//! send-and-await-ack step for each topic — the work inside the lock is just
+//! enqueueing one message, so contention is minimal.
+//!
+//! Messages are keyed by block height, so:
+//! - all fields belonging to one block land in the same partition;
+//! - a same-height re-org's replacement messages land in the same partition,
+//!   after the previous ones.
+//!
+//! ## v1 scope (no recovery yet)
+//!
+//! The basic implementation just streams new blocks; it does not read tail
+//! offsets to compute a resume point. Backwards compatibility hooks (the
+//! `dedup-key` and per-message metadata produced by
+//! [`crate::formats::stream`]) are already populated so a future resume run
+//! can dedup re-emitted messages.
+
+use std::collections::HashMap;
+use std::sync::Arc;
+
+use anyhow::{anyhow, Result};
+use async_trait::async_trait;
+use pulsar::producer::Producer;
+use pulsar::{Pulsar, TokioExecutor};
+use tokio::sync::Mutex;
+
+use crate::archiver::datakind::DataKind;
+use crate::archiver::range::Range;
+use crate::formats::stream::{self, TOPIC_LABELS};
+use crate::record::ArchiveRow;
+use crate::storage::{TargetFile, TargetFileWriter, WriteTarget};
+
+/// Apache Pulsar streaming target.
+///
+/// Holds one [`Producer`] per [`FieldLabel`], each behind its own
+/// [`tokio::sync::Mutex`] so concurrent writers from the archiver serialize
+/// their sends per topic without blocking sends to other topics.
+pub struct PulsarStorage {
+    topic_prefix: String,
+    /// Pre-created producers keyed by topic label (one entry per
+    /// [`TOPIC_LABELS`] string). Created in [`PulsarStorage::new`] so per-topic
+    /// startup latency doesn't show up on the first append. The producers
+    /// internally keep the broker connection alive — we don't need a separate
+    /// handle to the [`Pulsar`] client.
+    producers: Arc<HashMap<&'static str, Arc<Mutex<Producer<TokioExecutor>>>>>,
+}
+
+impl PulsarStorage {
+    /// Connect to the Pulsar broker and create one producer per field topic
+    /// (`<topic_prefix>-<field>`).
+    pub async fn new(broker_url: String, topic_prefix: String) -> Result<Self> {
+        let client: Pulsar<TokioExecutor> = Pulsar::builder(broker_url, TokioExecutor)
+            .build()
+            .await
+            .map_err(|e| anyhow!("Failed to connect to Pulsar: {:?}", e))?;
+
+        let mut producers = HashMap::new();
+        for label in TOPIC_LABELS {
+            let topic = format!("{}-{}", topic_prefix, label);
+            tracing::info!("Pulsar producer: {}", topic);
+            let producer = client
+                .producer()
+                .with_topic(&topic)
+                .build()
+                .await
+                .map_err(|e| anyhow!("Failed to create Pulsar producer for {}: {:?}", topic, e))?;
+            producers.insert(*label, Arc::new(Mutex::new(producer)));
+        }
+
+        Ok(Self {
+            topic_prefix,
+            producers: Arc::new(producers),
+        })
+    }
+
+    /// The topic name a given field publishes to. Exposed primarily for tests
+    /// and log messages.
+    pub fn topic_for(&self, label: &str) -> String {
+        format!("{}-{}", self.topic_prefix, label)
+    }
+}
+
+#[async_trait]
+impl WriteTarget for PulsarStorage {
+    type Writer = PulsarWriter;
+
+    /// Pulsar has no concept of a per-(kind, range) file, so this just hands
+    /// out a writer that shares the global per-topic producer set. The
+    /// `overwrite` flag is irrelevant for an append-only log and is ignored;
+    /// `range` is kept for the [`PulsarWriter::get_url`] notification payload.
+    async fn create(
+        &self,
+        kind: DataKind,
+        range: &Range,
+        _overwrite: bool,
+    ) -> Result<Option<Self::Writer>> {
+        Ok(Some(PulsarWriter {
+            kind,
+            range: range.clone(),
+            producers: self.producers.clone(),
+            topic_prefix: self.topic_prefix.clone(),
+        }))
+    }
+}
+
+/// Per-(kind, range) writer. Carries no per-session state — the producers it
+/// uses are owned by [`PulsarStorage`] and shared across all writers.
+pub struct PulsarWriter {
+    kind: DataKind,
+    range: Range,
+    producers: Arc<HashMap<&'static str, Arc<Mutex<Producer<TokioExecutor>>>>>,
+    topic_prefix: String,
+}
+
+impl TargetFile for PulsarWriter {
+    /// Used as the `location` field in notifications. We surface the topic
+    /// prefix and the range the writer covers, since there's no single
+    /// addressable artifact like a file URL.
+    fn get_url(&self) -> String {
+        format!("pulsar:{}?range={}", self.topic_prefix, self.range)
+    }
+}
+
+#[async_trait]
+impl TargetFileWriter for PulsarWriter {
+    async fn append(&self, row: ArchiveRow) -> Result<()> {
+        for msg in stream::encode_row(&row) {
+            let producer = self
+                .producers
+                .get(&msg.field)
+                .ok_or_else(|| anyhow!("No producer registered for field {:?}", msg.field))?
+                .clone();
+            let payload_len = msg.payload.len();
+
+            // Hold the per-topic lock from enqueue through broker ack — that's
+            // what guarantees the broker sees messages in the order this
+            // writer produced them. Different topics' producers are independent.
+            let mut producer = producer.lock().await;
+            let mut builder = producer
+                .create_message()
+                .with_content(msg.payload)
+                .with_partition_key(msg.partition_key.clone());
+            for (k, v) in &msg.properties {
+                builder = builder.with_property(k.clone(), v.clone());
+            }
+            let send_future = builder
+                .send_non_blocking()
+                .await
+                .map_err(|e| anyhow!("Pulsar send failed: {:?}", e))?;
+            // Block on the broker ack before releasing the lock — otherwise a
+            // later message could overtake this one on the broker side.
+            send_future
+                .await
+                .map_err(|e| anyhow!("Pulsar ack failed: {:?}", e))?;
+
+            crate::progress::on_bytes(payload_len);
+            crate::metrics::add_bytes(&self.kind, crate::metrics::Direction::Write, payload_len);
+        }
+        crate::progress::on_record();
+        crate::metrics::add_items(&self.kind, crate::metrics::Direction::Write, 1);
+        Ok(())
+    }
+
+    async fn close(self) -> Result<()> {
+        // Producers are shared and outlive the writer; nothing to flush here
+        // because every `append` already awaited its broker ack.
+        Ok(())
+    }
+}
+
+// Pulsar is intentionally not a ScanTarget or ReadTarget. Topics are
+// append-only logs — listing existing data requires a topic-tail read which
+// will be the resume mechanism added in a follow-up. Stub trait impls would
+// just mask "missing capability" as runtime errors, so they're omitted.
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use chrono::{TimeZone, Utc};
+    use testcontainers::core::{IntoContainerPort, WaitFor};
+    use testcontainers::runners::AsyncRunner;
+    use testcontainers::{GenericImage, ImageExt};
+
+    use crate::archiver::datakind::DataKind;
+    use crate::archiver::range::Range;
+    use crate::record::{ArchiveRow, BlockchainType, Field};
+
+    fn block_row(height: u64) -> ArchiveRow {
+        ArchiveRow {
+            kind: DataKind::Blocks,
+            blockchain_type: BlockchainType::Ethereum,
+            blockchain_id: "ETH".to_string(),
+            archive_ts: Utc::now(),
+            height,
+            block_id: format!("0xblock{}", height),
+            timestamp: Utc.timestamp_millis_opt(0).unwrap(),
+            parent_id: Some(format!("0xparent{}", height.saturating_sub(1))),
+            tx_index: None,
+            tx_id: None,
+            fields: vec![Field::BlockJson(format!("{{\"h\":{}}}", height).into_bytes())],
+        }
+    }
+
+    fn tx_row(height: u64, tx_id: &str) -> ArchiveRow {
+        ArchiveRow {
+            kind: DataKind::Transactions,
+            blockchain_type: BlockchainType::Ethereum,
+            blockchain_id: "ETH".to_string(),
+            archive_ts: Utc::now(),
+            height,
+            block_id: format!("0xblock{}", height),
+            timestamp: Utc.timestamp_millis_opt(0).unwrap(),
+            parent_id: None,
+            tx_index: Some(0),
+            tx_id: Some(tx_id.to_string()),
+            fields: vec![
+                Field::TxJson(b"{\"a\":1}".to_vec()),
+                Field::TxRaw(vec![0xde, 0xad, 0xbe, 0xef]),
+                Field::Receipt(b"{\"r\":1}".to_vec()),
+            ],
+        }
+    }
+
+    /// End-to-end: writer publishes per-field messages to Pulsar, and a
+    /// reader subscription receives them with the expected payloads and
+    /// properties.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn writes_block_and_tx_messages_to_per_field_topics() {
+        crate::testing::start_test();
+
+        let image = GenericImage::new("apachepulsar/pulsar", "3.3.3")
+            .with_exposed_port(6650.tcp())
+            .with_exposed_port(8080.tcp())
+            .with_wait_for(WaitFor::message_on_stdout("became the leader"));
+        let container = image
+            .with_cmd(vec![
+                "bin/pulsar".to_string(),
+                "standalone".to_string(),
+            ])
+            .start()
+            .await
+            .unwrap();
+        let uri = format!(
+            "pulsar://{}:{}",
+            container.get_host().await.unwrap(),
+            container.get_host_port_ipv4(6650).await.unwrap()
+        );
+
+        // Use a non-persistent prefix so the test doesn't write to disk on
+        // the broker; same as the existing notify::pulsar test.
+        let prefix = "non-persistent://public/default/dshackle-archive-test".to_string();
+
+        let storage = PulsarStorage::new(uri.clone(), prefix.clone())
+            .await
+            .expect("Pulsar connect");
+
+        let blocks_topic = storage.topic_for("blocks");
+        let txes_topic = storage.topic_for("tx-json");
+
+        // Subscribe before writing so we don't lose the messages.
+        let client = Pulsar::builder(uri, TokioExecutor)
+            .build()
+            .await
+            .expect("client");
+        use futures_util::StreamExt;
+        use pulsar::SubType;
+        let mut blocks_consumer: pulsar::Consumer<Vec<u8>, _> = client
+            .consumer()
+            .with_topic(&blocks_topic)
+            .with_subscription_type(SubType::Exclusive)
+            .with_subscription("test-blocks")
+            .build()
+            .await
+            .expect("blocks consumer");
+        let mut txes_consumer: pulsar::Consumer<Vec<u8>, _> = client
+            .consumer()
+            .with_topic(&txes_topic)
+            .with_subscription_type(SubType::Exclusive)
+            .with_subscription("test-txes")
+            .build()
+            .await
+            .expect("txes consumer");
+
+        // Write a block + a transaction.
+        let writer = storage
+            .create(DataKind::Blocks, &Range::Single(42.into()), true)
+            .await
+            .unwrap()
+            .unwrap();
+        writer.append(block_row(42)).await.unwrap();
+        writer.close().await.unwrap();
+        let writer = storage
+            .create(DataKind::Transactions, &Range::Single(42.into()), true)
+            .await
+            .unwrap()
+            .unwrap();
+        writer.append(tx_row(42, "0xabc")).await.unwrap();
+        writer.close().await.unwrap();
+
+        // Block message
+        let msg = blocks_consumer
+            .next()
+            .await
+            .expect("blocks msg available")
+            .expect("blocks msg ok");
+        let payload = &msg.payload.data;
+        assert_eq!(payload.as_slice(), b"{\"h\":42}");
+        let props: HashMap<_, _> = msg
+            .payload
+            .metadata
+            .properties
+            .iter()
+            .map(|kv| (kv.key.clone(), kv.value.clone()))
+            .collect();
+        assert_eq!(props.get("field").map(|s| s.as_str()), Some("blocks"));
+        assert_eq!(props.get("height").map(|s| s.as_str()), Some("42"));
+        assert_eq!(
+            props.get("dedup-key").map(|s| s.as_str()),
+            Some("blocks:0xblock42")
+        );
+
+        // Tx message — exactly the original JSON, with txid in dedup key.
+        let msg = txes_consumer
+            .next()
+            .await
+            .expect("tx msg available")
+            .expect("tx msg ok");
+        assert_eq!(msg.payload.data.as_slice(), b"{\"a\":1}");
+        let props: HashMap<_, _> = msg
+            .payload
+            .metadata
+            .properties
+            .iter()
+            .map(|kv| (kv.key.clone(), kv.value.clone()))
+            .collect();
+        assert_eq!(props.get("tx-index").map(|s| s.as_str()), Some("0"));
+        assert_eq!(
+            props.get("dedup-key").map(|s| s.as_str()),
+            Some("tx-json:0xblock42:tx-0xabc")
+        );
+    }
+}

@@ -33,6 +33,7 @@ pub mod fs;
 pub mod json_fs;
 pub mod json_objects;
 pub mod objects;
+pub mod pulsar;
 mod avro_reader;
 mod copy;
 mod sorted_files;
@@ -43,6 +44,41 @@ pub fn is_s3(args: &Args) -> bool {
 
 pub fn is_fs(args: &Args) -> bool {
     args.dir.is_some() && !is_s3(args)
+}
+
+/// True when the user selected a streaming target whose URL is a Pulsar URL
+/// (`pulsar://…`). Mutually exclusive with the file targets: when this is true
+/// the storage layer ignores `--dir` and `--auth.aws.*` and routes records to
+/// per-field topics instead.
+pub fn is_pulsar(args: &Args) -> bool {
+    args.stream
+        .as_ref()
+        .map(|s| s.is_pulsar())
+        .unwrap_or(false)
+}
+
+/// Build a [`pulsar::PulsarStorage`] from the user-supplied `--stream.*` args.
+///
+/// Pre-creates one producer per [`crate::formats::stream::FieldLabel`] so the
+/// first append doesn't pay startup cost. `--stream.topics` is taken
+/// verbatim — callers are expected to include the Pulsar topic path up to and
+/// including the blockchain segment (e.g.
+/// `persistent://public/default/archive-eth`).
+pub async fn create_pulsar(value: &Args) -> Result<pulsar::PulsarStorage> {
+    let stream = value
+        .stream
+        .as_ref()
+        .ok_or_else(|| anyhow!("No --stream.* options set"))?;
+    let url = stream
+        .stream_url
+        .clone()
+        .ok_or_else(|| anyhow!("--stream.url is required for a streaming target"))?;
+    let prefix = stream
+        .stream_topics
+        .clone()
+        .ok_or_else(|| anyhow!("--stream.topics is required for a streaming target"))?;
+    tracing::info!("Using Pulsar streaming target at {} with topic prefix {}", url, prefix);
+    pulsar::PulsarStorage::new(url, prefix).await
 }
 
 ///

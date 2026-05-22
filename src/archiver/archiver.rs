@@ -11,12 +11,25 @@ use crate::archiver::range::{Height, Range};
 use crate::global;
 use crate::storage::WriteTarget;
 
-#[derive(Clone)]
 pub struct Archiver<B: BlockchainTypes, TS: WriteTarget> {
     b: PhantomData<B>,
     pub target: Arc<TS>,
     pub data_provider: Arc<B::DataProvider>,
     pub notifications: Sender<Notification>,
+}
+
+// Manual `Clone` impl: all fields are reference-counted, so cloning works
+// without requiring `B: Clone` or `TS: Clone` (which derive(Clone) would
+// otherwise demand).
+impl<B: BlockchainTypes, TS: WriteTarget> Clone for Archiver<B, TS> {
+    fn clone(&self) -> Self {
+        Self {
+            b: PhantomData,
+            target: self.target.clone(),
+            data_provider: self.data_provider.clone(),
+            notifications: self.notifications.clone(),
+        }
+    }
 }
 
 impl<B: BlockchainTypes, TS: WriteTarget> Archiver<B, TS> {

@@ -107,6 +107,20 @@ async fn main_inner() -> Result<()> {
         }
     }
 
+    if storage::is_pulsar(&args) {
+        if args.command != Command::Stream {
+            return Err(anyhow!(
+                "{:?} is not supported with the Pulsar streaming target (topics are append-only — only `stream` can publish to them)",
+                args.command
+            ));
+        }
+        if args.continue_last {
+            return Err(anyhow!(
+                "--continue is not supported by the Pulsar streaming target (no tail-scan capability in v1)"
+            ));
+        }
+    }
+
     let chain_ref = ChainRef::from_str(&args.blockchain)
         .map_err(|_| anyhow!("Unsupported blockchain: {}", args.blockchain))?;
     let chain_type = BlockchainType::try_from(chain_ref)
@@ -126,7 +140,19 @@ async fn main_inner() -> Result<()> {
 }
 
 async fn run<B: BlockchainTypes + 'static>(builder: Builder<B>, args: &Args) -> Result<()> {
-    if storage::is_fs(&args) {
+    if let Some(stream) = args.stream.as_ref() {
+        if let Some(url) = stream.stream_url.as_deref() {
+            if !storage::is_pulsar(args) {
+                return Err(anyhow!(
+                    "Unsupported --stream.url scheme: {} (only pulsar:// is supported today)",
+                    url
+                ));
+            }
+        }
+    }
+    if storage::is_pulsar(&args) {
+        run_with_write_target(builder, storage::create_pulsar(&args).await?, args).await
+    } else if storage::is_fs(&args) {
         match args.format {
             Format::Avro => run_with_read_target(builder, storage::create_fs(&args)?, args).await,
             Format::Json => run_with_scan_target(builder, storage::create_fs_json(&args)?, args).await,
@@ -177,6 +203,26 @@ async fn run_with_scan_target<B: BlockchainTypes + 'static, TS: ScanTarget + 'st
         Command::Archive => builder.archive(args).execute().await,
         Command::Verify | Command::Compact => Err(anyhow!(
             "{:?} requires a read-capable target",
+            args.command
+        )),
+    }
+}
+
+///
+/// Dispatch path for write-only targets (today: Pulsar). Only `stream` is
+/// available; everything else was already rejected in [`main_inner`] with a
+/// clearer message, but we err here too in case the upfront check is ever
+/// loosened.
+async fn run_with_write_target<B: BlockchainTypes + 'static, TS: WriteTarget + 'static>(
+    builder: Builder<B>,
+    target: TS,
+    args: &Args,
+) -> Result<()> {
+    let builder = build_with_target(builder, target, args).await?;
+    match args.command {
+        Command::Stream => builder.stream_write_only(args).await.execute().await,
+        _ => Err(anyhow!(
+            "{:?} is not supported by a write-only streaming target",
             args.command
         )),
     }
@@ -246,12 +292,24 @@ impl<B, TS> BuilderWithTarget<B, TS> where B: BlockchainTypes, TS: WriteTarget {
 
 impl<B, TS> BuilderWithData<B, TS> where B: BlockchainTypes + 'static, TS: WriteTarget + 'static {
 
-    /// `stream` reads existing data to honour `--continue`, so it requires
-    /// [`ScanTarget`].
+    /// `stream` with `--continue` support — requires [`ScanTarget`] so it can
+    /// enumerate already-archived data before starting the live tail.
     async fn stream(self, args: &Args) -> StreamCommand<B, TS>
     where
         TS: ScanTarget,
     {
+        let notifier = self.parent.parent.notifier.unwrap();
+        let notifications = notifier.start();
+        let archiver = Archiver::new(
+            Arc::new(self.parent.target), Arc::new(self.data), notifications
+        );
+        let command = StreamCommand::new_with_resume(&args, archiver).await.unwrap();
+        command
+    }
+
+    /// `stream` against a write-only target (Pulsar). `--continue` is rejected
+    /// because there's no scan capability to compute a resume point from.
+    async fn stream_write_only(self, args: &Args) -> StreamCommand<B, TS> {
         let notifier = self.parent.parent.notifier.unwrap();
         let notifications = notifier.start();
         let archiver = Archiver::new(
