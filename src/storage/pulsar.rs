@@ -57,7 +57,8 @@ use crate::storage::{TargetFile, TargetFileWriter, WriteTarget};
 
 /// Apache Pulsar streaming target.
 ///
-/// Holds one [`Producer`] per [`FieldLabel`], each behind its own
+/// Holds one [`Producer`] per topic label
+/// (see [`crate::formats::stream::TOPIC_LABELS`]), each behind its own
 /// [`tokio::sync::Mutex`] so concurrent writers from the archiver serialize
 /// their sends per topic without blocking sends to other topics.
 pub struct PulsarStorage {

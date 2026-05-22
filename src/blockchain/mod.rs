@@ -93,10 +93,10 @@ pub trait BlockchainData<T: BlockchainTypes>: Send + Sync {
     ///
     /// Lightweight header-only fetch returning the block's `(height, hash, parent)`
     /// linkage. Used by the re-org-aware live follower to walk parent hashes
-    /// without paying for the full [`fetch_block`] (which also fetches uncle
+    /// without paying for the full `fetch_block` (which also fetches uncle
     /// JSON and builds an [`ArchiveRow`]).
     ///
-    /// The default implementation just calls [`fetch_block`] and projects the
+    /// The default implementation just calls `fetch_block` and projects the
     /// linkage fields; concrete implementations may override with a cheaper
     /// path that skips uncle / row construction.
     async fn fetch_block_link(
@@ -196,8 +196,8 @@ pub trait BlockDetails<T> where T: BlockchainTypes{
 /// [`BlockchainData::fetch_block_link`]. The string fields use the same
 /// formatting convention as [`crate::record::ArchiveRow::block_id`] and
 /// [`crate::record::ArchiveRow::parent_id`] (chain-specific; e.g. `0x…` for
-/// Ethereum) so the values round-trip through
-/// [`BlockReference::from(Height)`].
+/// Ethereum) so the values round-trip through the
+/// `From<Height> for BlockReference` impl.
 #[derive(Debug, Clone)]
 pub struct BlockHeaderInfo {
     pub height: u64,

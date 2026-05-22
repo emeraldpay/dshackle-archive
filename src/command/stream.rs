@@ -47,7 +47,7 @@ pub struct StreamCommand<B: BlockchainTypes, TS: WriteTarget> {
 const CONTINUE_TAIL_BLOCKS: u64 = 100;
 
 /// Build the [`DataOptions`] used for the stream command — same as
-/// [`DataOptions::from(args)`] but with `overwrite: false` so simultaneous
+/// `DataOptions::from(args)` but with `overwrite: false` so simultaneous
 /// streams (e.g., one Head + one Finalized) don't clobber each other's files.
 fn stream_data_options(config: &Args) -> DataOptions {
     DataOptions {

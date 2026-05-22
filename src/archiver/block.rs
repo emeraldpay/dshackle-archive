@@ -58,8 +58,8 @@ impl<B: BlockchainTypes, TS: WriteTarget> Archiver<B, TS> {
                 // Prefer a hash-pinned lookup when the follower gave us one,
                 // so we don't race a re-org between subscription and fetch.
                 // Falls back to height-only when no hash is present (e.g.,
-                // batch archive over a numeric range). See
-                // `BlockReference::from(Height)`.
+                // batch archive over a numeric range). See the
+                // `From<Height> for BlockReference` impl in blockchain/mod.rs.
                 let block_ref: BlockReference<B::BlockHash> = height.into();
                 let (record, block, txes) = provider.fetch_block(&block_ref).await?;
                 if !dry_run {

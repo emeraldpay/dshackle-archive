@@ -59,7 +59,9 @@ pub fn is_pulsar(args: &Args) -> bool {
 
 /// Build a [`pulsar::PulsarStorage`] from the user-supplied `--stream.*` args.
 ///
-/// Pre-creates one producer per [`crate::formats::stream::FieldLabel`] so the
+/// Pre-creates one producer per entry in
+/// [`crate::formats::stream::TOPIC_LABELS`] (the publishable subset of
+/// [`crate::record::Field::name`]) so the
 /// first append doesn't pay startup cost. `--stream.topics` is taken
 /// verbatim — callers are expected to include the Pulsar topic path up to and
 /// including the blockchain segment (e.g.

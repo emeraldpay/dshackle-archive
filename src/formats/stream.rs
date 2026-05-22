@@ -29,8 +29,9 @@ use crate::record::{ArchiveRow, BlockchainType, Field};
 /// [`crate::storage::pulsar`] to pre-create one producer per label at startup
 /// so the first append doesn't pay broker-side topic-creation latency.
 ///
-/// Kept in sync with the match in [`encode_field`] by construction —
-/// `unit_test_label_set_matches_all_fields` asserts the two lists agree.
+/// Kept in sync with [`crate::record::Field::name`] by construction —
+/// `topic_labels_constant_covers_all_field_variants` asserts that every
+/// publishable variant's name appears here.
 pub const TOPIC_LABELS: &[&str] = &[
     "blocks",
     "blocks-uncles",
