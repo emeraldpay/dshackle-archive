@@ -31,11 +31,50 @@ pub fn get_shutdown() -> shutdown::Shutdown {
     SHUTDOWN.clone()
 }
 
+/// Avro codec for `--format=avro` writes.
+///
+/// Zstd level **9** is intentional: Avro files are long-lived archive
+/// artifacts (held for months/years, scanned by downstream batch jobs), so we
+/// pay one-time CPU at write time in exchange for the smaller storage
+/// footprint that compounds across the whole archive. The level is high
+/// enough to noticeably beat default (~level 3) on the JSON-heavy payloads
+/// dshackle-archive writes, while still well below the diminishing-returns
+/// zone above ~15.
 pub fn get_avro_codec() -> Codec {
     let compression = COMPRESSION.lock().unwrap();
     match *compression {
         Compression::Snappy => Codec::Snappy,
         Compression::Zstd => Codec::Zstandard(ZstandardSettings::new(9)),
+    }
+}
+
+/// Map the user-selected compression to a Pulsar producer compression option.
+///
+/// Honours the same `--compression` flag the Avro path uses, so a single
+/// archive run uses a consistent codec choice across whichever target it
+/// writes to. Pulsar's `compression` feature is enabled by default in the
+/// upstream crate, so both `Zstd` and `Snappy` are always available here.
+///
+/// Note the **level asymmetry vs. [`get_avro_codec`]**: this returns
+/// `CompressionZstd::default()` (≈ level 3), whereas the Avro path uses
+/// level 9. The trade-off is intentional:
+///
+/// - Avro files are long-lived archive artifacts where write CPU amortizes
+///   across years of cold storage — level 9 favours ratio.
+/// - Broker topics are typically short-retention live streams. Producer-side
+///   compression sits on the latency path of every published message, so a
+///   faster, ratio-modest codec is the better default. If someone needs
+///   tighter compression on a Pulsar topic they can negotiate it
+///   broker-side; for our v1 we keep write latency low.
+pub fn get_pulsar_compression() -> pulsar::compression::Compression {
+    let compression = COMPRESSION.lock().unwrap();
+    match *compression {
+        Compression::Snappy => pulsar::compression::Compression::Snappy(
+            pulsar::compression::CompressionSnappy::default(),
+        ),
+        Compression::Zstd => pulsar::compression::Compression::Zstd(
+            pulsar::compression::CompressionZstd::default(),
+        ),
     }
 }
 

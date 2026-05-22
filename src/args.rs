@@ -102,7 +102,9 @@ pub struct Args {
     pub fix_clean: bool,
 
     ///
-    /// Compression algorithm to use when writing new Avro files. Default is `zstd`.
+    /// Compression algorithm to use for new output. For `--format=avro` it's
+    /// the Avro file codec; for the Pulsar streaming target it's the producer
+    /// compression applied to every message. Default is `zstd`.
     #[arg(long = "compression")]
     pub compression: Option<Compression>,
 

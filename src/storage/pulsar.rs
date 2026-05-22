@@ -45,7 +45,7 @@ use std::sync::Arc;
 
 use anyhow::{anyhow, Result};
 use async_trait::async_trait;
-use pulsar::producer::Producer;
+use pulsar::producer::{Producer, ProducerOptions};
 use pulsar::{Pulsar, TokioExecutor};
 use tokio::sync::Mutex;
 
@@ -80,6 +80,14 @@ impl PulsarStorage {
             .await
             .map_err(|e| anyhow!("Failed to connect to Pulsar: {:?}", e))?;
 
+        // Same compression the Avro path uses (selected via `--compression`).
+        // Reuses the global state so a single archive run is consistent
+        // across whichever target it writes to.
+        let compression = crate::global::get_pulsar_compression();
+        let producer_options = ProducerOptions {
+            compression: Some(compression),
+            ..Default::default()
+        };
         let mut producers = HashMap::new();
         for label in TOPIC_LABELS {
             let topic = format!("{}-{}", topic_prefix, label);
@@ -87,6 +95,7 @@ impl PulsarStorage {
             let producer = client
                 .producer()
                 .with_topic(&topic)
+                .with_options(producer_options.clone())
                 .build()
                 .await
                 .map_err(|e| anyhow!("Failed to create Pulsar producer for {}: {:?}", topic, e))?;
