@@ -19,13 +19,16 @@ use tokio::{
 use tokio::sync::mpsc::Sender;
 use tokio::sync::Mutex;
 use tokio_util::io::{StreamReader, SyncIoBridge};
-use crate::archiver::datakind::DataKind;
+use crate::archiver::datakind::{DataKind, DataOptions};
 use crate::archiver::filenames::{Filenames, Level, LevelDouble, LevelSingle};
 use crate::archiver::range::Range;
 use crate::formats::avro;
 use crate::global;
 use crate::record::ArchiveRow;
-use crate::storage::{avro_reader, copy, sorted_files, FileReference, ReadTarget, TargetFile, TargetFileReader, TargetFileWriter, WriteTarget};
+use crate::storage::{
+    avro_reader, copy, find_incomplete_by_listing, sorted_files, FileReference, ReadTarget,
+    ScanTarget, TargetFile, TargetFileReader, TargetFileWriter, WriteTarget,
+};
 
 pub struct ObjectsStorage<S: ObjectStore> {
     os: Arc<S>,
@@ -53,6 +56,17 @@ impl<S: ObjectStore> WriteTarget for ObjectsStorage<S> {
             }
         }
         Ok(Some(NewObjectsFile::new(self.os.clone(), kind, self.bucket.clone(), filename)))
+    }
+}
+
+#[async_trait]
+impl<S: ObjectStore> ScanTarget for ObjectsStorage<S> {
+    async fn find_incomplete_tables(
+        &self,
+        blocks: Range,
+        tx_options: &DataOptions,
+    ) -> anyhow::Result<Vec<(Range, Vec<DataKind>)>> {
+        find_incomplete_by_listing(self, blocks, tx_options).await
     }
 }
 

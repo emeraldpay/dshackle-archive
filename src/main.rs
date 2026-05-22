@@ -28,11 +28,12 @@ use crate::{
     },
     args::{
         Command,
-        Args
+        Args,
+        Format,
     },
     blockchain::{BitcoinType, BlockchainTypes, EthereumType},
     notify::Notifier,
-    storage::ReadTarget,
+    storage::{ReadTarget, ScanTarget, WriteTarget},
     archiver::Archiver,
 };
 
@@ -94,6 +95,18 @@ async fn main_inner() -> Result<()> {
         tracing::info!("Dry run mode enabled, no changes will be made");
     }
 
+    if args.format == Format::Json {
+        match args.command {
+            Command::Compact | Command::Verify => {
+                return Err(anyhow!(
+                    "{:?} is not supported with --format json (the per-height JSON layout has no ranges to compact or verify)",
+                    args.command
+                ));
+            }
+            _ => {}
+        }
+    }
+
     let chain_ref = ChainRef::from_str(&args.blockchain)
         .map_err(|_| anyhow!("Unsupported blockchain: {}", args.blockchain))?;
     let chain_type = BlockchainType::try_from(chain_ref)
@@ -114,48 +127,74 @@ async fn main_inner() -> Result<()> {
 
 async fn run<B: BlockchainTypes + 'static>(builder: Builder<B>, args: &Args) -> Result<()> {
     if storage::is_fs(&args) {
-        let target = storage::create_fs(&args)?;
-        run_with_target(builder, target, args).await
+        match args.format {
+            Format::Avro => run_with_read_target(builder, storage::create_fs(&args)?, args).await,
+            Format::Json => run_with_scan_target(builder, storage::create_fs_json(&args)?, args).await,
+        }
     } else if storage::is_s3(&args) {
-        let target = storage::create_aws(&args)?;
-        run_with_target(builder, target, args).await
+        match args.format {
+            Format::Avro => run_with_read_target(builder, storage::create_aws(&args)?, args).await,
+            Format::Json => run_with_scan_target(builder, storage::create_aws_json(&args)?, args).await,
+        }
     } else {
         return Err(anyhow!("Unsupported storage"));
     }
 }
 
-async fn run_with_target<B: BlockchainTypes + 'static, TS: ReadTarget + 'static>(builder: Builder<B>, target: TS, args: &Args) -> Result<()> {
+///
+/// Dispatch path for targets that support full read access (Avro on FS/S3 today).
+/// All five commands are valid.
+async fn run_with_read_target<B: BlockchainTypes + 'static, TS: ReadTarget + 'static>(
+    builder: Builder<B>,
+    target: TS,
+    args: &Args,
+) -> Result<()> {
+    let builder = build_with_target(builder, target, args).await?;
+    match args.command {
+        Command::Stream => builder.stream(args).await.execute().await,
+        Command::Fix => builder.fix(args).execute().await,
+        Command::Archive => builder.archive(args).execute().await,
+        Command::Verify => builder.verify(args).execute().await,
+        Command::Compact => builder.compact(args).execute().await,
+    }
+}
+
+///
+/// Dispatch path for scan-only targets (JSON-per-field today; streaming targets
+/// in Phase 3 will use a separate write-only path). `verify`/`compact` are
+/// rejected upfront in [`main_inner`], so the runtime path here is unreachable
+/// for those commands; we still error defensively in case the upfront check is
+/// ever loosened.
+async fn run_with_scan_target<B: BlockchainTypes + 'static, TS: ScanTarget + 'static>(
+    builder: Builder<B>,
+    target: TS,
+    args: &Args,
+) -> Result<()> {
+    let builder = build_with_target(builder, target, args).await?;
+    match args.command {
+        Command::Stream => builder.stream(args).await.execute().await,
+        Command::Fix => builder.fix(args).execute().await,
+        Command::Archive => builder.archive(args).execute().await,
+        Command::Verify | Command::Compact => Err(anyhow!(
+            "{:?} requires a read-capable target",
+            args.command
+        )),
+    }
+}
+
+async fn build_with_target<B: BlockchainTypes + 'static, TS: WriteTarget + 'static>(
+    builder: Builder<B>,
+    target: TS,
+    args: &Args,
+) -> Result<BuilderWithData<B, TS>> {
     let chain_ref = ChainRef::from_str(&args.blockchain)
         .map_err(|_| anyhow!("Unsupported blockchain: {}", args.blockchain))?;
     let blockchain = Blockchain::new(&args.connection, args.as_dshackle_blockchain()?, chain_ref.code()).await?;
 
-    let builder = builder
+    Ok(builder
         .with_notifier(notify::create_notifier(&args).await?)
         .with_target(target)
-        .with_data(blockchain, chain_ref.code());
-
-    match args.command {
-        Command::Stream => {
-            builder.stream(args).await
-                .execute().await
-        },
-        Command::Fix => {
-            builder.fix(args)
-                .execute().await
-        },
-        Command::Verify => {
-            builder.verify(args)
-                .execute().await
-        },
-        Command::Archive => {
-            builder.archive(args)
-                .execute().await
-        },
-        Command::Compact => {
-            builder.compact(args)
-                .execute().await
-        },
-    }
+        .with_data(blockchain, chain_ref.code()))
 }
 
 struct Builder<B: BlockchainTypes> {
@@ -163,12 +202,12 @@ struct Builder<B: BlockchainTypes> {
     notifier: Option<Box<dyn Notifier>>,
 }
 
-struct BuilderWithTarget<B: BlockchainTypes, TS: ReadTarget> {
+struct BuilderWithTarget<B: BlockchainTypes, TS: WriteTarget> {
     parent: Builder<B>,
     target: TS,
 }
 
-struct BuilderWithData<B: BlockchainTypes, TS: ReadTarget> {
+struct BuilderWithData<B: BlockchainTypes, TS: WriteTarget> {
     parent: BuilderWithTarget<B, TS>,
     data: B::DataProvider,
 }
@@ -188,7 +227,7 @@ impl<B> Builder<B> where B: BlockchainTypes {
         }
     }
 
-    fn with_target<TS>(self, target: TS) -> BuilderWithTarget<B, TS> where TS: ReadTarget {
+    fn with_target<TS>(self, target: TS) -> BuilderWithTarget<B, TS> where TS: WriteTarget {
         BuilderWithTarget {
             target,
             parent: self,
@@ -196,7 +235,7 @@ impl<B> Builder<B> where B: BlockchainTypes {
     }
 }
 
-impl<B, TS> BuilderWithTarget<B, TS> where B: BlockchainTypes, TS: ReadTarget {
+impl<B, TS> BuilderWithTarget<B, TS> where B: BlockchainTypes, TS: WriteTarget {
     fn with_data(self, blockchain: Blockchain, id: String) -> BuilderWithData<B, TS> {
         BuilderWithData {
             parent: self,
@@ -205,9 +244,14 @@ impl<B, TS> BuilderWithTarget<B, TS> where B: BlockchainTypes, TS: ReadTarget {
     }
 }
 
-impl<B, TS> BuilderWithData<B, TS> where B: BlockchainTypes + 'static, TS: ReadTarget + 'static {
+impl<B, TS> BuilderWithData<B, TS> where B: BlockchainTypes + 'static, TS: WriteTarget + 'static {
 
-    async fn stream(self, args: &Args) -> StreamCommand<B, TS> {
+    /// `stream` reads existing data to honour `--continue`, so it requires
+    /// [`ScanTarget`].
+    async fn stream(self, args: &Args) -> StreamCommand<B, TS>
+    where
+        TS: ScanTarget,
+    {
         let notifier = self.parent.parent.notifier.unwrap();
         let notifications = notifier.start();
         let archiver = Archiver::new(
@@ -217,7 +261,11 @@ impl<B, TS> BuilderWithData<B, TS> where B: BlockchainTypes + 'static, TS: ReadT
         command
     }
 
-    fn fix(self, args: &Args) -> FixCommand<B, TS> {
+    /// `fix` enumerates missing data via [`ScanTarget::find_incomplete_tables`].
+    fn fix(self, args: &Args) -> FixCommand<B, TS>
+    where
+        TS: ScanTarget,
+    {
         let notifier = self.parent.parent.notifier.unwrap();
         let notifications = notifier.start();
         let archiver = Archiver::new(
@@ -227,7 +275,11 @@ impl<B, TS> BuilderWithData<B, TS> where B: BlockchainTypes + 'static, TS: ReadT
         command
     }
 
-    fn verify(self, args: &Args) -> VerifyCommand<B, TS> {
+    /// `verify` opens existing files to inspect them — requires [`ReadTarget`].
+    fn verify(self, args: &Args) -> VerifyCommand<B, TS>
+    where
+        TS: ReadTarget,
+    {
         let notifier = self.parent.parent.notifier.unwrap();
         let notifications = notifier.start();
         let archiver = Archiver::new(
@@ -237,6 +289,7 @@ impl<B, TS> BuilderWithData<B, TS> where B: BlockchainTypes + 'static, TS: ReadT
         command
     }
 
+    /// `archive` only writes; [`WriteTarget`] is enough.
     fn archive(self, args: &Args) -> ArchiveCommand<B, TS> {
         let notifier = self.parent.parent.notifier.unwrap();
         let notifications = notifier.start();
@@ -247,7 +300,11 @@ impl<B, TS> BuilderWithData<B, TS> where B: BlockchainTypes + 'static, TS: ReadT
         command
     }
 
-    fn compact(self, args: &Args) -> CompactCommand<B, TS> {
+    /// `compact` reads existing range files and rewrites them — requires [`ReadTarget`].
+    fn compact(self, args: &Args) -> CompactCommand<B, TS>
+    where
+        TS: ReadTarget,
+    {
         let notifier = self.parent.parent.notifier.unwrap();
         let notifications = notifier.start();
         let archiver = Archiver::new(

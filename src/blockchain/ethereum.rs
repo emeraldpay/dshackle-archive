@@ -94,6 +94,8 @@ impl EthereumData {
         if data_as_json == b"null" {
             return Err(anyhow!("Transaction not found: 0x{:x}", hash));
         }
+        // Wire format is a JSON string like "0xabcdef…"; strip the surrounding
+        // quotes and the `0x` prefix, then hex-decode to bytes.
         let data_as_hex = String::from_utf8(
             data_as_json[3..(data_as_json.len() - 1)].to_vec()
         ).map_err(|_| anyhow!("Invalid hex"))?;
@@ -136,7 +138,7 @@ impl EthereumData {
             .take(10);
         Retry::spawn(retry_strategy, async || {
             self.get_tx_raw(hash).await
-                .and_then(|value| if value == b"null" {
+                .and_then(|value| if value.is_empty() {
                     Err(anyhow!("Transaction Raw not found: 0x{:x}", hash))
                 } else {
                     Ok(value)

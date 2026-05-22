@@ -168,6 +168,19 @@ impl Filenames {
         self.full_path(self.relative_path(kind, range))
     }
 
+    /// Directory that holds the per-field files for a single block height.
+    /// Used by the JSON layout (one directory per height, each containing
+    /// `block.json`, `tx-<HASH>.json`, etc.) — reuses the same two-level
+    /// height bucketing as [`Self::path`].
+    pub fn height_dir(&self, height: u64) -> String {
+        self.full_path(format!(
+            "{}/{}/{}",
+            self.level_1(height),
+            self.level_2(height),
+            self.range_padded(height)
+        ))
+    }
+
     fn level_1(&self, value: u64) -> String {
         let number = value / self.dir_block_size_l1 * self.dir_block_size_l1;
         self.range_padded(number)

@@ -108,6 +108,14 @@ pub struct Args {
     #[arg(long = "follow", default_value = "latest")]
     pub follow: Follow,
 
+    /// Output format. `avro` (default) writes one row-batched Avro file per
+    /// (kind, range) under the historical layout. `json` writes one JSON file
+    /// per field (block.json, tx-<HASH>.json, receipt-<HASH>.json,
+    /// raw-<HASH>.hex, …) inside a directory per height. `compact` and `verify`
+    /// are not supported with `json`.
+    #[arg(long = "format", default_value = "avro")]
+    pub format: Format,
+
     /// Start a Prometheus-compatible metrics server on the given address (e.g., 127.0.0.1:8080).
     /// Metrics are served at http://HOST:PORT/metrics
     #[arg(long = "metrics", value_name = "HOST:PORT")]
@@ -139,6 +147,7 @@ impl Default for Args {
             fix_clean: false,
             compression: None,
             follow: Follow::Latest,
+            format: Format::Avro,
             metrics: None,
             metrics_await: false,
         }
@@ -267,6 +276,16 @@ impl Default for Aws {
 pub enum Compression {
     Snappy,
     Zstd,
+}
+
+/// Output format selected via `--format`.
+#[derive(clap::ValueEnum, Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Format {
+    /// One Avro file per (kind, range). Historical layout — supports all commands.
+    Avro,
+    /// One JSON file per field under a per-height directory. `archive`, `stream`,
+    /// and `fix` are supported; `compact` and `verify` are rejected at startup.
+    Json,
 }
 
 #[derive(clap::ValueEnum, Debug, Clone, PartialEq)]

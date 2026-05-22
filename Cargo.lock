@@ -2045,6 +2045,7 @@ dependencies = [
  "shadow-rs",
  "shutdown",
  "strum",
+ "tempfile",
  "testcontainers",
  "thiserror 2.0.18",
  "tokio",

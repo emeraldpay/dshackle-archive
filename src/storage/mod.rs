@@ -5,6 +5,8 @@ use async_trait::async_trait;
 use crate::{
     storage::{
         fs::FsStorage,
+        json_fs::JsonFsStorage,
+        json_objects::JsonObjectsStorage,
         objects::ObjectsStorage
     },
     archiver::{
@@ -28,6 +30,8 @@ use url::Url;
 use itertools::Itertools;
 
 pub mod fs;
+pub mod json_fs;
+pub mod json_objects;
 pub mod objects;
 mod avro_reader;
 mod copy;
@@ -41,33 +45,37 @@ pub fn is_fs(args: &Args) -> bool {
     args.dir.is_some() && !is_s3(args)
 }
 
-pub fn create_aws(value: &Args) -> Result<ObjectsStorage<AmazonS3>> {
-    // inside the archive we create a subdirectory for each blockchain
+///
+/// Compute the S3 key prefix (without bucket) under which the archive lives.
+///
+/// Joins the user-supplied `--dir` URL path with the lowercased blockchain code
+/// (e.g. `eth`), trimming any leading/trailing slashes on the URL path so
+/// `s3://bucket/`, `s3://bucket/archive`, and `s3://bucket/archive/` all
+/// produce the expected `archive/eth` (or just `eth` for the bucket root).
+fn s3_parent_dir(value: &Args) -> Result<String> {
     let blockchain_dir = value.get_blockchain()?.code().to_lowercase();
+    if value.dir.is_none() {
+        return Err(anyhow!("Please set target dir as a s3://bucket/path"));
+    }
+    let raw = url::Url::parse(value.dir.as_ref().unwrap())
+        .map_err(|_| anyhow!("Please specify a --dir as s3://bucket/path"))?
+        .path()
+        .to_string();
+    let trimmed = raw.trim_matches('/');
+    Ok(if trimmed.is_empty() {
+        blockchain_dir
+    } else {
+        format!("{}/{}", trimmed, blockchain_dir)
+    })
+}
+
+pub fn create_aws(value: &Args) -> Result<ObjectsStorage<AmazonS3>> {
     let aws = value.aws.as_ref().unwrap();
 
     tracing::info!("Using S3 storage");
 
-    let parent_dir = if let Some(dir) = &value.dir {
-        url::Url::parse(dir)
-            .map_err(|_| anyhow!("Please specify a --dir as s3://bucket/path"))?
-            .path()
-            .to_string()
-    } else {
-        "".to_string()
-    };
-
-    let parent_dir = if parent_dir.ends_with('/') {
-        blockchain_dir
-    } else {
-        format!("{}/{}", parent_dir, blockchain_dir)
-    };
-
-    let filenames = Filenames::with_dir(parent_dir);
-
-    if value.dir.is_none() {
-        return Err(anyhow!("Please set target dir as a s3://bucket/path"));
-    }
+    // s3_parent_dir errors if --dir is missing, so subsequent unwraps are safe.
+    let filenames = Filenames::with_dir(s3_parent_dir(value)?);
 
     let mut builder = AmazonS3Builder::new()
         .with_access_key_id(aws.access_key.clone())
@@ -114,15 +122,66 @@ pub fn create_fs(value: &Args) -> Result<FsStorage> {
     Ok(FsStorage::new(PathBuf::from(dir), Filenames::with_dir(blockchain_dir)))
 }
 
+/// Build a [`JsonFsStorage`] using the same root-dir and blockchain-subdirectory
+/// conventions as [`create_fs`].
+pub fn create_fs_json(value: &Args) -> Result<JsonFsStorage> {
+    let blockchain_dir = value.get_blockchain()?.code().to_lowercase();
+    tracing::info!("Using Filesystem storage (JSON per-field layout)");
+    if value.dir.is_none() {
+        return Err(anyhow!("No target dir set for a Filesystem based storage"));
+    }
+    let dir = value.dir.as_ref().unwrap().clone();
+    Ok(JsonFsStorage::new(
+        PathBuf::from(dir),
+        Filenames::with_dir(blockchain_dir),
+    ))
+}
+
+/// Build a [`JsonObjectsStorage`] backed by AWS S3 (or any S3-compatible service),
+/// sharing the same authentication and URL-parsing logic as [`create_aws`].
+pub fn create_aws_json(value: &Args) -> Result<JsonObjectsStorage<AmazonS3>> {
+    let aws = value.aws.as_ref().unwrap();
+
+    tracing::info!("Using S3 storage (JSON per-field layout)");
+
+    // s3_parent_dir errors if --dir is missing, so subsequent unwraps are safe.
+    let filenames = Filenames::with_dir(s3_parent_dir(value)?);
+
+    let mut builder = AmazonS3Builder::new()
+        .with_access_key_id(aws.access_key.clone())
+        .with_secret_access_key(aws.secret_key.clone())
+        .with_url(value.dir.clone().unwrap())
+        .with_client_options(
+            ClientOptions::default()
+                .with_allow_http(true)
+                .with_allow_invalid_certificates(aws.trust_tls),
+        );
+    if let Some(endpoint) = &aws.endpoint {
+        builder = builder.with_endpoint(endpoint.clone());
+    } else {
+        builder = builder.with_endpoint("https://s3.amazonaws.com".to_string());
+    }
+    if let Some(region) = &aws.region {
+        builder = builder.with_region(region.clone());
+    }
+    builder = builder.with_virtual_hosted_style_request(!aws.path_style);
+
+    let bucket = {
+        let parsed = Url::parse(value.dir.clone().unwrap().as_str())?;
+        parsed.host_str().unwrap().to_string()
+    };
+    let os = builder
+        .build()
+        .map_err(|e| anyhow!("Invalid S3 connection options: {}", e))?;
+
+    Ok(JsonObjectsStorage::new(Arc::new(os), bucket, filenames))
+}
+
 ///
 /// Capability trait for targets that can have new records appended.
 ///
-/// All targets (Avro/JSON files, future Pulsar/Kafka topics) implement this.
-/// `archive` requires only this capability. The `stream` command currently also
-/// requires [`ReadTarget`] (it uses `find_incomplete_tables` to honour
-/// `--continue`); when streaming-only targets land in Phase 3 it will branch on
-/// the target type and the file-based path will be the one that needs read
-/// capabilities.
+/// Every target (Avro/JSON files, future Pulsar/Kafka topics) implements this.
+/// The `archive` command requires only this capability.
 #[async_trait]
 pub trait WriteTarget: Send + Sync {
     ///
@@ -137,14 +196,30 @@ pub trait WriteTarget: Send + Sync {
 }
 
 ///
-/// Capability trait for targets that can list, open, and delete existing files.
+/// Capability trait for targets that can report which heights/kinds are not
+/// yet fully archived. Required by the `stream --continue` and `fix` commands.
 ///
-/// Implemented by file-based targets (filesystem, S3) but **not** by streaming
-/// targets (Pulsar, Kafka), which are append-only logs. Commands that need to
-/// inspect or rewrite existing data (`verify`, `fix`, `compact`) bound on this
-/// trait.
+/// Both file-based targets (Avro, JSON) implement this; streaming targets
+/// (Pulsar, Kafka) will get a separate resume mechanism in Phase 3 and
+/// intentionally do not implement [`ScanTarget`].
 #[async_trait]
-pub trait ReadTarget: WriteTarget {
+pub trait ScanTarget: WriteTarget {
+    async fn find_incomplete_tables(
+        &self,
+        blocks: Range,
+        tx_options: &DataOptions,
+    ) -> Result<Vec<(Range, Vec<DataKind>)>>;
+}
+
+///
+/// Capability trait for targets whose existing data can be enumerated, opened,
+/// and deleted file-by-file. Required by the `verify` and `compact` commands.
+///
+/// Implemented by the row-batched file backends (Avro on FS/S3, future Parquet)
+/// but **not** by the per-field JSON layout (which has no row-batched files to
+/// open or merge) or by streaming targets.
+#[async_trait]
+pub trait ReadTarget: ScanTarget {
     ///
     /// A type used for reading the existing records.
     type Reader: TargetFileReader + Send + Sync;
@@ -160,72 +235,85 @@ pub trait ReadTarget: WriteTarget {
     ///
     /// List all files in the range
     fn list(&self, range: Range) -> Result<Receiver<FileReference>>;
+}
 
-    async fn find_incomplete_tables(&self, blocks: Range, tx_options: &DataOptions) -> Result<Vec<(Range, Vec<DataKind>)>> {
-        tracing::info!("Check if blocks are fully archived in range: {}", blocks);
-        let mut existing = self.list(blocks.clone())?;
-        let mut archived = ArchivesList::new(tx_options.files().clone());
+///
+/// Default [`ScanTarget::find_incomplete_tables`] implementation for row-batched
+/// file-based targets — uses [`ReadTarget::list`] to enumerate existing files and
+/// computes the missing kinds via [`ArchivesList`]. Called by [`fs::FsStorage`]
+/// and [`objects::ObjectsStorage`]; per-field JSON backends override
+/// `find_incomplete_tables` with their own heuristic and don't go through here.
+pub async fn find_incomplete_by_listing<T>(
+    target: &T,
+    blocks: Range,
+    tx_options: &DataOptions,
+) -> Result<Vec<(Range, Vec<DataKind>)>>
+where
+    T: ReadTarget,
+{
+    tracing::info!("Check if blocks are fully archived in range: {}", blocks);
+    let mut existing = target.list(blocks.clone())?;
+    let mut archived = ArchivesList::new(tx_options.files().clone());
 
-        // Track which ranges have no files at all
-        let mut missing_ranges = RangeBag::new();
-        missing_ranges.append(blocks.clone());
+    // Track which ranges have no files at all
+    let mut missing_ranges = RangeBag::new();
+    missing_ranges.append(blocks.clone());
 
-        let shutdown = global::get_shutdown();
-        while let Some(file) = existing.recv().await {
-            // Remove this file's range from the missing ranges
-            missing_ranges.remove(&file.range);
-            archived.append(file)?;
-            if shutdown.is_signalled() {
-                tracing::info!("Shutdown signal received");
-                return Ok(vec![]);
-            }
+    let shutdown = global::get_shutdown();
+    while let Some(file) = existing.recv().await {
+        // Remove this file's range from the missing ranges
+        missing_ranges.remove(&file.range);
+        archived.append(file)?;
+        if shutdown.is_signalled() {
+            tracing::info!("Shutdown signal received");
+            return Ok(vec![]);
         }
-
-        let incomplete = archived.list_incomplete();
-        let mut result: Vec<(Range, Vec<DataKind>)> = Vec::new();
-
-        // Add ranges that have incomplete files (some files present but not all)
-        if !incomplete.is_empty() {
-            // We do not process ranges here (like joining them) because we don't want to break any existing layout (i.e, chunk size, alignment, etc)
-            let ranges = incomplete.iter()
-                .map(|g| g.range.clone())
-                .collect::<Vec<Range>>();
-
-            tracing::debug!("Incomplete blocks {} (sample: {},...)",
-                ranges.len(),
-                ranges.iter().take(5).map(|r| r.to_string()).join(",")
-            );
-
-            let incomplete_by_range: Vec<(Range, Vec<DataKind>)> = ranges.iter()
-                .filter_map(|r| {
-                    // we clone all file groups here b/c if it split by different ranges each range would download its part
-                    incomplete.iter()
-                        .find(|g| g.range.eq(r))
-                        .map(|g| (r.clone(), g.get_incomplete_kinds()))
-                })
-                .collect();
-            result.extend(incomplete_by_range);
-        }
-
-        // Add completely missing ranges (no files at all)
-        if !missing_ranges.is_empty() {
-            let all_kinds = tx_options.files().files.clone();
-            tracing::debug!("Missing blocks (no files at all) {} (sample: {},...)",
-                missing_ranges.len(),
-                missing_ranges.ranges.iter().take(5).map(|r| r.to_string()).join(",")
-            );
-
-            for range in missing_ranges.ranges {
-                result.push((range, all_kinds.clone()));
-            }
-        }
-
-        if result.is_empty() {
-            tracing::info!("All blocks are fully archived");
-        }
-
-        Ok(result)
     }
+
+    let incomplete = archived.list_incomplete();
+    let mut result: Vec<(Range, Vec<DataKind>)> = Vec::new();
+
+    // Add ranges that have incomplete files (some files present but not all)
+    if !incomplete.is_empty() {
+        // We do not process ranges here (like joining them) because we don't want to break any existing layout (i.e, chunk size, alignment, etc)
+        let ranges = incomplete.iter()
+            .map(|g| g.range.clone())
+            .collect::<Vec<Range>>();
+
+        tracing::debug!("Incomplete blocks {} (sample: {},...)",
+            ranges.len(),
+            ranges.iter().take(5).map(|r| r.to_string()).join(",")
+        );
+
+        let incomplete_by_range: Vec<(Range, Vec<DataKind>)> = ranges.iter()
+            .filter_map(|r| {
+                // we clone all file groups here b/c if it split by different ranges each range would download its part
+                incomplete.iter()
+                    .find(|g| g.range.eq(r))
+                    .map(|g| (r.clone(), g.get_incomplete_kinds()))
+            })
+            .collect();
+        result.extend(incomplete_by_range);
+    }
+
+    // Add completely missing ranges (no files at all)
+    if !missing_ranges.is_empty() {
+        let all_kinds = tx_options.files().files.clone();
+        tracing::debug!("Missing blocks (no files at all) {} (sample: {},...)",
+            missing_ranges.len(),
+            missing_ranges.ranges.iter().take(5).map(|r| r.to_string()).join(",")
+        );
+
+        for range in missing_ranges.ranges {
+            result.push((range, all_kinds.clone()));
+        }
+    }
+
+    if result.is_empty() {
+        tracing::info!("All blocks are fully archived");
+    }
+
+    Ok(result)
 }
 
 pub trait TargetFile {
@@ -309,6 +397,60 @@ mod tests {
     use object_store::memory::InMemory;
     use object_store::path::Path;
     use object_store::{ObjectStoreExt, PutPayload};
+
+    fn args_with_dir(dir: &str) -> Args {
+        Args {
+            blockchain: "ethereum".to_string(),
+            dir: Some(dir.to_string()),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn s3_parent_dir_trims_trailing_slash() {
+        assert_eq!(
+            s3_parent_dir(&args_with_dir("s3://bucket/archive/")).unwrap(),
+            "archive/eth"
+        );
+    }
+
+    #[test]
+    fn s3_parent_dir_keeps_prefix_without_trailing_slash() {
+        assert_eq!(
+            s3_parent_dir(&args_with_dir("s3://bucket/archive")).unwrap(),
+            "archive/eth"
+        );
+    }
+
+    #[test]
+    fn s3_parent_dir_handles_nested_prefix() {
+        assert_eq!(
+            s3_parent_dir(&args_with_dir("s3://bucket/foo/bar/")).unwrap(),
+            "foo/bar/eth"
+        );
+    }
+
+    #[test]
+    fn s3_parent_dir_bucket_root() {
+        assert_eq!(
+            s3_parent_dir(&args_with_dir("s3://bucket/")).unwrap(),
+            "eth"
+        );
+        assert_eq!(
+            s3_parent_dir(&args_with_dir("s3://bucket")).unwrap(),
+            "eth"
+        );
+    }
+
+    #[test]
+    fn s3_parent_dir_errors_without_dir() {
+        let args = Args {
+            blockchain: "ethereum".to_string(),
+            dir: None,
+            ..Default::default()
+        };
+        assert!(s3_parent_dir(&args).is_err());
+    }
 
     /// Helper to create a test storage with specified files
     async fn create_test_storage(files: Vec<&str>) -> ObjectsStorage<InMemory> {

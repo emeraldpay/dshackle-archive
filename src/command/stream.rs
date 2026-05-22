@@ -11,7 +11,7 @@ use crate::{
     command::CommandExecutor,
     global,
     notify::RunMode,
-    storage::ReadTarget
+    storage::ScanTarget
 };
 use anyhow::Result;
 use crate::archiver::datakind::DataOptions;
@@ -25,7 +25,7 @@ use crate::notify::Maturity;
 /// It appends fresh blocks one by one to the archive
 ///
 #[derive(Clone)]
-pub struct StreamCommand<B: BlockchainTypes, TS: ReadTarget> {
+pub struct StreamCommand<B: BlockchainTypes, TS: ScanTarget> {
     b: PhantomData<B>,
     blockchain: Arc<Blockchain>,
     continue_blocks: Option<u64>,
@@ -34,7 +34,7 @@ pub struct StreamCommand<B: BlockchainTypes, TS: ReadTarget> {
     follow: Follow,
 }
 
-impl<B: BlockchainTypes, TS: ReadTarget> StreamCommand<B, TS> {
+impl<B: BlockchainTypes, TS: ScanTarget> StreamCommand<B, TS> {
     pub async fn new(config: &Args,
                      archiver: Archiver<B, TS>
     ) -> Result<Self> {
@@ -87,7 +87,7 @@ impl<B: BlockchainTypes, TS: ReadTarget> StreamCommand<B, TS> {
 }
 
 #[async_trait]
-impl<B: BlockchainTypes, TS: ReadTarget> CommandExecutor for StreamCommand<B, TS> {
+impl<B: BlockchainTypes, TS: ScanTarget> CommandExecutor for StreamCommand<B, TS> {
 
     async fn execute(&self) -> Result<()> {
 

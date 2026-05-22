@@ -48,3 +48,4 @@ shadow-rs = "1.4"
 [dev-dependencies]
 testcontainers = "0.27"
 rand = "0.10"
+tempfile = "3"
