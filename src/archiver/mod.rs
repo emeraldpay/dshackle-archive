@@ -8,9 +8,11 @@ pub mod range_bag;
 pub mod blocks_config;
 pub mod range_group;
 pub mod resume;
+pub mod order;
 
 pub use archiver::{ArchiveAll, Archiver};
 pub use resume::{ScanResume, StreamResume};
+pub use order::{AppendSink, OrderedSink};
 
 use crate::blockchain::BlockchainTypes;
 

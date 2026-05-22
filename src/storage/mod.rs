@@ -229,6 +229,21 @@ pub trait WriteTarget: Send + Sync {
     ///
     /// Returns `None` when `overwrite` is false and the destination already exists.
     async fn create(&self, kind: DataKind, range: &Range, overwrite: bool) -> Result<Option<Self::Writer>>;
+
+    ///
+    /// Whether the archiver must hand records to the writer in strict
+    /// chain-natural order (block height for blocks; flat
+    /// `(block_position, tx_index)` ordinal for txes/traces).
+    ///
+    /// Streaming backends (Pulsar, future Kafka) must override this to `true`
+    /// because brokers preserve messages in *publish* order, so re-ordering
+    /// across parallel fetches would corrupt the consumer's view. File
+    /// backends (Avro, JSON) leave this `false`: files accept records in any
+    /// order, and bypassing the ordering layer avoids a per-row channel hop
+    /// for batch archives that may push hundreds of thousands of rows.
+    fn needs_ordering(&self) -> bool {
+        false
+    }
 }
 
 ///

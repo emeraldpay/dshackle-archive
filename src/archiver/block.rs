@@ -4,6 +4,7 @@ use chrono::Utc;
 use tokio::sync::Semaphore;
 use tokio::task::JoinSet;
 use crate::archiver::archiver::Archiver;
+use crate::archiver::order::AppendSink;
 use crate::archiver::BlockTransactions;
 use crate::blockchain::{BlockReference, BlockchainData, BlockchainTypes};
 use crate::archiver::datakind::{DataKind, DataOptions};
@@ -32,12 +33,20 @@ impl<B: BlockchainTypes, TS: WriteTarget> Archiver<B, TS> {
         }
         let file_url = file.as_ref().map(|f| f.get_url());
         let file = file.map(Arc::new);
+        // Order block appends by height when the target requires it
+        // (streaming backends). For file backends `needs_ordering()` is false
+        // and the sink falls through to a thin pass-through that hands rows
+        // to the writer in arrival order, without the channel/buffer hop.
+        let ordered = self.target.needs_ordering();
+        let sink = file
+            .clone()
+            .map(|f| Arc::new(AppendSink::new(f, blocks.start(), ordered)));
 
         let mut jobs = JoinSet::new();
         let semaphore = Arc::new(Semaphore::new(global::get_threads().blocks));
         for height in blocks.iter_height().collect::<Vec<Height>>() {
             let provider = self.data_provider.clone();
-            let file = file.clone();
+            let sink = sink.clone();
             let shutdown = shutdown.clone();
             let semaphore = semaphore.clone();
             let block_height = height.height;
@@ -46,11 +55,16 @@ impl<B: BlockchainTypes, TS: WriteTarget> Archiver<B, TS> {
                     return Ok(None);
                 }
                 let _permit = semaphore.acquire().await.unwrap();
-                let block_ref = BlockReference::Height(height);
+                // Prefer a hash-pinned lookup when the follower gave us one,
+                // so we don't race a re-org between subscription and fetch.
+                // Falls back to height-only when no hash is present (e.g.,
+                // batch archive over a numeric range). See
+                // `BlockReference::from(Height)`.
+                let block_ref: BlockReference<B::BlockHash> = height.into();
                 let (record, block, txes) = provider.fetch_block(&block_ref).await?;
                 if !dry_run {
-                    if let Some(file) = &file {
-                        file.append(record).await?;
+                    if let Some(sink) = &sink {
+                        sink.append_at(block_height, record).await?;
                     }
                 }
                 crate::progress::on_record();
@@ -72,6 +86,15 @@ impl<B: BlockchainTypes, TS: WriteTarget> Archiver<B, TS> {
             .collect();
 
         if !dry_run {
+            // Close the ordering layer first — it drains any buffered rows
+            // into the underlying writer (no-op for the direct variant). Only
+            // then is it safe to take the sole reference to the writer and
+            // close it.
+            if let Some(sink) = sink {
+                let sink = Arc::into_inner(sink)
+                    .ok_or_else(|| anyhow!("AppendSink still referenced after all tasks completed"))?;
+                sink.close().await?;
+            }
             if let Some(file) = file {
                 let file = Arc::into_inner(file)
                     .ok_or_else(|| anyhow!("File writer still referenced after all tasks completed"))?;

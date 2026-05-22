@@ -9,7 +9,7 @@ use alloy::{
     rpc::types::{Transaction as TransactionJson, Block as BlockJson, Block, TransactionTrait}
 };
 use alloy::network::TransactionResponse;
-use crate::blockchain::{BlockDetails, BlockReference, BlockchainData, BlockchainTypes, EthereumType, JsonString};
+use crate::blockchain::{BlockDetails, BlockHeaderInfo, BlockReference, BlockchainData, BlockchainTypes, EthereumType, JsonString};
 use anyhow::{Result, anyhow};
 use tokio_retry2::{Retry, RetryError};
 use tokio_retry2::strategy::{jitter, ExponentialFactorBackoff};
@@ -271,6 +271,26 @@ impl BlockchainData<EthereumType> for EthereumData {
             .collect();
 
         Ok((row, parsed_block, transactions))
+    }
+
+    /// Cheap header-only path: pulls one `eth_getBlockBy{Hash,Number}` and
+    /// projects just the three fields the re-org follower needs. Skips uncle
+    /// RPCs and full row construction.
+    async fn fetch_block_link(
+        &self,
+        reference: &BlockReference<BlockHash>,
+    ) -> Result<BlockHeaderInfo> {
+        let raw = match reference {
+            BlockReference::Hash(hash) => self.get_block(hash).await?,
+            BlockReference::Height(h) => self.get_block_at(h.height).await?,
+        };
+        let parsed = serde_json::from_slice::<BlockJson<TxHash>>(raw.as_slice())
+            .map_err(|_| BlockchainError::InvalidResponse)?;
+        Ok(BlockHeaderInfo {
+            height: parsed.header.number,
+            hash: format!("0x{:x}", parsed.header.hash),
+            parent: format!("0x{:x}", parsed.header.parent_hash),
+        })
     }
 
     async fn fetch_tx(&self, block: &Block<TxHash>, index: usize) -> Result<ArchiveRow> {

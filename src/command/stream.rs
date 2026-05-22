@@ -17,6 +17,7 @@ use anyhow::{anyhow, Result};
 use crate::archiver::datakind::DataOptions;
 use crate::args::Follow;
 use crate::blockchain::BlockchainData;
+use crate::blockchain::next_block::ReorgAwareFollower;
 use crate::notify::Maturity;
 
 ///
@@ -126,7 +127,7 @@ where
 }
 
 #[async_trait]
-impl<B: BlockchainTypes, TS: WriteTarget> CommandExecutor for StreamCommand<B, TS> {
+impl<B: BlockchainTypes + 'static, TS: WriteTarget> CommandExecutor for StreamCommand<B, TS> {
 
     async fn execute(&self) -> Result<()> {
 
@@ -135,9 +136,15 @@ impl<B: BlockchainTypes, TS: WriteTarget> CommandExecutor for StreamCommand<B, T
             Follow::Finalized => Maturity::Finalized,
         };
 
-        let heights = match self.follow {
+        let heights: Box<dyn crate::blockchain::next_block::NextBlock> = match self.follow {
             Follow::Latest => {
-                Box::new(self.blockchain.clone())
+                // Wrap the raw head subscription in the re-org aware follower
+                // so live re-orgs (same-height and deep) get re-emitted with
+                // proper chain order. See `ReorgAwareFollower` for details.
+                Box::new(ReorgAwareFollower::<B>::new(
+                    self.blockchain.clone(),
+                    self.archiver.data_provider.clone(),
+                ))
             }
             Follow::Finalized => {
                 self.archiver.data_provider.next_finalized_blocks()?

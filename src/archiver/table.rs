@@ -4,6 +4,7 @@ use chrono::Utc;
 use tokio::sync::Semaphore;
 use tokio::task::JoinSet;
 use crate::archiver::archiver::Archiver;
+use crate::archiver::order::AppendSink;
 use crate::archiver::BlockTransactions;
 use crate::blockchain::{BlockchainData, BlockchainTypes};
 use crate::archiver::datakind::{DataKind, DataOptions};
@@ -32,19 +33,32 @@ impl<B: BlockchainTypes, TS: WriteTarget> Archiver<B, TS> {
 
         let file_url = file.get_url();
         let file = Arc::new(file);
+        // Order traces by a flat `(block_position, tx_index)` ordinal so block
+        // N's traces are all published before block N+1's, and within a block
+        // traces follow tx_index order. The sink only buffers/reorders when
+        // the target asks for ordering — file backends get a pass-through.
+        // See `process_txes` for the same pattern.
+        let sink = Arc::new(AppendSink::new(
+            file.clone(),
+            0,
+            self.target.needs_ordering(),
+        ));
 
         let mut jobs = JoinSet::new();
         let semaphore = Arc::new(Semaphore::new(global::get_threads().trace));
         let options = Arc::new(options.clone());
+        let mut flat_index: u64 = 0;
         for (block, txes) in blocks.iter() {
             let block = Arc::new(block.clone());
             for tx_index in 0..txes.len() {
                 let block = block.clone();
                 let provider = self.data_provider.clone();
                 let options = options.clone();
-                let file = file.clone();
+                let sink = sink.clone();
                 let shutdown = shutdown.clone();
                 let semaphore = semaphore.clone();
+                let order_idx = flat_index;
+                flat_index += 1;
                 jobs.spawn(async move {
                     if shutdown.is_signalled() {
                         return Ok(());
@@ -52,7 +66,7 @@ impl<B: BlockchainTypes, TS: WriteTarget> Archiver<B, TS> {
                     let _permit = semaphore.acquire().await.unwrap();
                     let data = provider.fetch_traces(&block, tx_index, &options).await?;
                     if !dry_run {
-                        file.append(data).await?;
+                        sink.append_at(order_idx, data).await?;
                     }
                     crate::progress::on_record();
                     crate::metrics::add_items(&DataKind::TransactionTraces, crate::metrics::Direction::Write, 1);
@@ -66,6 +80,9 @@ impl<B: BlockchainTypes, TS: WriteTarget> Archiver<B, TS> {
         }
 
         if !dry_run {
+            let sink = Arc::into_inner(sink)
+                .ok_or_else(|| anyhow!("AppendSink still referenced after all tasks completed"))?;
+            sink.close().await?;
             let file = Arc::into_inner(file)
                 .ok_or_else(|| anyhow!("File writer still referenced after all tasks completed"))?;
             let _ = file.close().await?;
@@ -100,17 +117,33 @@ impl<B: BlockchainTypes, TS: WriteTarget> Archiver<B, TS> {
 
         let file_url = file.get_url();
         let file = Arc::new(file);
+        // Tx ordering: a flat `(block_position, tx_index)` ordinal across the
+        // whole range. `blocks` is already sorted by height by
+        // `process_blocks`, so walking it linearly yields chain order;
+        // numbering tasks 0, 1, 2, … as we enumerate guarantees that block N's
+        // txes (in their natural tx_index order) precede block N+1's, even
+        // when fetches finish out of order. The sink only buffers/reorders
+        // when the target asks for ordering (streaming backends); file
+        // backends get a pass-through.
+        let sink = Arc::new(AppendSink::new(
+            file.clone(),
+            0,
+            self.target.needs_ordering(),
+        ));
 
         let mut jobs = JoinSet::new();
         let semaphore = Arc::new(Semaphore::new(global::get_threads().tx));
+        let mut flat_index: u64 = 0;
         for (block, txes) in blocks.iter() {
             let block = Arc::new(block.clone());
             for tx_index in 0..txes.len() {
                 let block = block.clone();
                 let provider = self.data_provider.clone();
-                let file = file.clone();
+                let sink = sink.clone();
                 let shutdown = shutdown.clone();
                 let semaphore = semaphore.clone();
+                let order_idx = flat_index;
+                flat_index += 1;
                 jobs.spawn(async move {
                     if shutdown.is_signalled() {
                         return Ok(());
@@ -118,7 +151,7 @@ impl<B: BlockchainTypes, TS: WriteTarget> Archiver<B, TS> {
                     let _permit = semaphore.acquire().await.unwrap();
                     let data = provider.fetch_tx(&block, tx_index).await?;
                     if !dry_run {
-                        file.append(data).await?;
+                        sink.append_at(order_idx, data).await?;
                     }
                     crate::progress::on_record();
                     crate::metrics::add_items(&DataKind::Transactions, crate::metrics::Direction::Write, 1);
@@ -132,6 +165,9 @@ impl<B: BlockchainTypes, TS: WriteTarget> Archiver<B, TS> {
         }
 
         if !dry_run {
+            let sink = Arc::into_inner(sink)
+                .ok_or_else(|| anyhow!("AppendSink still referenced after all tasks completed"))?;
+            sink.close().await?;
             let file = Arc::into_inner(file)
                 .ok_or_else(|| anyhow!("File writer still referenced after all tasks completed"))?;
             let _ = file.close().await?;

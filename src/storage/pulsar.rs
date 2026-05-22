@@ -126,6 +126,13 @@ impl WriteTarget for PulsarStorage {
             topic_prefix: self.topic_prefix.clone(),
         }))
     }
+
+    /// Pulsar partitions preserve messages in publish order; the archiver
+    /// must deliver them in chain-natural order or consumers would see
+    /// re-ordered tx/trace streams within a block. See [`WriteTarget::needs_ordering`].
+    fn needs_ordering(&self) -> bool {
+        true
+    }
 }
 
 /// Per-(kind, range) writer. Carries no per-session state — the producers it

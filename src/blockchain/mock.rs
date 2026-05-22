@@ -124,7 +124,7 @@ impl BlockchainData<MockType> for MockData {
             height: block.height,
             block_id: block.hash.clone(),
             timestamp: Utc.timestamp_millis_opt(1).unwrap(),
-            parent_id: Some(String::new()),
+            parent_id: Some(block.parent.clone()),
             tx_index: None,
             tx_id: None,
             fields: vec![Field::BlockJson(serde_json::to_vec(&block).unwrap())],
