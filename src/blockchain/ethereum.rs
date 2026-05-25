@@ -73,11 +73,21 @@ impl EthereumData {
         Ok(data)
     }
 
-    async fn get_tx(&self, hash: &TxHash) -> Result<Vec<u8>> {
-        tracing::debug!(tx_hash = %format!("0x{:x}", hash), "Get transaction");
-        let params = format!("[\"0x{:x}\"]", hash).as_bytes().to_vec();
-        let data = self.blockchain.native_call("eth_getTransactionByHash", params).await?;
-        Ok(data)
+    async fn get_tx_at(&self, block: &BlockHash, i: usize) -> Result<Vec<u8>> {
+        tracing::debug!(block_hash = %format!("0x{:x}", block), tx_index = %i, "Get transaction");
+        let retry_strategy = create_exp_retry()
+            .map(jitter)
+            .take(10);
+        Retry::spawn(retry_strategy, async || {
+            let params = format!("[\"0x{:x}\", \"{:#01x}\"]", block, i).as_bytes().to_vec();
+            self.blockchain.native_call("eth_getTransactionByBlockHashAndIndex", params).await
+                .and_then(|value| if value == b"null" {
+                    Err(BlockchainError::InvalidResponse)
+                } else {
+                    Ok(value)
+                })
+                .map_err(|e| RetryError::transient(e))
+        }).await.map_err(|e| anyhow!("Failed to get transaction at block 0x{:x} index {}: {}", block, i, e))
     }
 
     async fn get_tx_receipt(&self, hash: &TxHash) -> Result<Vec<u8>> {
@@ -100,21 +110,6 @@ impl EthereumData {
             data_as_json[3..(data_as_json.len() - 1)].to_vec()
         ).map_err(|_| anyhow!("Invalid hex"))?;
         hex::decode(data_as_hex).map_err(|_| anyhow!("Invalid hex"))
-    }
-
-    async fn get_tx_expected(&self, hash: &TxHash) -> Result<Vec<u8>> {
-        let retry_strategy = create_exp_retry()
-            .map(jitter)
-            .take(10);
-        Retry::spawn(retry_strategy, async || {
-            self.get_tx(hash).await
-                .and_then(|value| if value == b"null" {
-                    Err(anyhow!("Transaction not found: 0x{:x}", hash))
-                } else {
-                    Ok(value)
-                })
-                .map_err(|e| RetryError::transient(e))
-        }).await
     }
 
     async fn get_tx_receipt_expected(&self, hash: &TxHash) -> Result<Vec<u8>> {
@@ -294,19 +289,21 @@ impl BlockchainData<EthereumType> for EthereumData {
     }
 
     async fn fetch_tx(&self, block: &Block<TxHash>, index: usize) -> Result<ArchiveRow> {
+        let block_hash = block.header.hash.clone();
         let tx_hash = block.transactions.as_transactions().map(|txes| txes[index])
             .ok_or_else(|| anyhow!("Transaction not found"))?;
 
+
         // Fetch all transaction data in parallel
         let (tx_json_bytes, tx_raw, tx_receipt) = tokio::join!(
-            self.get_tx_expected(&tx_hash),
+            self.get_tx_at(&block_hash, index),
             self.get_tx_raw_expected(&tx_hash),
             self.get_tx_receipt_expected(&tx_hash),
         );
 
         let tx_json_bytes = tx_json_bytes?;
         let parsed_tx = serde_json::from_slice::<TransactionJson>(tx_json_bytes.as_slice())
-            .map_err(|e| anyhow!("Invalid Transaction JSON: {}", e))?;
+            .map_err(|e| anyhow!("Invalid Transaction JSON: {} from {}", e, String::from_utf8_lossy(tx_json_bytes.as_slice()).to_string()))?;
 
         let mut row = tx_row(DataKind::Transactions, self.blockchain_id(), block, index, &tx_hash);
         row.fields.push(Field::TxJson(tx_json_bytes));
