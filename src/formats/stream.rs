@@ -93,6 +93,7 @@ fn encode_field(row: &ArchiveRow, field: &Field) -> Option<StreamMessage> {
 
     let mut properties = HashMap::new();
     properties.insert("blockchain".to_string(), row.blockchain_id.clone());
+    properties.insert("timestamp".to_string(), row.timestamp.to_rfc3339());
     properties.insert("kind".to_string(), kind_label(row.kind).to_string());
     properties.insert("field".to_string(), label.to_string());
     properties.insert("height".to_string(), row.height.to_string());
