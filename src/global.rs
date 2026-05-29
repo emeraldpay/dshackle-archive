@@ -1,7 +1,9 @@
 use std::sync::Mutex;
+use std::time::Duration;
 use apache_avro::{Codec, ZstandardSettings};
 use lazy_static::lazy_static;
-use crate::args::{Args, Compression};
+use tokio_retry2::strategy::{jitter, ExponentialFactorBackoff};
+use crate::args::{Args, Compression, RetryMode};
 
 /// Configuration for parallelism limits across different archival operations.
 ///
@@ -25,6 +27,11 @@ lazy_static! {
     static ref COMPRESSION: Mutex<Compression> = Mutex::new(Compression::Zstd);
     static ref DRY_RUN: Mutex<bool> = Mutex::new(false);
     static ref THREADS: Mutex<ThreadsConfig> = Mutex::new(ThreadsConfig { api: 16, tx: 8, trace: 4, blocks: 8 });
+    // Default to the bounded policy (matching pre-flag behaviour) until
+    // `set_retry_policy` resolves the real value at startup.
+    static ref RETRY_POLICY: Mutex<RetryPolicy> = Mutex::new(RetryPolicy::Bounded {
+        max_attempts: DEFAULT_RETRY_MAX_ATTEMPTS,
+    });
 }
 
 pub fn get_shutdown() -> shutdown::Shutdown {
@@ -142,4 +149,127 @@ pub fn get_threads() -> ThreadsConfig {
 
 fn read_env(name: &str) -> Option<usize> {
     std::env::var(name).ok().and_then(|v| v.parse().ok())
+}
+
+/// Number of attempts the `Bounded` retry policy uses. Matches the
+/// hardcoded `.take(10)` the per-RPC helpers used to carry inline before this
+/// became a global. Not exposed as a CLI knob yet — most callers either
+/// accept the default or switch to `Forever`.
+pub const DEFAULT_RETRY_MAX_ATTEMPTS: usize = 10;
+
+/// Runtime retry policy resolved from CLI args (and the target type).
+///
+/// File targets default to [`RetryPolicy::Bounded`]: a transient node failure
+/// leaves a gap that the `fix`/`verify` commands can repair later. Ordered
+/// streaming targets default to [`RetryPolicy::Forever`]: a missing record
+/// permanently breaks the topic-order contract, so the writer must wait the
+/// node out instead. The user can override either default via `--retry`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RetryPolicy {
+    Bounded { max_attempts: usize },
+    Forever,
+}
+
+/// Initialise the retry policy from CLI args.
+///
+/// Explicit `--retry` wins; otherwise the default is derived from the target
+/// type — streaming-ordered targets need [`RetryPolicy::Forever`] to keep
+/// their order contract; everything else can fail fast and be repaired
+/// later. Logs the resolved policy so operators can see what's in effect.
+pub fn set_retry_policy(args: &Args) {
+    let policy = resolve_retry_policy(args);
+    tracing::info!("Retry policy: {:?}", policy);
+    *RETRY_POLICY.lock().unwrap() = policy;
+}
+
+fn resolve_retry_policy(args: &Args) -> RetryPolicy {
+    match args.retry {
+        Some(RetryMode::Bounded) => RetryPolicy::Bounded {
+            max_attempts: DEFAULT_RETRY_MAX_ATTEMPTS,
+        },
+        Some(RetryMode::Forever) => RetryPolicy::Forever,
+        None => {
+            if crate::storage::is_pulsar(args) {
+                RetryPolicy::Forever
+            } else {
+                RetryPolicy::Bounded {
+                    max_attempts: DEFAULT_RETRY_MAX_ATTEMPTS,
+                }
+            }
+        }
+    }
+}
+
+/// Current retry policy. Cheap (one mutex lock); callers can call it once
+/// per retry-strategy build.
+pub fn get_retry_policy() -> RetryPolicy {
+    *RETRY_POLICY.lock().unwrap()
+}
+
+/// Build the iterator passed to `tokio_retry2::Retry::spawn` for a single
+/// fetch attempt sequence.
+///
+/// Same shape regardless of policy — exponential backoff with jitter, capped
+/// at `max_delay_secs` between attempts — but the iterator is bounded or
+/// unbounded based on [`get_retry_policy`]. Returned boxed so both branches
+/// have the same type at the call site (the underlying iterator types
+/// otherwise differ between `Take<…>` and the unbounded form).
+pub fn retry_strategy(max_delay_secs: u64) -> Box<dyn Iterator<Item = Duration> + Send> {
+    let base = ExponentialFactorBackoff::from_millis(100, 1.75)
+        .max_delay(Duration::from_secs(max_delay_secs))
+        .map(jitter);
+    match get_retry_policy() {
+        RetryPolicy::Bounded { max_attempts } => Box::new(base.take(max_attempts)),
+        RetryPolicy::Forever => Box::new(base),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn args_with(retry: Option<RetryMode>, pulsar: bool) -> Args {
+        let stream = if pulsar {
+            Some(crate::args::Stream {
+                stream_url: Some("pulsar://localhost:6650".to_string()),
+                stream_topics: Some("persistent://public/default/x".to_string()),
+            })
+        } else {
+            None
+        };
+        Args {
+            retry,
+            stream,
+            ..Args::default()
+        }
+    }
+
+    #[test]
+    fn explicit_bounded_wins_over_pulsar_default() {
+        let policy = resolve_retry_policy(&args_with(Some(RetryMode::Bounded), true));
+        assert!(matches!(policy, RetryPolicy::Bounded { .. }));
+    }
+
+    #[test]
+    fn explicit_forever_wins_over_file_default() {
+        let policy = resolve_retry_policy(&args_with(Some(RetryMode::Forever), false));
+        assert!(matches!(policy, RetryPolicy::Forever));
+    }
+
+    #[test]
+    fn pulsar_defaults_to_forever() {
+        let policy = resolve_retry_policy(&args_with(None, true));
+        assert!(matches!(policy, RetryPolicy::Forever));
+    }
+
+    #[test]
+    fn non_pulsar_defaults_to_bounded() {
+        let policy = resolve_retry_policy(&args_with(None, false));
+        assert!(matches!(
+            policy,
+            RetryPolicy::Bounded {
+                max_attempts: DEFAULT_RETRY_MAX_ATTEMPTS
+            }
+        ));
+    }
 }

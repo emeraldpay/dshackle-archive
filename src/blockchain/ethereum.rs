@@ -1,5 +1,4 @@
 use std::sync::{Arc};
-use std::time::Duration;
 use async_trait::async_trait;
 use crate::errors::{BlockchainError};
 use crate::blockchain::connection::{Blockchain};
@@ -12,7 +11,6 @@ use alloy::network::TransactionResponse;
 use crate::blockchain::{BlockDetails, BlockHeaderInfo, BlockReference, BlockchainData, BlockchainTypes, EthereumType, JsonString};
 use anyhow::{Result, anyhow};
 use tokio_retry2::{Retry, RetryError};
-use tokio_retry2::strategy::{jitter, ExponentialFactorBackoff};
 use crate::archiver::datakind::{DataKind, TraceOptions};
 use crate::blockchain::next_block::{NextBlock, NextFinalizedBlock};
 use crate::record::{ArchiveRow, BlockchainType as ArchiveBlockchainType, Field};
@@ -23,10 +21,14 @@ pub struct EthereumData {
     blockchain_id: String,
 }
 
-fn create_exp_retry() -> ExponentialFactorBackoff {
-    ExponentialFactorBackoff::from_millis(100, 1.75)
-        .max_delay(Duration::from_secs(2))
-}
+/// Default cap on the time between retry attempts. Higher than the typical
+/// 95th-percentile RPC latency so a degraded node has space to recover, but
+/// low enough that a transient blip doesn't stall a block for noticeably long.
+const RETRY_MAX_DELAY_FAST_SECS: u64 = 2;
+
+/// Cap used by the trace/state-diff helpers — these RPCs are heavier (full
+/// `debug_traceTransaction` runs), so a longer backoff is appropriate.
+const RETRY_MAX_DELAY_TRACE_SECS: u64 = 5;
 
 impl EthereumData {
 
@@ -75,9 +77,7 @@ impl EthereumData {
 
     async fn get_tx_at(&self, block: &BlockHash, i: usize) -> Result<Vec<u8>> {
         tracing::debug!(block_hash = %format!("0x{:x}", block), tx_index = %i, "Get transaction");
-        let retry_strategy = create_exp_retry()
-            .map(jitter)
-            .take(10);
+        let retry_strategy = crate::global::retry_strategy(RETRY_MAX_DELAY_FAST_SECS);
         Retry::spawn(retry_strategy, async || {
             let params = format!("[\"0x{:x}\", \"{:#01x}\"]", block, i).as_bytes().to_vec();
             self.blockchain.native_call("eth_getTransactionByBlockHashAndIndex", params).await
@@ -113,9 +113,7 @@ impl EthereumData {
     }
 
     async fn get_tx_receipt_expected(&self, hash: &TxHash) -> Result<Vec<u8>> {
-        let retry_strategy = create_exp_retry()
-            .map(jitter)
-            .take(10);
+        let retry_strategy = crate::global::retry_strategy(RETRY_MAX_DELAY_FAST_SECS);
         Retry::spawn(retry_strategy, async || {
             self.get_tx_receipt(hash).await
                 .and_then(|value| if value == b"null" {
@@ -128,9 +126,7 @@ impl EthereumData {
     }
 
     async fn get_tx_raw_expected(&self, hash: &TxHash) -> Result<Vec<u8>> {
-        let retry_strategy = create_exp_retry()
-            .map(jitter)
-            .take(10);
+        let retry_strategy = crate::global::retry_strategy(RETRY_MAX_DELAY_FAST_SECS);
         Retry::spawn(retry_strategy, async || {
             self.get_tx_raw(hash).await
                 .and_then(|value| if value.is_empty() {
@@ -152,10 +148,7 @@ impl EthereumData {
         let blockchain = self.blockchain.clone();
         let hash = hash.clone();
 
-        let retry_strategy = create_exp_retry()
-            .max_delay(Duration::from_secs(5))
-            .map(jitter)
-            .take(10);
+        let retry_strategy = crate::global::retry_strategy(RETRY_MAX_DELAY_TRACE_SECS);
         Retry::spawn(retry_strategy, async || {
             blockchain.native_call("debug_traceTransaction", params.clone()).await
                 .map_err(|e| anyhow!("Failed to get transaction trace: {}", e))
@@ -181,10 +174,7 @@ impl EthereumData {
         let blockchain = self.blockchain.clone();
         let hash = hash.clone();
 
-        let retry_strategy = create_exp_retry()
-            .max_delay(Duration::from_secs(5))
-            .map(jitter)
-            .take(10);
+        let retry_strategy = crate::global::retry_strategy(RETRY_MAX_DELAY_TRACE_SECS);
         Retry::spawn(retry_strategy, async || {
             blockchain.native_call("debug_traceTransaction", params.clone()).await
                 .map_err(|e| anyhow!("Failed to get transaction trace: {}", e))

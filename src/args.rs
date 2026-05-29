@@ -108,6 +108,19 @@ pub struct Args {
     #[arg(long = "compression")]
     pub compression: Option<Compression>,
 
+    /// Retry policy for transient blockchain fetch failures.
+    ///
+    /// - `bounded` — give up after a fixed number of attempts (current
+    ///   behaviour for file targets).
+    /// - `forever` — keep retrying indefinitely with exponential backoff.
+    ///   Required for ordered streaming targets where a missed record breaks
+    ///   the topic-order contract.
+    ///
+    /// Defaults: `forever` for streaming-ordered targets (e.g. Pulsar),
+    /// `bounded` otherwise.
+    #[arg(long = "retry")]
+    pub retry: Option<RetryMode>,
+
     ///
     /// [Stream Command] Follow mode for new blocks: `latest` - follow the latest blocks (default); `finalized` - follow only finalized blocks
     #[arg(long = "follow", default_value = "latest")]
@@ -152,6 +165,7 @@ impl Default for Args {
             fields_trace: Some("calls,stateDiff".to_string()),
             fix_clean: false,
             compression: None,
+            retry: None,
             follow: Follow::Latest,
             format: Format::Avro,
             metrics: None,
@@ -329,6 +343,21 @@ impl Default for Aws {
 pub enum Compression {
     Snappy,
     Zstd,
+}
+
+/// CLI-facing retry mode (see [`Args::retry`]).
+///
+/// The runtime translates this into a [`crate::global::RetryPolicy`] at
+/// startup; the indirection lets us extend the policy with options (e.g. a
+/// configurable max-attempts) without touching the CLI surface.
+#[derive(clap::ValueEnum, Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RetryMode {
+    /// Give up after a fixed number of attempts. Default for file targets,
+    /// where a failed fetch can be repaired later by the `fix` command.
+    Bounded,
+    /// Keep retrying indefinitely. Default for streaming-ordered targets
+    /// (Pulsar) where a gap breaks the topic-order contract permanently.
+    Forever,
 }
 
 /// Output format selected via `--format`.
