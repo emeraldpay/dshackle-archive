@@ -339,14 +339,20 @@ mod tests {
         writer.append(tx_row(42, "0xabc")).await.unwrap();
         writer.close().await.unwrap();
 
-        // Block message
+        // Block message — payload is the wrapping JSON envelope, with the
+        // node response embedded under `value`.
         let msg = blocks_consumer
             .next()
             .await
             .expect("blocks msg available")
             .expect("blocks msg ok");
-        let payload = &msg.payload.data;
-        assert_eq!(payload.as_slice(), b"{\"h\":42}");
+        let entry: serde_json::Value = serde_json::from_slice(&msg.payload.data)
+            .expect("blocks payload is JSON");
+        assert_eq!(entry["field"], "blocks");
+        assert_eq!(entry["kind"], "blocks");
+        assert_eq!(entry["height"], 42);
+        assert_eq!(entry["blockId"], "0xblock42");
+        assert_eq!(entry["value"], serde_json::json!({"h": 42}));
         let props: HashMap<_, _> = msg
             .payload
             .metadata
@@ -354,20 +360,25 @@ mod tests {
             .iter()
             .map(|kv| (kv.key.clone(), kv.value.clone()))
             .collect();
-        assert_eq!(props.get("field").map(|s| s.as_str()), Some("blocks"));
         assert_eq!(props.get("height").map(|s| s.as_str()), Some("42"));
+        assert_eq!(props.get("block-id").map(|s| s.as_str()), Some("0xblock42"));
         assert_eq!(
             props.get("dedup-key").map(|s| s.as_str()),
             Some("blocks:0xblock42")
         );
 
-        // Tx message — exactly the original JSON, with txid in dedup key.
+        // Tx message — node JSON embedded under `value`, txid in dedup key.
         let msg = txes_consumer
             .next()
             .await
             .expect("tx msg available")
             .expect("tx msg ok");
-        assert_eq!(msg.payload.data.as_slice(), b"{\"a\":1}");
+        let entry: serde_json::Value = serde_json::from_slice(&msg.payload.data)
+            .expect("tx payload is JSON");
+        assert_eq!(entry["field"], "tx-json");
+        assert_eq!(entry["txIndex"], 0);
+        assert_eq!(entry["txId"], "0xabc");
+        assert_eq!(entry["value"], serde_json::json!({"a": 1}));
         let props: HashMap<_, _> = msg
             .payload
             .metadata
@@ -375,7 +386,6 @@ mod tests {
             .iter()
             .map(|kv| (kv.key.clone(), kv.value.clone()))
             .collect();
-        assert_eq!(props.get("tx-index").map(|s| s.as_str()), Some("0"));
         assert_eq!(
             props.get("dedup-key").map(|s| s.as_str()),
             Some("tx-json:0xblock42:tx-0xabc")
