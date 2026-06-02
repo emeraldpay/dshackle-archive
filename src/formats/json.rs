@@ -202,6 +202,7 @@ mod tests {
             parent_id: Some("0xparent".to_string()),
             tx_index: tx_id.map(|_| 0),
             tx_id: tx_id.map(|s| s.to_string()),
+            tx_count: None,
             fields,
         }
     }

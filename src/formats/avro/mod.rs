@@ -217,6 +217,7 @@ mod tests {
             parent_id: Some("0xparent".to_string()),
             tx_index: None,
             tx_id: None,
+            tx_count: None,
             fields: vec![Field::BlockJson(b"{}".to_vec())],
         }
     }
@@ -267,6 +268,7 @@ mod tests {
             parent_id: None,
             tx_index: Some(3),
             tx_id: Some("0xtx".to_string()),
+            tx_count: None,
             fields: vec![
                 Field::TxJson(b"{}".to_vec()),
                 Field::TxRaw(vec![1, 2, 3]),

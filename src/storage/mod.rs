@@ -33,6 +33,7 @@ pub mod fs;
 pub mod json_fs;
 pub mod json_objects;
 pub mod objects;
+pub mod pulsar;
 mod avro_reader;
 mod copy;
 mod sorted_files;
@@ -43,6 +44,55 @@ pub fn is_s3(args: &Args) -> bool {
 
 pub fn is_fs(args: &Args) -> bool {
     args.dir.is_some() && !is_s3(args)
+}
+
+/// True when the user selected a streaming target whose URL is a Pulsar URL
+/// (`pulsar://…`). Mutually exclusive with the file targets: when this is true
+/// the storage layer ignores `--dir` and `--auth.aws.*` and routes records to
+/// per-field topics instead.
+pub fn is_pulsar(args: &Args) -> bool {
+    args.stream
+        .as_ref()
+        .map(|s| s.is_pulsar())
+        .unwrap_or(false)
+}
+
+/// Build a [`pulsar::PulsarStorage`] from the user-supplied `--stream.*` args.
+///
+/// The producer set is restricted to topics that make sense for the running
+/// blockchain (Bitcoin omits receipts / uncles / traces) AND for the
+/// caller's `--tables` / `--fields.trace` selection (traces topics are
+/// skipped unless `traces` is in `--tables`, and within traces each
+/// sub-topic is gated on its own field flag). See
+/// [`crate::formats::stream::topic_labels_for`] for the exact mapping.
+///
+/// `--stream.topics` is taken verbatim — callers are expected to include
+/// the Pulsar topic path up to and including the blockchain segment (e.g.
+/// `persistent://public/default/archive-eth`).
+pub async fn create_pulsar<B: crate::blockchain::BlockchainTypes>(
+    value: &Args,
+) -> Result<pulsar::PulsarStorage> {
+    let stream = value
+        .stream
+        .as_ref()
+        .ok_or_else(|| anyhow!("No --stream.* options set"))?;
+    let url = stream
+        .stream_url
+        .clone()
+        .ok_or_else(|| anyhow!("--stream.url is required for a streaming target"))?;
+    let prefix = stream
+        .stream_topics
+        .clone()
+        .ok_or_else(|| anyhow!("--stream.topics is required for a streaming target"))?;
+    let data_options = DataOptions::from(value);
+    let labels = crate::formats::stream::topic_labels_for(B::BLOCKCHAIN_TYPE, &data_options);
+    tracing::info!(
+        "Using Pulsar streaming target at {} with topic prefix {} ({} topics)",
+        url,
+        prefix,
+        labels.len()
+    );
+    pulsar::PulsarStorage::new(url, prefix, &labels).await
 }
 
 ///
@@ -193,6 +243,21 @@ pub trait WriteTarget: Send + Sync {
     ///
     /// Returns `None` when `overwrite` is false and the destination already exists.
     async fn create(&self, kind: DataKind, range: &Range, overwrite: bool) -> Result<Option<Self::Writer>>;
+
+    ///
+    /// Whether the archiver must hand records to the writer in strict
+    /// chain-natural order (block height for blocks; flat
+    /// `(block_position, tx_index)` ordinal for txes/traces).
+    ///
+    /// Streaming backends (Pulsar, future Kafka) must override this to `true`
+    /// because brokers preserve messages in *publish* order, so re-ordering
+    /// across parallel fetches would corrupt the consumer's view. File
+    /// backends (Avro, JSON) leave this `false`: files accept records in any
+    /// order, and bypassing the ordering layer avoids a per-row channel hop
+    /// for batch archives that may push hundreds of thousands of rows.
+    fn needs_ordering(&self) -> bool {
+        false
+    }
 }
 
 ///

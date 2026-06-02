@@ -87,6 +87,16 @@ Options:
       --aws.trust-tls
           Trust any TLS certificate for AWS / S3 (default is false)
 
+      --stream.url <STREAM_URL>
+          Publish stream data to a broker at the given URL. The scheme selects the backend:
+
+          - `pulsar://HOST:PORT` — Apache Pulsar.
+
+          Selecting a streaming target restricts the run to the `stream` command — `archive`, `fix`, `verify`, and `compact` are rejected at startup because topics are append-only.
+
+      --stream.topics <STREAM_TOPICS>
+          Prefix used to build the per-field topic names. Each field is published to `<prefix>-<field>` (e.g. `<prefix>-blocks`, `<prefix>-tx-json`). For Pulsar, include the full topic path up to the prefix, e.g. `persistent://public/default/archive-eth`
+
   -d, --dir <DIR>
           Target directory
 
@@ -112,9 +122,20 @@ Options:
           [Fix Command] Set to remove any existing data in whole chunk if any of tables is missing a block in the chunk or has broken values. Default is `false`, which deleted only tables with missing / corrupted data
 
       --compression <COMPRESSION>
-          Compression algorithm to use when writing new Avro files. Default is `zstd`
+          Compression algorithm to use for new output. For `--format=avro` it's the Avro file codec; for the Pulsar streaming target it's the producer compression applied to every message. Default is `zstd`
 
           [possible values: snappy, zstd]
+
+      --retry <RETRY>
+          Retry policy for transient blockchain fetch failures.
+
+          - `bounded` — give up after a fixed number of attempts (current behaviour for file targets). - `forever` — keep retrying indefinitely with exponential backoff. Required for ordered streaming targets where a missed record breaks the topic-order contract.
+
+          Defaults: `forever` for streaming-ordered targets (e.g. Pulsar), `bounded` otherwise.
+
+          Possible values:
+          - bounded: Give up after a fixed number of attempts. Default for file targets, where a failed fetch can be repaired later by the `fix` command
+          - forever: Keep retrying indefinitely. Default for streaming-ordered targets (Pulsar) where a gap breaks the topic-order contract permanently
 
       --follow <FOLLOW>
           [Stream Command] Follow mode for new blocks: `latest` - follow the latest blocks (default); `finalized` - follow only finalized blocks
@@ -142,8 +163,6 @@ Options:
 
   -V, --version
           Print version
-
-
 ----
 
 === Commands
@@ -163,7 +182,7 @@ One for blocks in that range, and another one with _all_ transactions in all blo
 
 See <<archive-format>>.
 
-==== Stream
+==== Stream as Tables
 
 Continuously append fresh blocks one by one to the archive.
 In addition to the copying, Dshackle archive can be configured to notify an external system about new blocks in the archive.
@@ -180,6 +199,37 @@ To notify an external system, there are two options:
 - `--notify.pulsar.url` + `--notify.pulsar.topic` - send notifications as JSON to the specified Apache Pulsar topic
 
 See <<notification-format>>.
+
+==== Stream as Records
+
+When `--stream.url` passed Dshackle Archive publishes stream data to a broker, such as Apache Pulsar, at the given URL.
+Topic receives each individual record in a block. I.e., instead of writing a large Avro file like in "_Stream as Tables_" mode, this mode produces a new message for each transaction in a block.
+
+`--stream.topics` specifies the prefix used to build the per-field topic names.
+Each field is published to `<prefix>-<field>` (e.g. `<prefix>-blocks`, `<prefix>-tx-json`).
+
+.Topics used if prefix specified as `ethereum`:
+- `ethereum-blocks`
+- `ethereum-uncles`
+- `ethereum-tx-json`
+- `ethereum-tx-raw`
+- `ethereum-tx-receipt`
+- `ethereum-trace-json`
+- `ethereum-trace-statediff`
+
+.The JSON format is:
+- `table` - `blocks`, `transactions` or `traces`
+- `field` - the type of message, e.g. `block`, "uncles", `tx`, "raw", "receipt", "calls", `statediff`
+- `blockchain` - what was specified in `--blockchain` option, e.g. `ETH` or `BTC`
+- `timestamp` - Block timestamp as reported by the node, serialized as RFC 3339
+- `height` - Block height, as number
+- `blockId` - Block hash
+- `parentId` - Parent block hash
+- `txCount` - Number of transactions in the block
+- `txIndex` - Transaction index in block. Present on tx/trace records
+- `txId` - Transaction hash. Present on tx/trace records
+- `uncleIndex` - Uncle index. Present on Ethereum uncle messages only
+- `value` - Original data (JSON or HEX string for raw transaction)
 
 ==== Compact
 

@@ -22,13 +22,19 @@ use crate::{
     archiver::{
         datakind::TraceOptions,
     },
-    record::ArchiveRow,
+    record::{ArchiveRow, BlockchainType},
 };
 use crate::archiver::range::Height;
 
 ///
 /// Defined the data types for a blockchain
 pub trait BlockchainTypes: Send + Sync + Sized {
+
+    ///
+    /// Runtime discriminator for the blockchain family. Lets generic code
+    /// (e.g. the Pulsar topic-creation path) branch on Bitcoin vs Ethereum
+    /// without needing a `match` on the type-erased provider.
+    const BLOCKCHAIN_TYPE: BlockchainType;
 
     ///
     /// Type of the Block Hash / Block Identifier
@@ -52,6 +58,8 @@ pub trait BlockchainTypes: Send + Sync + Sized {
 
 pub struct EthereumType {}
 impl BlockchainTypes for EthereumType {
+    const BLOCKCHAIN_TYPE: BlockchainType = BlockchainType::Ethereum;
+
     type BlockHash = alloy::primitives::BlockHash;
     type TxId = alloy::primitives::TxHash;
     type BlockParsed = alloy::rpc::types::Block<Self::TxId>;
@@ -64,6 +72,8 @@ impl BlockchainTypes for EthereumType {
 }
 pub struct BitcoinType {}
 impl BlockchainTypes for BitcoinType {
+    const BLOCKCHAIN_TYPE: BlockchainType = BlockchainType::Bitcoin;
+
     type BlockHash = bitcoin::BlockHash;
     type TxId = bitcoin::TxHash;
     type BlockParsed = bitcoin::BitcoinBlock;
@@ -89,6 +99,27 @@ pub trait BlockchainData<T: BlockchainTypes>: Send + Sync {
     /// Get the details for the block. Returns the format-neutral [`ArchiveRow`] alongside
     /// the parsed block (used to enumerate transactions) and the list of transaction ids.
     async fn fetch_block(&self, height: &BlockReference<T::BlockHash>) -> Result<(ArchiveRow, T::BlockParsed, Vec<T::TxId>)>;
+
+    ///
+    /// Lightweight header-only fetch returning the block's `(height, hash, parent)`
+    /// linkage. Used by the re-org-aware live follower to walk parent hashes
+    /// without paying for the full `fetch_block` (which also fetches uncle
+    /// JSON and builds an [`ArchiveRow`]).
+    ///
+    /// The default implementation just calls `fetch_block` and projects the
+    /// linkage fields; concrete implementations may override with a cheaper
+    /// path that skips uncle / row construction.
+    async fn fetch_block_link(
+        &self,
+        reference: &BlockReference<T::BlockHash>,
+    ) -> Result<BlockHeaderInfo> {
+        let (row, _parsed, _txes) = self.fetch_block(reference).await?;
+        Ok(BlockHeaderInfo {
+            height: row.height,
+            hash: row.block_id,
+            parent: row.parent_id.unwrap_or_default(),
+        })
+    }
 
     ///
     /// Get the details for the transaction.
@@ -168,6 +199,20 @@ pub trait BlockDetails<T> where T: BlockchainTypes{
     fn txes(&self) -> Vec<T::TxId>;
     fn hash(&self) -> T::BlockHash;
     fn parent(&self) -> T::BlockHash;
+}
+
+///
+/// Lightweight block-header linkage returned by
+/// [`BlockchainData::fetch_block_link`]. The string fields use the same
+/// formatting convention as [`crate::record::ArchiveRow::block_id`] and
+/// [`crate::record::ArchiveRow::parent_id`] (chain-specific; e.g. `0x…` for
+/// Ethereum) so the values round-trip through the
+/// `From<Height> for BlockReference` impl.
+#[derive(Debug, Clone)]
+pub struct BlockHeaderInfo {
+    pub height: u64,
+    pub hash: String,
+    pub parent: String,
 }
 
 pub struct JsonString(pub String);

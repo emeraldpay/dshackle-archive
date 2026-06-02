@@ -66,14 +66,14 @@ impl ArchiveMetrics {
     /// Record that `n` items of the given data kind have been processed.
     pub fn add_items(&self, kind: &DataKind, direction: &Direction, n: usize) {
         self.items
-            .with_label_values(&[kind.metrics_label(), direction.metrics_label()])
+            .with_label_values(&[kind.label(), direction.metrics_label()])
             .inc_by(n as f64);
     }
 
     /// Record that `n` bytes of the given data kind have been transferred.
     pub fn add_bytes(&self, kind: &DataKind, direction: &Direction, n: usize) {
         self.bytes
-            .with_label_values(&[kind.metrics_label(), direction.metrics_label()])
+            .with_label_values(&[kind.label(), direction.metrics_label()])
             .inc_by(n as f64);
     }
 

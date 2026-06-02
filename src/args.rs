@@ -60,6 +60,9 @@ pub struct Args {
     #[command(flatten)]
     pub aws: Option<Aws>,
 
+    #[command(flatten)]
+    pub stream: Option<Stream>,
+
     /// Target directory
     #[arg(long = "dir", short)]
     pub dir: Option<String>,
@@ -99,9 +102,24 @@ pub struct Args {
     pub fix_clean: bool,
 
     ///
-    /// Compression algorithm to use when writing new Avro files. Default is `zstd`.
+    /// Compression algorithm to use for new output. For `--format=avro` it's
+    /// the Avro file codec; for the Pulsar streaming target it's the producer
+    /// compression applied to every message. Default is `zstd`.
     #[arg(long = "compression")]
     pub compression: Option<Compression>,
+
+    /// Retry policy for transient blockchain fetch failures.
+    ///
+    /// - `bounded` — give up after a fixed number of attempts (current
+    ///   behaviour for file targets).
+    /// - `forever` — keep retrying indefinitely with exponential backoff.
+    ///   Required for ordered streaming targets where a missed record breaks
+    ///   the topic-order contract.
+    ///
+    /// Defaults: `forever` for streaming-ordered targets (e.g. Pulsar),
+    /// `bounded` otherwise.
+    #[arg(long = "retry")]
+    pub retry: Option<RetryMode>,
 
     ///
     /// [Stream Command] Follow mode for new blocks: `latest` - follow the latest blocks (default); `finalized` - follow only finalized blocks
@@ -137,6 +155,7 @@ impl Default for Args {
             connection: Connection::default(),
             notify: None,
             aws: None,
+            stream: None,
             dir: None,
             continue_last: false,
             tail: None,
@@ -146,6 +165,7 @@ impl Default for Args {
             fields_trace: Some("calls,stateDiff".to_string()),
             fix_clean: false,
             compression: None,
+            retry: None,
             follow: Follow::Latest,
             format: Format::Avro,
             metrics: None,
@@ -259,6 +279,53 @@ pub struct Aws {
     pub trust_tls: bool,
 }
 
+/// Streaming-target options. Picked up only by the `stream` command.
+///
+/// The broker is identified by the URL scheme on `--stream.url`: `pulsar://`
+/// selects Apache Pulsar. When `--stream.url` is set the archive runs against
+/// a topic-per-field broker target instead of a file backend, so `--dir`,
+/// `--auth.aws.*`, and `--format` are ignored.
+#[derive(Parser, Debug, Clone)]
+pub struct Stream {
+    /// Publish stream data to a broker at the given URL. The scheme selects
+    /// the backend:
+    ///
+    /// - `pulsar://HOST:PORT` — Apache Pulsar.
+    ///
+    /// Selecting a streaming target restricts the run to the `stream` command —
+    /// `archive`, `fix`, `verify`, and `compact` are rejected at startup
+    /// because topics are append-only.
+    #[arg(long = "stream.url", required = false, alias = "stream-url")]
+    pub stream_url: Option<String>,
+
+    /// Prefix used to build the per-field topic names. Each field is published
+    /// to `<prefix>-<field>` (e.g. `<prefix>-blocks`, `<prefix>-tx-json`).
+    /// For Pulsar, include the full topic path up to the prefix, e.g.
+    /// `persistent://public/default/archive-eth`.
+    #[arg(long = "stream.topics", required = false, alias = "stream-topics")]
+    pub stream_topics: Option<String>,
+}
+
+impl Default for Stream {
+    fn default() -> Self {
+        Self {
+            stream_url: None,
+            stream_topics: None,
+        }
+    }
+}
+
+impl Stream {
+    /// True when the args carry a Pulsar streaming target (URL scheme
+    /// `pulsar://`). Other schemes will route to other backends in the future.
+    pub fn is_pulsar(&self) -> bool {
+        self.stream_url
+            .as_deref()
+            .map(|u| u.starts_with("pulsar://"))
+            .unwrap_or(false)
+    }
+}
+
 impl Default for Aws {
     fn default() -> Self {
         Self {
@@ -276,6 +343,21 @@ impl Default for Aws {
 pub enum Compression {
     Snappy,
     Zstd,
+}
+
+/// CLI-facing retry mode (see [`Args::retry`]).
+///
+/// The runtime translates this into a [`crate::global::RetryPolicy`] at
+/// startup; the indirection lets us extend the policy with options (e.g. a
+/// configurable max-attempts) without touching the CLI surface.
+#[derive(clap::ValueEnum, Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RetryMode {
+    /// Give up after a fixed number of attempts. Default for file targets,
+    /// where a failed fetch can be repaired later by the `fix` command.
+    Bounded,
+    /// Keep retrying indefinitely. Default for streaming-ordered targets
+    /// (Pulsar) where a gap breaks the topic-order contract permanently.
+    Forever,
 }
 
 /// Output format selected via `--format`.

@@ -182,6 +182,7 @@ mod tests {
             parent_id: Some(format!("0xparent{}", height.saturating_sub(1))),
             tx_index: None,
             tx_id: None,
+            tx_count: None,
             fields: vec![Field::BlockJson(format!("{{\"h\":{}}}", height).into_bytes())],
         }
     }
@@ -198,6 +199,7 @@ mod tests {
             parent_id: None,
             tx_index: Some(0),
             tx_id: Some(tx_id.to_string()),
+            tx_count: None,
             fields: vec![
                 Field::TxJson(b"{}".to_vec()),
                 Field::TxRaw(vec![0xde, 0xad, 0xbe, 0xef]),

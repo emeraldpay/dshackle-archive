@@ -61,12 +61,17 @@ pub struct ArchiveRow {
     /// Block timestamp as reported by the blockchain node.
     pub timestamp: DateTime<Utc>,
 
-    /// Block-kind only: parent block hash.
+    /// Parent block hash.
     pub parent_id: Option<String>,
     /// Tx/Trace-kind only: transaction index within the block.
     pub tx_index: Option<u64>,
     /// Tx/Trace-kind only: transaction id (hash).
     pub tx_id: Option<String>,
+    /// Total number of transactions in the enclosing block. Lets a
+    /// consumer reading a single tx/trace message know its position (tx
+    /// `N` of `tx_count`); also surfaces the block's tx volume on block
+    /// rows.
+    pub tx_count: Option<u64>,
 
     pub fields: Vec<Field>,
 }
@@ -106,9 +111,11 @@ pub enum Field {
     TxRaw(Vec<u8>),
     /// Ethereum-only: the transaction receipt JSON.
     Receipt(Vec<u8>),
-    /// Ethereum-only: convenience field carrying the `from` address.
+    /// Ethereum-only: `from` address as a dedicated column for table
+    /// formats (Avro). Streaming and per-field JSON skip it — already in
+    /// the tx JSON.
     From(String),
-    /// Ethereum-only: convenience field carrying the `to` address.
+    /// Ethereum-only: `to` address. Same usage as [`Field::From`].
     To(String),
 
     // ---- Trace-kind fields ----
@@ -116,4 +123,47 @@ pub enum Field {
     Trace(Vec<u8>),
     /// `debug_traceTransaction` with `prestateTracer`.
     StateDiff(Vec<u8>),
+}
+
+impl Field {
+    /// Singular content-type identifier — the kind of value this variant
+    /// carries, independent of any table context.
+    ///
+    /// Suitable for callers where the enclosing table is already known
+    /// (e.g. directory-based layouts where the table appears in the path):
+    /// the name doesn't need to repeat it. Plural is reserved for variants
+    /// whose payload is itself a collection (`calls` — the callTracer
+    /// returns a nested call tree).
+    pub fn name(&self) -> &'static str {
+        match self {
+            Field::BlockJson(_) => "block",
+            Field::Uncle { .. } => "uncle",
+            Field::TxJson(_) => "tx",
+            Field::TxRaw(_) => "raw",
+            Field::Receipt(_) => "receipt",
+            Field::From(_) => "from",
+            Field::To(_) => "to",
+            Field::Trace(_) => "calls",
+            Field::StateDiff(_) => "statediff",
+        }
+    }
+
+    /// Streaming topic suffix for this variant. Used by
+    /// [`crate::formats::stream`] as the per-field topic label
+    /// (`<prefix>-<topic_label>`), where topics share a flat namespace and
+    /// the table context isn't otherwise carried. Keep the values stable
+    /// — they're consumer-visible.
+    pub fn topic_label(&self) -> &'static str {
+        match self {
+            Field::BlockJson(_) => "blocks",
+            Field::Uncle { .. } => "blocks-uncles",
+            Field::TxJson(_) => "tx-json",
+            Field::TxRaw(_) => "tx-raw",
+            Field::Receipt(_) => "tx-receipts",
+            Field::From(_) => "tx-from",
+            Field::To(_) => "tx-to",
+            Field::Trace(_) => "trace-calls",
+            Field::StateDiff(_) => "trace-statediff",
+        }
+    }
 }

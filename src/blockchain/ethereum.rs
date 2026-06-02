@@ -1,5 +1,4 @@
 use std::sync::{Arc};
-use std::time::Duration;
 use async_trait::async_trait;
 use crate::errors::{BlockchainError};
 use crate::blockchain::connection::{Blockchain};
@@ -9,10 +8,9 @@ use alloy::{
     rpc::types::{Transaction as TransactionJson, Block as BlockJson, Block, TransactionTrait}
 };
 use alloy::network::TransactionResponse;
-use crate::blockchain::{BlockDetails, BlockReference, BlockchainData, BlockchainTypes, EthereumType, JsonString};
+use crate::blockchain::{BlockDetails, BlockHeaderInfo, BlockReference, BlockchainData, BlockchainTypes, EthereumType, JsonString};
 use anyhow::{Result, anyhow};
 use tokio_retry2::{Retry, RetryError};
-use tokio_retry2::strategy::{jitter, ExponentialFactorBackoff};
 use crate::archiver::datakind::{DataKind, TraceOptions};
 use crate::blockchain::next_block::{NextBlock, NextFinalizedBlock};
 use crate::record::{ArchiveRow, BlockchainType as ArchiveBlockchainType, Field};
@@ -23,10 +21,14 @@ pub struct EthereumData {
     blockchain_id: String,
 }
 
-fn create_exp_retry() -> ExponentialFactorBackoff {
-    ExponentialFactorBackoff::from_millis(100, 1.75)
-        .max_delay(Duration::from_secs(2))
-}
+/// Default cap on the time between retry attempts. Higher than the typical
+/// 95th-percentile RPC latency so a degraded node has space to recover, but
+/// low enough that a transient blip doesn't stall a block for noticeably long.
+const RETRY_MAX_DELAY_FAST_SECS: u64 = 2;
+
+/// Cap used by the trace/state-diff helpers — these RPCs are heavier (full
+/// `debug_traceTransaction` runs), so a longer backoff is appropriate.
+const RETRY_MAX_DELAY_TRACE_SECS: u64 = 5;
 
 impl EthereumData {
 
@@ -73,11 +75,19 @@ impl EthereumData {
         Ok(data)
     }
 
-    async fn get_tx(&self, hash: &TxHash) -> Result<Vec<u8>> {
-        tracing::debug!(tx_hash = %format!("0x{:x}", hash), "Get transaction");
-        let params = format!("[\"0x{:x}\"]", hash).as_bytes().to_vec();
-        let data = self.blockchain.native_call("eth_getTransactionByHash", params).await?;
-        Ok(data)
+    async fn get_tx_at(&self, block: &BlockHash, i: usize) -> Result<Vec<u8>> {
+        tracing::debug!(block_hash = %format!("0x{:x}", block), tx_index = %i, "Get transaction");
+        let retry_strategy = crate::global::retry_strategy(RETRY_MAX_DELAY_FAST_SECS);
+        Retry::spawn(retry_strategy, async || {
+            let params = format!("[\"0x{:x}\", \"{:#01x}\"]", block, i).as_bytes().to_vec();
+            self.blockchain.native_call("eth_getTransactionByBlockHashAndIndex", params).await
+                .and_then(|value| if value == b"null" {
+                    Err(BlockchainError::InvalidResponse)
+                } else {
+                    Ok(value)
+                })
+                .map_err(|e| RetryError::transient(e))
+        }).await.map_err(|e| anyhow!("Failed to get transaction at block 0x{:x} index {}: {}", block, i, e))
     }
 
     async fn get_tx_receipt(&self, hash: &TxHash) -> Result<Vec<u8>> {
@@ -102,25 +112,8 @@ impl EthereumData {
         hex::decode(data_as_hex).map_err(|_| anyhow!("Invalid hex"))
     }
 
-    async fn get_tx_expected(&self, hash: &TxHash) -> Result<Vec<u8>> {
-        let retry_strategy = create_exp_retry()
-            .map(jitter)
-            .take(10);
-        Retry::spawn(retry_strategy, async || {
-            self.get_tx(hash).await
-                .and_then(|value| if value == b"null" {
-                    Err(anyhow!("Transaction not found: 0x{:x}", hash))
-                } else {
-                    Ok(value)
-                })
-                .map_err(|e| RetryError::transient(e))
-        }).await
-    }
-
     async fn get_tx_receipt_expected(&self, hash: &TxHash) -> Result<Vec<u8>> {
-        let retry_strategy = create_exp_retry()
-            .map(jitter)
-            .take(10);
+        let retry_strategy = crate::global::retry_strategy(RETRY_MAX_DELAY_FAST_SECS);
         Retry::spawn(retry_strategy, async || {
             self.get_tx_receipt(hash).await
                 .and_then(|value| if value == b"null" {
@@ -133,9 +126,7 @@ impl EthereumData {
     }
 
     async fn get_tx_raw_expected(&self, hash: &TxHash) -> Result<Vec<u8>> {
-        let retry_strategy = create_exp_retry()
-            .map(jitter)
-            .take(10);
+        let retry_strategy = crate::global::retry_strategy(RETRY_MAX_DELAY_FAST_SECS);
         Retry::spawn(retry_strategy, async || {
             self.get_tx_raw(hash).await
                 .and_then(|value| if value.is_empty() {
@@ -157,10 +148,7 @@ impl EthereumData {
         let blockchain = self.blockchain.clone();
         let hash = hash.clone();
 
-        let retry_strategy = create_exp_retry()
-            .max_delay(Duration::from_secs(5))
-            .map(jitter)
-            .take(10);
+        let retry_strategy = crate::global::retry_strategy(RETRY_MAX_DELAY_TRACE_SECS);
         Retry::spawn(retry_strategy, async || {
             blockchain.native_call("debug_traceTransaction", params.clone()).await
                 .map_err(|e| anyhow!("Failed to get transaction trace: {}", e))
@@ -186,10 +174,7 @@ impl EthereumData {
         let blockchain = self.blockchain.clone();
         let hash = hash.clone();
 
-        let retry_strategy = create_exp_retry()
-            .max_delay(Duration::from_secs(5))
-            .map(jitter)
-            .take(10);
+        let retry_strategy = crate::global::retry_strategy(RETRY_MAX_DELAY_TRACE_SECS);
         Retry::spawn(retry_strategy, async || {
             blockchain.native_call("debug_traceTransaction", params.clone()).await
                 .map_err(|e| anyhow!("Failed to get transaction trace: {}", e))
@@ -215,9 +200,10 @@ fn tx_row(kind: DataKind, blockchain_id: String, block: &Block<TxHash>, index: u
         height: block.header.number,
         block_id: format!("0x{:x}", &block.header.hash),
         timestamp: block_timestamp(block.header.timestamp),
-        parent_id: None,
+        parent_id: Some(format!("0x{:x}", &block.header.parent_hash)),
         tx_index: Some(index as u64),
         tx_id: Some(format!("0x{:x}", tx_hash)),
+        tx_count: Some(block.transactions.len() as u64),
         fields: Vec::new(),
     }
 }
@@ -261,6 +247,7 @@ impl BlockchainData<EthereumType> for EthereumData {
             parent_id: Some(format!("0x{:x}", &parsed_block.header.parent_hash)),
             tx_index: None,
             tx_id: None,
+            tx_count: Some(parsed_block.transactions.len() as u64),
             fields,
         };
 
@@ -273,20 +260,42 @@ impl BlockchainData<EthereumType> for EthereumData {
         Ok((row, parsed_block, transactions))
     }
 
+    /// Cheap header-only path: pulls one `eth_getBlockBy{Hash,Number}` and
+    /// projects just the three fields the re-org follower needs. Skips uncle
+    /// RPCs and full row construction.
+    async fn fetch_block_link(
+        &self,
+        reference: &BlockReference<BlockHash>,
+    ) -> Result<BlockHeaderInfo> {
+        let raw = match reference {
+            BlockReference::Hash(hash) => self.get_block(hash).await?,
+            BlockReference::Height(h) => self.get_block_at(h.height).await?,
+        };
+        let parsed = serde_json::from_slice::<BlockJson<TxHash>>(raw.as_slice())
+            .map_err(|_| BlockchainError::InvalidResponse)?;
+        Ok(BlockHeaderInfo {
+            height: parsed.header.number,
+            hash: format!("0x{:x}", parsed.header.hash),
+            parent: format!("0x{:x}", parsed.header.parent_hash),
+        })
+    }
+
     async fn fetch_tx(&self, block: &Block<TxHash>, index: usize) -> Result<ArchiveRow> {
+        let block_hash = block.header.hash.clone();
         let tx_hash = block.transactions.as_transactions().map(|txes| txes[index])
             .ok_or_else(|| anyhow!("Transaction not found"))?;
 
+
         // Fetch all transaction data in parallel
         let (tx_json_bytes, tx_raw, tx_receipt) = tokio::join!(
-            self.get_tx_expected(&tx_hash),
+            self.get_tx_at(&block_hash, index),
             self.get_tx_raw_expected(&tx_hash),
             self.get_tx_receipt_expected(&tx_hash),
         );
 
         let tx_json_bytes = tx_json_bytes?;
         let parsed_tx = serde_json::from_slice::<TransactionJson>(tx_json_bytes.as_slice())
-            .map_err(|e| anyhow!("Invalid Transaction JSON: {}", e))?;
+            .map_err(|e| anyhow!("Invalid Transaction JSON: {} from {}", e, String::from_utf8_lossy(tx_json_bytes.as_slice()).to_string()))?;
 
         let mut row = tx_row(DataKind::Transactions, self.blockchain_id(), block, index, &tx_hash);
         row.fields.push(Field::TxJson(tx_json_bytes));

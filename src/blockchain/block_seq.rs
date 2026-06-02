@@ -150,6 +150,14 @@ impl<T: BlockchainTypes> BlockSequence<T> {
     }
 
     ///
+    /// True when no blocks have been appended yet. Used by walk-back logic
+    /// that needs to stop on the very first head event (no ancestors exist
+    /// to reconnect to).
+    pub fn is_empty(&self) -> bool {
+        self.current.is_empty()
+    }
+
+    ///
     /// Finds the index of the given height in the current heights, if any.
     fn get_index(&self, height: u64) -> Option<usize> {
         self.current.iter().position(|h| h.height == height)
