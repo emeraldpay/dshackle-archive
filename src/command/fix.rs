@@ -1,5 +1,6 @@
 use std::marker::PhantomData;
 use async_trait::async_trait;
+use tokio_util::sync::CancellationToken;
 use crate::{archiver::{ArchiveAll, Archiver}, args::Args, blockchain::BlockchainTypes, command::CommandExecutor, global, notify::RunMode, storage::ScanTarget};
 use crate::archiver::blocks_config::Blocks;
 use crate::archiver::datakind::DataOptions;
@@ -48,6 +49,8 @@ impl<B: BlockchainTypes, TS: ScanTarget> CommandExecutor for FixCommand<B, TS> {
             ..self.tx_options.clone()
         };
         let missing = self.archiver.target.find_incomplete_tables(range, &options).await?;
+        // `fix` runs against settled archive state — no re-org signal applies.
+        let cancel = CancellationToken::new();
         for (range, kinds) in missing {
             if shutdown.is_signalled() {
                 break;
@@ -61,7 +64,7 @@ impl<B: BlockchainTypes, TS: ScanTarget> CommandExecutor for FixCommand<B, TS> {
                 }
                 tracing::info!(range = %chunk, "Fixing chunk");
                 if !dry_run {
-                    self.archiver.archive(chunk, RunMode::Fix, None, &options).await?;
+                    self.archiver.archive(chunk, RunMode::Fix, None, &options, &cancel).await?;
                 }
             }
         }

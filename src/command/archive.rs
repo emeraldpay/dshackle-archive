@@ -2,6 +2,7 @@ use std::marker::PhantomData;
 use std::str::FromStr;
 use anyhow::anyhow;
 use async_trait::async_trait;
+use tokio_util::sync::CancellationToken;
 use crate::{
     archiver::{ArchiveAll, Archiver},
     args::Args,
@@ -35,11 +36,15 @@ impl<B: BlockchainTypes, TS: WriteTarget> CommandExecutor for ArchiveCommand<B, 
         let shutdown = global::get_shutdown();
         let ranges = self.range.split_chunks(self.chunk_size, false);
 
+        // Historical archive runs against settled blocks; no re-org signal
+        // ever fires here, so a never-cancelled token covers the trait
+        // surface without any moving parts.
+        let cancel = CancellationToken::new();
         for subrange in ranges {
             if shutdown.is_signalled() {
                 break;
             }
-            self.archiver.archive(subrange, RunMode::Archive, None, &self.data_options).await?;
+            self.archiver.archive(subrange, RunMode::Archive, None, &self.data_options, &cancel).await?;
         }
 
         Ok(())

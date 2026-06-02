@@ -89,6 +89,17 @@ impl<W: TargetFileWriter + Send + Sync + 'static> AppendSink<W> {
             AppendSink::Direct(_) => Ok(()),
         }
     }
+
+    /// Abandon the sink: stop the drain task immediately, drop any pending
+    /// rows without raising a gap error. Use this when the upstream work was
+    /// cancelled (e.g. a re-org invalidated the block) — completing the run
+    /// is meaningless, and the unfilled gap is expected, not an error.
+    pub async fn abandon(self) -> Result<()> {
+        match self {
+            AppendSink::Ordered(s) => s.abandon().await,
+            AppendSink::Direct(_) => Ok(()),
+        }
+    }
 }
 
 /// Ordering wrapper around a [`TargetFileWriter`].
@@ -169,6 +180,32 @@ impl OrderedSink {
         self.handle
             .await
             .map_err(|e| anyhow!("OrderedSink drain task panicked: {}", e))?
+    }
+
+    /// Abandon the sink: abort the drain task and discard any pending rows.
+    ///
+    /// Unlike [`close`](Self::close), this masks the "closed with gap"
+    /// diagnostic — the caller is acknowledging that the run was cut short
+    /// (typically because a re-org invalidated the block) and that whatever
+    /// is still buffered is now meaningless. Real writer failures that
+    /// surfaced before abandon was called are still propagated so the caller
+    /// can distinguish "cancelled cleanly" from "broker rejected publish".
+    pub async fn abandon(self) -> Result<()> {
+        drop(self.tx);
+        self.handle.abort();
+        match self.handle.await {
+            // Drain finished naturally before abort took effect. The Result it
+            // returned reflects whether the underlying writer succeeded — if a
+            // prior append failed we must surface it; the gap diagnostic is
+            // already masked because `drop(self.tx)` lets the drain loop exit
+            // cleanly.
+            Ok(Ok(())) => Ok(()),
+            Ok(Err(writer_err)) => Err(writer_err),
+            // Drain task was actually aborted mid-iteration; that's the
+            // intended outcome of `abandon`.
+            Err(je) if je.is_cancelled() => Ok(()),
+            Err(je) => Err(anyhow!("OrderedSink drain task panicked: {}", je)),
+        }
     }
 }
 
@@ -352,6 +389,80 @@ mod tests {
         sink.append_at(1, row(1)).await.unwrap();
         sink.close().await.unwrap();
         assert_eq!(*appended.lock().unwrap(), vec![0, 1, 2]);
+    }
+
+    #[tokio::test]
+    async fn abandon_drops_pending_without_gap_error() {
+        // Two rows submitted with a gap at index 1 — `close` would return a
+        // gap error, but `abandon` is the explicit "this run is doomed" path
+        // and must succeed quietly.
+        let appended = Arc::new(Mutex::new(Vec::new()));
+        let writer = Arc::new(Recorder {
+            appended: appended.clone(),
+        });
+        let sink = OrderedSink::new(writer, 0);
+        sink.append_at(0, row(0)).await.unwrap();
+        sink.append_at(2, row(2)).await.unwrap();
+        // Give the drain task a chance to forward index 0.
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        // Index 1 never arrives — abandon must not raise the gap error.
+        sink.abandon().await.unwrap();
+        // Whatever was already forwarded stays; pending rows are discarded.
+        assert_eq!(*appended.lock().unwrap(), vec![0]);
+    }
+
+    /// Writer that fails its first `append` call. Used to assert that
+    /// `abandon` surfaces real writer errors instead of masking them as
+    /// "clean cancellation".
+    struct FailingWriter;
+
+    impl TargetFile for FailingWriter {
+        fn get_url(&self) -> String {
+            "test://failing".to_string()
+        }
+    }
+
+    #[async_trait]
+    impl TargetFileWriter for FailingWriter {
+        async fn append(&self, _row: ArchiveRow) -> Result<()> {
+            Err(anyhow!("simulated broker reject"))
+        }
+        async fn close(self) -> Result<()> {
+            Ok(())
+        }
+    }
+
+    #[tokio::test]
+    async fn abandon_propagates_writer_error_that_surfaced_before_cancel() {
+        // The underlying writer fails on append; the drain task returns that
+        // failure. If abandon swallows it as a clean cancellation, callers
+        // would never learn the broker rejected real messages — exactly the
+        // failure mode we want to prevent.
+        let writer = Arc::new(FailingWriter);
+        let sink = OrderedSink::new(writer, 0);
+        sink.append_at(0, row(0)).await.unwrap();
+        // Give the drain task a chance to consume and fail.
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        let err = sink.abandon().await.unwrap_err();
+        assert!(
+            err.to_string().contains("simulated broker reject"),
+            "abandon must surface the underlying writer error, got: {}",
+            err
+        );
+    }
+
+    #[tokio::test]
+    async fn appendsink_abandon_is_a_noop_for_direct() {
+        // Pass-through variant has nothing to abandon — call must succeed
+        // and not affect already-forwarded rows.
+        let appended = Arc::new(Mutex::new(Vec::new()));
+        let writer = Arc::new(Recorder {
+            appended: appended.clone(),
+        });
+        let sink: AppendSink<Recorder> = AppendSink::new(writer, 0, false);
+        sink.append_at(0, row(0)).await.unwrap();
+        sink.abandon().await.unwrap();
+        assert_eq!(*appended.lock().unwrap(), vec![0]);
     }
 
     #[tokio::test]

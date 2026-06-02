@@ -23,6 +23,7 @@ use std::sync::Arc;
 
 use anyhow::Result;
 use async_trait::async_trait;
+use tokio_util::sync::CancellationToken;
 
 use crate::archiver::archiver::Archiver;
 use crate::archiver::datakind::DataOptions;
@@ -88,11 +89,15 @@ where
             .target
             .find_incomplete_tables(range, &options)
             .await?;
+        // Resume runs against settled blocks (we're back-filling a tail the
+        // previous process didn't finish), so there's no re-org signal — use
+        // a never-cancelled token.
+        let cancel = CancellationToken::new();
         for (range, kinds) in missing {
             let range_opts = options.clone().only_include(&kinds);
             for height in range.iter().collect::<Vec<u64>>() {
                 self.archiver
-                    .archive(Height::from(height), RunMode::Stream, None, &range_opts)
+                    .archive(Height::from(height), RunMode::Stream, None, &range_opts, &cancel)
                     .await?;
             }
         }

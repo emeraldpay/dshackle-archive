@@ -166,11 +166,11 @@ impl<B: BlockchainTypes + 'static, TS: WriteTarget> CommandExecutor for StreamCo
                 }
                 next = heights.recv()  => {
                     crate::progress::resume();
-                    if let Some(height) = next {
+                    if let Some(job) = next {
                         // when we have learned the latest height, we ensure that the last N blocks are archived; but just once
                         if !continued {
                             if let Some(resume) = &self.resume {
-                                let up_to_height = height.clone();
+                                let up_to_height = job.height.clone();
                                 // we ignore the error here because the new blocks should be more important
                                 // and if it failed here then the Fix command can fix it later
                                 let _ = resume.ensure_continued(up_to_height).await;
@@ -178,8 +178,11 @@ impl<B: BlockchainTypes + 'static, TS: WriteTarget> CommandExecutor for StreamCo
                             continued = true;
                         }
 
-                        tracing::info!("Archive block: {} {:?}", height.height, height.hash);
-                        self.archiver.archive(height, RunMode::Stream, Some(maturity.clone()), &self.data_options).await?;
+                        tracing::info!("Archive block: {} {:?}", job.height.height, job.height.hash);
+                        // The follower owns the cancel token for this job; if a re-org replaces
+                        // the block mid-archive it will fire the token and the archiver path
+                        // unwinds cooperatively (see `ProcessOutcome::Cancelled`).
+                        self.archiver.archive(job.height, RunMode::Stream, Some(maturity.clone()), &self.data_options, &job.cancel).await?;
                     } else {
                         stop = true;
                     }
