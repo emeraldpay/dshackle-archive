@@ -106,9 +106,11 @@ pub enum Field {
     TxRaw(Vec<u8>),
     /// Ethereum-only: the transaction receipt JSON.
     Receipt(Vec<u8>),
-    /// Ethereum-only: convenience field carrying the `from` address.
+    /// Ethereum-only: `from` address as a dedicated column for table
+    /// formats (Avro). Streaming and per-field JSON skip it — already in
+    /// the tx JSON.
     From(String),
-    /// Ethereum-only: convenience field carrying the `to` address.
+    /// Ethereum-only: `to` address. Same usage as [`Field::From`].
     To(String),
 
     // ---- Trace-kind fields ----

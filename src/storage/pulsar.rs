@@ -5,42 +5,38 @@
 
 //! Apache Pulsar streaming target.
 //!
-//! Implements [`WriteTarget`] only — by design topics are append-only logs,
-//! so this target intentionally does not implement [`crate::storage::ScanTarget`]
-//! or [`crate::storage::ReadTarget`]. The trait surface enforces that only the
-//! `stream` command can run against a Pulsar target; `archive`, `fix`,
-//! `verify`, and `compact` are rejected upfront in [`crate::main`].
+//! Implements [`WriteTarget`] only — topics are append-only logs, so
+//! `archive`, `fix`, `verify`, and `compact` are rejected upfront in
+//! [`crate::main`].
 //!
 //! ## Topic layout
 //!
-//! One topic per field. Each topic name is `<prefix>-<field>` where the
-//! field labels come from [`crate::formats::stream::topic_labels_for`] —
-//! filtered by the running blockchain (Bitcoin omits receipts / uncles /
-//! traces) and the caller's `--tables` / `--fields.trace` selection.
-//! Producers for the relevant set are created eagerly at startup so the
-//! writer never has to deal with first-write latency.
+//! One topic per field, named `<prefix>-<field>`. The label set comes
+//! from [`crate::formats::stream::topic_labels_for`], so only topics
+//! relevant to the running blockchain and the user's `--tables` /
+//! `--fields.trace` selection are created. Producers are built eagerly
+//! so the first append doesn't pay broker-side latency.
 //!
-//! ## Ordering
+//! ## Ordering & re-org handling
 //!
-//! Pulsar guarantees per-partition publish order *as long as the producer
-//! submits messages in order*. The archiver fetches transactions in parallel,
-//! so multiple [`PulsarWriter::append`] calls can race for the same topic at
-//! the same time. A per-producer [`tokio::sync::Mutex`] serializes the
-//! send-and-await-ack step for each topic — the work inside the lock is just
-//! enqueueing one message, so contention is minimal.
+//! Pulsar preserves per-partition publish order *as long as the producer
+//! submits messages in order*. A per-producer [`tokio::sync::Mutex`]
+//! serializes the send-and-await-ack step for each topic. Messages are
+//! keyed by block height, so every field of one block — and any
+//! same-height re-org replacement — lands on the same partition in
+//! publish order.
 //!
-//! Messages are keyed by block height, so:
-//! - all fields belonging to one block land in the same partition;
-//! - a same-height re-org's replacement messages land in the same partition,
-//!   after the previous ones.
+//! When a re-org invalidates a block mid-publish, the archiver's cancel
+//! path abandons the in-flight ordered sink (see
+//! [`crate::archiver::order::OrderedSink::abandon`]); the replacement
+//! block then re-publishes with a fresh [`dedup-key`] property so
+//! consumers can collapse superseded messages. Transient node failures
+//! that would otherwise leave a gap are absorbed by
+//! [`crate::global::RetryPolicy::Forever`] (the default for Pulsar
+//! targets), which retries until either the data arrives or the re-org
+//! token cancels the block.
 //!
-//! ## v1 scope (no recovery yet)
-//!
-//! The basic implementation just streams new blocks; it does not read tail
-//! offsets to compute a resume point. Backwards compatibility hooks (the
-//! `dedup-key` and per-message metadata produced by
-//! [`crate::formats::stream`]) are already populated so a future resume run
-//! can dedup re-emitted messages.
+//! [`dedup-key`]: crate::formats::stream
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -57,40 +53,20 @@ use crate::formats::stream;
 use crate::record::ArchiveRow;
 use crate::storage::{TargetFile, TargetFileWriter, WriteTarget};
 
-/// Apache Pulsar streaming target.
-///
-/// Holds one [`Producer`] per topic label that the running configuration
-/// actually publishes to (see
-/// [`crate::formats::stream::topic_labels_for`]), each behind its own
-/// [`tokio::sync::Mutex`] so concurrent writers from the archiver serialize
-/// their sends per topic without blocking sends to other topics. Topics
-/// that aren't relevant for the running blockchain or the user's
-/// `--tables` selection are NOT created — e.g. Bitcoin runs never create
-/// the receipt / trace / uncle topics, and a `--tables blocks` run skips
-/// the tx-* topics entirely.
+/// Apache Pulsar streaming target. See the module-level doc for the
+/// topic layout and ordering contract.
 pub struct PulsarStorage {
     topic_prefix: String,
-    /// Pre-created producers keyed by topic label. The label set is the
-    /// output of [`crate::formats::stream::topic_labels_for`] for the
-    /// running blockchain + `DataOptions`. Created in
-    /// [`PulsarStorage::new`] so per-topic startup latency doesn't show up
-    /// on the first append. The producers internally keep the broker
-    /// connection alive — we don't need a separate handle to the
-    /// [`Pulsar`] client.
+    /// Pre-created producers keyed by topic label. Each producer owns
+    /// the broker connection internally, so no separate [`Pulsar`]
+    /// client handle is needed.
     producers: Arc<HashMap<&'static str, Arc<Mutex<Producer<TokioExecutor>>>>>,
 }
 
 impl PulsarStorage {
-    /// Connect to the Pulsar broker and create one producer per
-    /// per-field topic in `labels`. Each topic is named
-    /// `<topic_prefix>-<label>`.
-    ///
-    /// `labels` is typically the output of
-    /// [`crate::formats::stream::topic_labels_for`] — accepting it as a
-    /// parameter (rather than hard-coding the maximal set) lets us avoid
-    /// creating dead topics for blockchains that don't produce a kind
-    /// (Bitcoin → no receipts/uncles/traces) or for runs that don't
-    /// archive a kind (no `traces` in `--tables`).
+    /// Connect to the broker and pre-create one producer per topic in
+    /// `labels` (named `<topic_prefix>-<label>`). `labels` is typically
+    /// the output of [`crate::formats::stream::topic_labels_for`].
     pub async fn new(
         broker_url: String,
         topic_prefix: String,
@@ -140,10 +116,9 @@ impl PulsarStorage {
 impl WriteTarget for PulsarStorage {
     type Writer = PulsarWriter;
 
-    /// Pulsar has no concept of a per-(kind, range) file, so this just hands
-    /// out a writer that shares the global per-topic producer set. The
-    /// `overwrite` flag is irrelevant for an append-only log and is ignored;
-    /// `range` is kept for the [`PulsarWriter::get_url`] notification payload.
+    /// Hands out a writer sharing the global producer set. `overwrite`
+    /// is ignored (append-only log); `range` is retained for the
+    /// notification payload via [`PulsarWriter::get_url`].
     async fn create(
         &self,
         kind: DataKind,
@@ -158,9 +133,7 @@ impl WriteTarget for PulsarStorage {
         }))
     }
 
-    /// Pulsar partitions preserve messages in publish order; the archiver
-    /// must deliver them in chain-natural order or consumers would see
-    /// re-ordered tx/trace streams within a block. See [`WriteTarget::needs_ordering`].
+    /// Pulsar requires chain-natural order; see [`WriteTarget::needs_ordering`].
     fn needs_ordering(&self) -> bool {
         true
     }
@@ -231,10 +204,10 @@ impl TargetFileWriter for PulsarWriter {
     }
 }
 
-// Pulsar is intentionally not a ScanTarget or ReadTarget. Topics are
-// append-only logs — listing existing data requires a topic-tail read which
-// will be the resume mechanism added in a follow-up. Stub trait impls would
-// just mask "missing capability" as runtime errors, so they're omitted.
+// Pulsar is intentionally not a [`ScanTarget`] / [`ReadTarget`]: enumerating
+// or reading back records would mean tailing the topic — a different
+// mechanism entirely, and stub impls would just turn "missing capability"
+// into runtime errors.
 
 #[cfg(test)]
 mod tests {
