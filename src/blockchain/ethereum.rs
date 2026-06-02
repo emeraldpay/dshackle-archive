@@ -200,7 +200,7 @@ fn tx_row(kind: DataKind, blockchain_id: String, block: &Block<TxHash>, index: u
         height: block.header.number,
         block_id: format!("0x{:x}", &block.header.hash),
         timestamp: block_timestamp(block.header.timestamp),
-        parent_id: None,
+        parent_id: Some(format!("0x{:x}", &block.header.parent_hash)),
         tx_index: Some(index as u64),
         tx_id: Some(format!("0x{:x}", tx_hash)),
         fields: Vec::new(),

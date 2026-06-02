@@ -178,7 +178,7 @@ impl BlockchainData<BitcoinType> for BitcoinData {
             height: block.height,
             block_id: format!("{:x}", &block.hash),
             timestamp: block_timestamp(block.time),
-            parent_id: None,
+            parent_id: Some(format!("{:x}", &block.previous_block_hash)),
             tx_index: Some(index as u64),
             tx_id: Some(format!("{:x}", tx_hash)),
             fields: vec![

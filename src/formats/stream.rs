@@ -143,7 +143,7 @@ struct Entry<'a> {
     /// Block hash. Distinguishes same-height re-orgs.
     #[serde(rename = "blockId")]
     block_id: &'a str,
-    /// Parent block hash. Present on block-kind rows only.
+    /// Parent block hash.
     #[serde(rename = "parentId", skip_serializing_if = "Option::is_none")]
     parent_id: Option<&'a str>,
     /// Transaction index within the block. Present on tx/trace rows.
@@ -508,7 +508,7 @@ mod tests {
             height: 23110555,
             block_id: "0xbbb".to_string(),
             timestamp: Utc.timestamp_opt(0x689aad27, 0).unwrap(),
-            parent_id: None,
+            parent_id: Some("0xparent".to_string()),
             tx_index: Some(3),
             tx_id: Some("0xaaa".to_string()),
             fields: vec![Field::TxJson(
@@ -520,7 +520,7 @@ mod tests {
         let payload = std::str::from_utf8(&msgs[0].payload).expect("utf-8 json");
         assert_eq!(
             payload,
-            r#"{"blockchain":"ETH","timestamp":"2025-08-12T02:55:35Z","table":"transactions","field":"tx-json","height":23110555,"blockId":"0xbbb","txIndex":3,"txId":"0xaaa","value":{"hash":"0xaaa","nonce":"0x1","input":"0x"}}"#
+            r#"{"blockchain":"ETH","timestamp":"2025-08-12T02:55:35Z","table":"transactions","field":"tx-json","height":23110555,"blockId":"0xbbb","parentId":"0xparent","txIndex":3,"txId":"0xaaa","value":{"hash":"0xaaa","nonce":"0x1","input":"0x"}}"#
         );
     }
 
@@ -538,7 +538,7 @@ mod tests {
             height: 23110555,
             block_id: "0xbbb".to_string(),
             timestamp: Utc.timestamp_opt(0x689aad27, 0).unwrap(),
-            parent_id: None,
+            parent_id: Some("0xparent".to_string()),
             tx_index: Some(3),
             tx_id: Some("0xaaa".to_string()),
             fields: vec![Field::TxRaw(vec![0xde, 0xad, 0xbe, 0xef])],
@@ -548,7 +548,7 @@ mod tests {
         let payload = std::str::from_utf8(&msgs[0].payload).expect("utf-8 json");
         assert_eq!(
             payload,
-            r#"{"blockchain":"ETH","timestamp":"2025-08-12T02:55:35Z","table":"transactions","field":"tx-raw","height":23110555,"blockId":"0xbbb","txIndex":3,"txId":"0xaaa","value":"0xdeadbeef"}"#
+            r#"{"blockchain":"ETH","timestamp":"2025-08-12T02:55:35Z","table":"transactions","field":"tx-raw","height":23110555,"blockId":"0xbbb","parentId":"0xparent","txIndex":3,"txId":"0xaaa","value":"0xdeadbeef"}"#
         );
     }
 

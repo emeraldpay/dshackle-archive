@@ -61,7 +61,7 @@ pub struct ArchiveRow {
     /// Block timestamp as reported by the blockchain node.
     pub timestamp: DateTime<Utc>,
 
-    /// Block-kind only: parent block hash.
+    /// Parent block hash.
     pub parent_id: Option<String>,
     /// Tx/Trace-kind only: transaction index within the block.
     pub tx_index: Option<u64>,
