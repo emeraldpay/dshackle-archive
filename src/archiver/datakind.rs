@@ -19,12 +19,27 @@ pub enum DataKind {
 }
 
 impl DataKind {
-    /// Label value used in Prometheus metrics (the `type` tag).
-    pub fn metrics_label(&self) -> &'static str {
+    /// Short, singular label for one record of this kind. Used as the
+    /// Prometheus metrics `type` tag (one row = one "block" / "transaction"
+    /// / "trace"). For the *collection* name (a topic, a table) use
+    /// [`DataKind::table`] instead.
+    pub fn label(&self) -> &'static str {
         match self {
             DataKind::Blocks => "block",
             DataKind::Transactions => "transaction",
             DataKind::TransactionTraces => "trace",
+        }
+    }
+
+    /// Plural collection name for this data kind. Used as the `table`
+    /// field on the streaming envelope and matches the canonical Avro /
+    /// filesystem table names (`blocks.avro`, `txes` directory, …).
+    /// Singular per-record contexts use [`DataKind::label`].
+    pub fn table(&self) -> &'static str {
+        match self {
+            DataKind::Blocks => "blocks",
+            DataKind::Transactions => "transactions",
+            DataKind::TransactionTraces => "traces",
         }
     }
 }

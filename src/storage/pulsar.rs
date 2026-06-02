@@ -384,7 +384,7 @@ mod tests {
         let entry: serde_json::Value = serde_json::from_slice(&msg.payload.data)
             .expect("blocks payload is JSON");
         assert_eq!(entry["field"], "blocks");
-        assert_eq!(entry["kind"], "blocks");
+        assert_eq!(entry["table"], "blocks");
         assert_eq!(entry["height"], 42);
         assert_eq!(entry["blockId"], "0xblock42");
         assert_eq!(entry["value"], serde_json::json!({"h": 42}));

@@ -27,7 +27,7 @@
 use std::collections::HashMap;
 
 use chrono::{DateTime, Utc};
-use serde::Serialize;
+use serde::{Serialize, Serializer};
 use serde_json::value::{to_raw_value, RawValue};
 
 use crate::archiver::datakind::{DataKind, DataOptions};
@@ -127,9 +127,15 @@ struct Entry<'a> {
     blockchain: &'a str,
     /// Block timestamp as reported by the node, serialized as RFC 3339.
     timestamp: DateTime<Utc>,
-    /// `DataKind` of the producing row, lowercased: `blocks`, `transactions`
-    /// or `traces`.
-    kind: &'static str,
+    /// Logical table this row belongs to: `blocks`, `transactions`, or
+    /// `traces`. Plural matches the canonical table naming used for the
+    /// Avro files and the JSON layout's per-kind directories. Serialized
+    /// via [`serialize_table`] to call [`DataKind::table`] directly,
+    /// decoupling Entry's on-the-wire format from any future change to
+    /// `DataKind`'s default `serde(rename)` (which is also used by
+    /// `Notification` and could drift).
+    #[serde(serialize_with = "serialize_table")]
+    table: DataKind,
     /// Field label — same value as the enclosing message's topic suffix.
     field: &'static str,
     /// Block height.
@@ -190,7 +196,7 @@ fn encode_field(row: &ArchiveRow, field: &Field) -> Option<StreamMessage> {
     let entry = Entry {
         blockchain: &row.blockchain_id,
         timestamp: row.timestamp,
-        kind: kind_label(row.kind),
+        table: row.kind,
         field: label,
         height: row.height,
         block_id: &row.block_id,
@@ -226,6 +232,14 @@ fn encode_field(row: &ArchiveRow, field: &Field) -> Option<StreamMessage> {
     })
 }
 
+/// Serialize a [`DataKind`] as its plural table name (see
+/// [`DataKind::table`]). Used on [`Entry::table`] via
+/// `#[serde(serialize_with = ...)]` so the wire format is pinned to
+/// `DataKind::table()` rather than the derive's `#[serde(rename)]`.
+fn serialize_table<S: Serializer>(kind: &DataKind, ser: S) -> Result<S::Ok, S::Error> {
+    ser.serialize_str(kind.table())
+}
+
 /// Wrap bytes from a node JSON response as a [`RawValue`] without
 /// reserializing. Returns `None` if the bytes are not valid UTF-8 or not
 /// valid JSON — that shouldn't happen for live node data, but a single
@@ -245,14 +259,6 @@ fn raw_value_from_tx_raw(bytes: &[u8], blockchain_type: BlockchainType) -> Box<R
     };
     // Infallible: a `String` always serializes to a valid JSON value.
     to_raw_value(&s).expect("string serializes to RawValue")
-}
-
-fn kind_label(kind: DataKind) -> &'static str {
-    match kind {
-        DataKind::Blocks => "blocks",
-        DataKind::Transactions => "transactions",
-        DataKind::TransactionTraces => "traces",
-    }
 }
 
 /// Deterministic key used by consumers to dedup re-emitted messages (e.g.,
@@ -359,7 +365,7 @@ mod tests {
         assert_eq!(tx_msg.partition_key, "100");
         let entry = parse(&tx_msg.payload);
         assert_eq!(entry["blockchain"], "ETH");
-        assert_eq!(entry["kind"], "transactions");
+        assert_eq!(entry["table"], "transactions");
         assert_eq!(entry["field"], "tx-json");
         assert_eq!(entry["height"], 100);
         assert_eq!(entry["blockId"], "0xblock");
@@ -377,7 +383,7 @@ mod tests {
         );
         // Properties no longer carry the full envelope.
         assert!(tx_msg.properties.get("blockchain").is_none());
-        assert!(tx_msg.properties.get("kind").is_none());
+        assert!(tx_msg.properties.get("table").is_none());
         assert!(tx_msg.properties.get("field").is_none());
         assert!(tx_msg.properties.get("tx-index").is_none());
 
@@ -419,7 +425,7 @@ mod tests {
             "trace-calls:0xblock:tx-0xabc"
         );
         let trace_entry = parse(&trace.payload);
-        assert_eq!(trace_entry["kind"], "traces");
+        assert_eq!(trace_entry["table"], "traces");
         assert_eq!(trace_entry["value"], serde_json::json!({"t": 1}));
         let state = msgs.iter().find(|m| m.field == "trace-statediff").unwrap();
         assert_eq!(
@@ -514,7 +520,7 @@ mod tests {
         let payload = std::str::from_utf8(&msgs[0].payload).expect("utf-8 json");
         assert_eq!(
             payload,
-            r#"{"blockchain":"ETH","timestamp":"2025-08-12T02:55:35Z","kind":"transactions","field":"tx-json","height":23110555,"blockId":"0xbbb","txIndex":3,"txId":"0xaaa","value":{"hash":"0xaaa","nonce":"0x1","input":"0x"}}"#
+            r#"{"blockchain":"ETH","timestamp":"2025-08-12T02:55:35Z","table":"transactions","field":"tx-json","height":23110555,"blockId":"0xbbb","txIndex":3,"txId":"0xaaa","value":{"hash":"0xaaa","nonce":"0x1","input":"0x"}}"#
         );
     }
 
@@ -542,7 +548,7 @@ mod tests {
         let payload = std::str::from_utf8(&msgs[0].payload).expect("utf-8 json");
         assert_eq!(
             payload,
-            r#"{"blockchain":"ETH","timestamp":"2025-08-12T02:55:35Z","kind":"transactions","field":"tx-raw","height":23110555,"blockId":"0xbbb","txIndex":3,"txId":"0xaaa","value":"0xdeadbeef"}"#
+            r#"{"blockchain":"ETH","timestamp":"2025-08-12T02:55:35Z","table":"transactions","field":"tx-raw","height":23110555,"blockId":"0xbbb","txIndex":3,"txId":"0xaaa","value":"0xdeadbeef"}"#
         );
     }
 
