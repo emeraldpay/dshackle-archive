@@ -59,14 +59,19 @@ pub fn is_pulsar(args: &Args) -> bool {
 
 /// Build a [`pulsar::PulsarStorage`] from the user-supplied `--stream.*` args.
 ///
-/// Pre-creates one producer per entry in
-/// [`crate::formats::stream::TOPIC_LABELS`] (the publishable subset of
-/// [`crate::record::Field::name`]) so the
-/// first append doesn't pay startup cost. `--stream.topics` is taken
-/// verbatim — callers are expected to include the Pulsar topic path up to and
-/// including the blockchain segment (e.g.
+/// The producer set is restricted to topics that make sense for the running
+/// blockchain (Bitcoin omits receipts / uncles / traces) AND for the
+/// caller's `--tables` / `--fields.trace` selection (traces topics are
+/// skipped unless `traces` is in `--tables`, and within traces each
+/// sub-topic is gated on its own field flag). See
+/// [`crate::formats::stream::topic_labels_for`] for the exact mapping.
+///
+/// `--stream.topics` is taken verbatim — callers are expected to include
+/// the Pulsar topic path up to and including the blockchain segment (e.g.
 /// `persistent://public/default/archive-eth`).
-pub async fn create_pulsar(value: &Args) -> Result<pulsar::PulsarStorage> {
+pub async fn create_pulsar<B: crate::blockchain::BlockchainTypes>(
+    value: &Args,
+) -> Result<pulsar::PulsarStorage> {
     let stream = value
         .stream
         .as_ref()
@@ -79,8 +84,15 @@ pub async fn create_pulsar(value: &Args) -> Result<pulsar::PulsarStorage> {
         .stream_topics
         .clone()
         .ok_or_else(|| anyhow!("--stream.topics is required for a streaming target"))?;
-    tracing::info!("Using Pulsar streaming target at {} with topic prefix {}", url, prefix);
-    pulsar::PulsarStorage::new(url, prefix).await
+    let data_options = DataOptions::from(value);
+    let labels = crate::formats::stream::topic_labels_for(B::BLOCKCHAIN_TYPE, &data_options);
+    tracing::info!(
+        "Using Pulsar streaming target at {} with topic prefix {} ({} topics)",
+        url,
+        prefix,
+        labels.len()
+    );
+    pulsar::PulsarStorage::new(url, prefix, &labels).await
 }
 
 ///

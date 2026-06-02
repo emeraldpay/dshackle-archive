@@ -30,31 +30,72 @@ use chrono::{DateTime, Utc};
 use serde::Serialize;
 use serde_json::value::{to_raw_value, RawValue};
 
-use crate::archiver::datakind::DataKind;
+use crate::archiver::datakind::{DataKind, DataOptions};
 use crate::record::{ArchiveRow, BlockchainType, Field};
 
-/// Every topic label the streaming layout publishes to. Used by
-/// [`crate::storage::pulsar`] to pre-create one producer per label at startup
-/// so the first append doesn't pay broker-side topic-creation latency.
+/// The set of topic labels actually published for the given
+/// `(blockchain, data_options)` combination.
 ///
-/// Kept in sync with [`crate::record::Field::name`] by construction —
-/// `topic_labels_constant_covers_all_field_variants` asserts that every
-/// publishable variant's name appears here.
-pub const TOPIC_LABELS: &[&str] = &[
-    "blocks",
-    "blocks-uncles",
-    "tx-json",
-    "tx-raw",
-    "tx-receipts",
-    "trace-calls",
-    "trace-statediff",
-];
+/// Two filters apply:
+///
+/// 1. **Blockchain shape.** Bitcoin has no receipts, no uncles, and no
+///    traces, so those topics are never created for a Bitcoin run. Ethereum
+///    can publish to every label.
+/// 2. **User selection.** `--tables` controls whether block / tx / trace
+///    topics are created at all; `--fields.trace` further narrows the trace
+///    topic set to `calls` / `statediff`.
+///
+/// Returned labels follow a stable order (blocks → uncles → tx → traces),
+/// so callers can rely on consistent iteration order for logging.
+pub fn topic_labels_for(
+    blockchain: BlockchainType,
+    options: &DataOptions,
+) -> Vec<&'static str> {
+    let mut labels: Vec<&'static str> = Vec::new();
+
+    // Block-kind topics.
+    if options.include_block() {
+        labels.push("blocks");
+        if matches!(blockchain, BlockchainType::Ethereum) {
+            labels.push("blocks-uncles");
+        }
+    }
+
+    // Transaction-kind topics. Bitcoin produces tx-json + tx-raw; Ethereum
+    // additionally produces tx-receipts.
+    if options.include_tx() {
+        labels.push("tx-json");
+        labels.push("tx-raw");
+        if matches!(blockchain, BlockchainType::Ethereum) {
+            labels.push("tx-receipts");
+        }
+    }
+
+    // Trace-kind topics. Bitcoin has no traces — even if the user passes
+    // `--tables traces`, we suppress the topic creation here so a misconfig
+    // doesn't create dead Pulsar topics. For Ethereum, each sub-field
+    // (`calls` / `stateDiff`) is created only when its corresponding flag is
+    // set on `TraceOptions`.
+    if options.include_trace() && matches!(blockchain, BlockchainType::Ethereum) {
+        if let Some(trace) = options.trace.as_ref() {
+            if trace.include_trace {
+                labels.push("trace-calls");
+            }
+            if trace.include_state_diff {
+                labels.push("trace-statediff");
+            }
+        }
+    }
+
+    labels
+}
 
 /// One message destined for a single per-field topic.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct StreamMessage {
-    /// Topic label (one of [`TOPIC_LABELS`]). The backend builds the full
-    /// topic name as `<prefix>-<field>`.
+    /// Topic label (one of the labels [`topic_labels_for`] would produce
+    /// for the running blockchain). The backend builds the full topic name
+    /// as `<prefix>-<field>`.
     pub field: &'static str,
     /// JSON bytes of the serialized [`Entry`] — the node response wrapped
     /// alongside its routing metadata.
@@ -547,11 +588,113 @@ mod tests {
         assert_eq!(reorged_key, "tx-json:0xBBB:tx-0xtx");
     }
 
-    /// Sanity: every label produced by [`encode_field`] for any [`Field`]
-    /// variant must appear in [`TOPIC_LABELS`], otherwise the storage layer
-    /// won't have pre-created a producer for it and `append` will fail.
+    /// `topic_labels_for` filters by blockchain shape: Bitcoin gets no
+    /// uncles, no receipts, no traces — even if `--tables` includes traces
+    /// (a misconfig).
     #[test]
-    fn topic_labels_constant_covers_all_field_variants() {
+    fn topic_labels_for_bitcoin_excludes_eth_only_topics() {
+        use crate::archiver::datakind::{BlockOptions, DataOptions, TraceOptions, TxOptions};
+        let opts = DataOptions {
+            overwrite: true,
+            block: Some(BlockOptions::default()),
+            tx: Some(TxOptions::default()),
+            // Even with traces ostensibly enabled, Bitcoin must not get
+            // trace topics.
+            trace: Some(TraceOptions::default()),
+        };
+        let labels = topic_labels_for(BlockchainType::Bitcoin, &opts);
+        assert_eq!(labels, vec!["blocks", "tx-json", "tx-raw"]);
+    }
+
+    /// `topic_labels_for` defaults for Ethereum + blocks/txes: receipts and
+    /// uncles ARE included; trace topics are NOT (trace = None).
+    #[test]
+    fn topic_labels_for_ethereum_default_tables_excludes_traces() {
+        use crate::archiver::datakind::{BlockOptions, DataOptions, TxOptions};
+        let opts = DataOptions {
+            overwrite: true,
+            block: Some(BlockOptions::default()),
+            tx: Some(TxOptions::default()),
+            trace: None,
+        };
+        let labels = topic_labels_for(BlockchainType::Ethereum, &opts);
+        assert_eq!(
+            labels,
+            vec!["blocks", "blocks-uncles", "tx-json", "tx-raw", "tx-receipts"]
+        );
+    }
+
+    /// Ethereum with traces enabled: both trace topics surface when
+    /// `TraceOptions` requests both fields.
+    #[test]
+    fn topic_labels_for_ethereum_with_full_traces() {
+        use crate::archiver::datakind::{BlockOptions, DataOptions, TraceOptions, TxOptions};
+        let opts = DataOptions {
+            overwrite: true,
+            block: Some(BlockOptions::default()),
+            tx: Some(TxOptions::default()),
+            trace: Some(TraceOptions {
+                include_trace: true,
+                include_state_diff: true,
+            }),
+        };
+        let labels = topic_labels_for(BlockchainType::Ethereum, &opts);
+        assert_eq!(
+            labels,
+            vec![
+                "blocks",
+                "blocks-uncles",
+                "tx-json",
+                "tx-raw",
+                "tx-receipts",
+                "trace-calls",
+                "trace-statediff",
+            ]
+        );
+    }
+
+    /// Ethereum with `--fields.trace calls`: only the calls trace topic
+    /// surfaces; statediff is suppressed.
+    #[test]
+    fn topic_labels_for_ethereum_trace_calls_only() {
+        use crate::archiver::datakind::{BlockOptions, DataOptions, TraceOptions, TxOptions};
+        let opts = DataOptions {
+            overwrite: true,
+            block: Some(BlockOptions::default()),
+            tx: Some(TxOptions::default()),
+            trace: Some(TraceOptions {
+                include_trace: true,
+                include_state_diff: false,
+            }),
+        };
+        let labels = topic_labels_for(BlockchainType::Ethereum, &opts);
+        assert!(labels.contains(&"trace-calls"));
+        assert!(!labels.contains(&"trace-statediff"));
+    }
+
+    /// `--tables blocks` only: tx-* and trace-* topics must all be absent.
+    #[test]
+    fn topic_labels_for_blocks_only_returns_just_block_topics() {
+        use crate::archiver::datakind::{BlockOptions, DataOptions};
+        let opts = DataOptions {
+            overwrite: true,
+            block: Some(BlockOptions::default()),
+            tx: None,
+            trace: None,
+        };
+        let eth = topic_labels_for(BlockchainType::Ethereum, &opts);
+        assert_eq!(eth, vec!["blocks", "blocks-uncles"]);
+        let btc = topic_labels_for(BlockchainType::Bitcoin, &opts);
+        assert_eq!(btc, vec!["blocks"]);
+    }
+
+    /// Sanity: every label produced by [`encode_field`] for any [`Field`]
+    /// variant must appear in the maximal [`topic_labels_for`] output —
+    /// otherwise the storage layer wouldn't have pre-created a producer for
+    /// it and `append` would fail. Uses Ethereum + all-options as the
+    /// superset since that's the largest possible producer set.
+    #[test]
+    fn every_encoded_field_has_a_corresponding_topic() {
         // One representative row for each publishable Field variant.
         let r = ArchiveRow {
             kind: DataKind::Transactions,
@@ -576,9 +719,25 @@ mod tests {
                 Field::StateDiff(b"{}".to_vec()),
             ],
         };
+        use crate::archiver::datakind::{BlockOptions, DataOptions, TraceOptions, TxOptions};
+        let max_options = DataOptions {
+            overwrite: true,
+            block: Some(BlockOptions::default()),
+            tx: Some(TxOptions::default()),
+            trace: Some(TraceOptions {
+                include_trace: true,
+                include_state_diff: true,
+            }),
+        };
         let produced: HashSet<&'static str> =
             encode_row(&r).into_iter().map(|m| m.field).collect();
-        let declared: HashSet<&'static str> = TOPIC_LABELS.iter().copied().collect();
+        let declared: HashSet<&'static str> =
+            topic_labels_for(BlockchainType::Ethereum, &max_options)
+                .into_iter()
+                .collect();
+        // The two sides must match exactly: any label encode_row produces
+        // for the full Ethereum row must be pre-created by Pulsar, and we
+        // shouldn't be pre-creating dead topics either.
         assert_eq!(produced, declared);
     }
 }

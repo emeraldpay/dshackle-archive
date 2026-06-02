@@ -152,7 +152,7 @@ async fn run<B: BlockchainTypes + 'static>(builder: Builder<B>, args: &Args) -> 
         }
     }
     if storage::is_pulsar(&args) {
-        run_with_write_target(builder, storage::create_pulsar(&args).await?, args).await
+        run_with_write_target(builder, storage::create_pulsar::<B>(&args).await?, args).await
     } else if storage::is_fs(&args) {
         match args.format {
             Format::Avro => run_with_read_target(builder, storage::create_fs(&args)?, args).await,

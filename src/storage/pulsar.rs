@@ -13,10 +13,12 @@
 //!
 //! ## Topic layout
 //!
-//! One topic per field. Each topic name is `<prefix>-<field>` where `<field>`
-//! is one of [`crate::formats::stream::TOPIC_LABELS`]. Producers for the full
-//! set of field topics are created eagerly at startup so the writer never has
-//! to deal with first-write latency.
+//! One topic per field. Each topic name is `<prefix>-<field>` where the
+//! field labels come from [`crate::formats::stream::topic_labels_for`] —
+//! filtered by the running blockchain (Bitcoin omits receipts / uncles /
+//! traces) and the caller's `--tables` / `--fields.trace` selection.
+//! Producers for the relevant set are created eagerly at startup so the
+//! writer never has to deal with first-write latency.
 //!
 //! ## Ordering
 //!
@@ -51,30 +53,49 @@ use tokio::sync::Mutex;
 
 use crate::archiver::datakind::DataKind;
 use crate::archiver::range::Range;
-use crate::formats::stream::{self, TOPIC_LABELS};
+use crate::formats::stream;
 use crate::record::ArchiveRow;
 use crate::storage::{TargetFile, TargetFileWriter, WriteTarget};
 
 /// Apache Pulsar streaming target.
 ///
-/// Holds one [`Producer`] per topic label
-/// (see [`crate::formats::stream::TOPIC_LABELS`]), each behind its own
+/// Holds one [`Producer`] per topic label that the running configuration
+/// actually publishes to (see
+/// [`crate::formats::stream::topic_labels_for`]), each behind its own
 /// [`tokio::sync::Mutex`] so concurrent writers from the archiver serialize
-/// their sends per topic without blocking sends to other topics.
+/// their sends per topic without blocking sends to other topics. Topics
+/// that aren't relevant for the running blockchain or the user's
+/// `--tables` selection are NOT created — e.g. Bitcoin runs never create
+/// the receipt / trace / uncle topics, and a `--tables blocks` run skips
+/// the tx-* topics entirely.
 pub struct PulsarStorage {
     topic_prefix: String,
-    /// Pre-created producers keyed by topic label (one entry per
-    /// [`TOPIC_LABELS`] string). Created in [`PulsarStorage::new`] so per-topic
-    /// startup latency doesn't show up on the first append. The producers
-    /// internally keep the broker connection alive — we don't need a separate
-    /// handle to the [`Pulsar`] client.
+    /// Pre-created producers keyed by topic label. The label set is the
+    /// output of [`crate::formats::stream::topic_labels_for`] for the
+    /// running blockchain + `DataOptions`. Created in
+    /// [`PulsarStorage::new`] so per-topic startup latency doesn't show up
+    /// on the first append. The producers internally keep the broker
+    /// connection alive — we don't need a separate handle to the
+    /// [`Pulsar`] client.
     producers: Arc<HashMap<&'static str, Arc<Mutex<Producer<TokioExecutor>>>>>,
 }
 
 impl PulsarStorage {
-    /// Connect to the Pulsar broker and create one producer per field topic
-    /// (`<topic_prefix>-<field>`).
-    pub async fn new(broker_url: String, topic_prefix: String) -> Result<Self> {
+    /// Connect to the Pulsar broker and create one producer per
+    /// per-field topic in `labels`. Each topic is named
+    /// `<topic_prefix>-<label>`.
+    ///
+    /// `labels` is typically the output of
+    /// [`crate::formats::stream::topic_labels_for`] — accepting it as a
+    /// parameter (rather than hard-coding the maximal set) lets us avoid
+    /// creating dead topics for blockchains that don't produce a kind
+    /// (Bitcoin → no receipts/uncles/traces) or for runs that don't
+    /// archive a kind (no `traces` in `--tables`).
+    pub async fn new(
+        broker_url: String,
+        topic_prefix: String,
+        labels: &[&'static str],
+    ) -> Result<Self> {
         let client: Pulsar<TokioExecutor> = Pulsar::builder(broker_url, TokioExecutor)
             .build()
             .await
@@ -89,7 +110,7 @@ impl PulsarStorage {
             ..Default::default()
         };
         let mut producers = HashMap::new();
-        for label in TOPIC_LABELS {
+        for label in labels {
             let topic = format!("{}-{}", topic_prefix, label);
             tracing::info!("Pulsar producer: {}", topic);
             let producer = client
@@ -292,7 +313,21 @@ mod tests {
         // the broker; same as the existing notify::pulsar test.
         let prefix = "non-persistent://public/default/dshackle-archive-test".to_string();
 
-        let storage = PulsarStorage::new(uri.clone(), prefix.clone())
+        // The integration test exercises the full Ethereum producer set so
+        // we cover blocks + tx-* + trace-* topics with one container start.
+        use crate::archiver::datakind::{BlockOptions, DataOptions, TraceOptions, TxOptions};
+        let full_options = DataOptions {
+            overwrite: true,
+            block: Some(BlockOptions::default()),
+            tx: Some(TxOptions::default()),
+            trace: Some(TraceOptions {
+                include_trace: true,
+                include_state_diff: true,
+            }),
+        };
+        let labels =
+            crate::formats::stream::topic_labels_for(BlockchainType::Ethereum, &full_options);
+        let storage = PulsarStorage::new(uri.clone(), prefix.clone(), &labels)
             .await
             .expect("Pulsar connect");
 

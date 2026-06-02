@@ -13,6 +13,9 @@ use crate::record::{ArchiveRow, BlockchainType as ArchiveBlockchainType, Field};
 pub struct MockType {}
 
 impl BlockchainTypes for MockType {
+    // Mock uses Ethereum's discriminator — Mock-specific tests assert against
+    // ArchiveBlockchainType::Ethereum elsewhere, so this keeps them consistent.
+    const BLOCKCHAIN_TYPE: ArchiveBlockchainType = ArchiveBlockchainType::Ethereum;
 
     type BlockHash = String;
     type TxId = String;

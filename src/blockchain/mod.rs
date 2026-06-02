@@ -22,13 +22,19 @@ use crate::{
     archiver::{
         datakind::TraceOptions,
     },
-    record::ArchiveRow,
+    record::{ArchiveRow, BlockchainType},
 };
 use crate::archiver::range::Height;
 
 ///
 /// Defined the data types for a blockchain
 pub trait BlockchainTypes: Send + Sync + Sized {
+
+    ///
+    /// Runtime discriminator for the blockchain family. Lets generic code
+    /// (e.g. the Pulsar topic-creation path) branch on Bitcoin vs Ethereum
+    /// without needing a `match` on the type-erased provider.
+    const BLOCKCHAIN_TYPE: BlockchainType;
 
     ///
     /// Type of the Block Hash / Block Identifier
@@ -52,6 +58,8 @@ pub trait BlockchainTypes: Send + Sync + Sized {
 
 pub struct EthereumType {}
 impl BlockchainTypes for EthereumType {
+    const BLOCKCHAIN_TYPE: BlockchainType = BlockchainType::Ethereum;
+
     type BlockHash = alloy::primitives::BlockHash;
     type TxId = alloy::primitives::TxHash;
     type BlockParsed = alloy::rpc::types::Block<Self::TxId>;
@@ -64,6 +72,8 @@ impl BlockchainTypes for EthereumType {
 }
 pub struct BitcoinType {}
 impl BlockchainTypes for BitcoinType {
+    const BLOCKCHAIN_TYPE: BlockchainType = BlockchainType::Bitcoin;
+
     type BlockHash = bitcoin::BlockHash;
     type TxId = bitcoin::TxHash;
     type BlockParsed = bitcoin::BitcoinBlock;
