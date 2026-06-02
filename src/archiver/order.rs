@@ -256,6 +256,7 @@ mod tests {
             parent_id: None,
             tx_index: None,
             tx_id: None,
+            tx_count: None,
             fields: vec![Field::BlockJson(b"x".to_vec())],
         }
     }

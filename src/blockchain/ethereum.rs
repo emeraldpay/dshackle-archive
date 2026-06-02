@@ -203,6 +203,7 @@ fn tx_row(kind: DataKind, blockchain_id: String, block: &Block<TxHash>, index: u
         parent_id: Some(format!("0x{:x}", &block.header.parent_hash)),
         tx_index: Some(index as u64),
         tx_id: Some(format!("0x{:x}", tx_hash)),
+        tx_count: Some(block.transactions.len() as u64),
         fields: Vec::new(),
     }
 }
@@ -246,6 +247,7 @@ impl BlockchainData<EthereumType> for EthereumData {
             parent_id: Some(format!("0x{:x}", &parsed_block.header.parent_hash)),
             tx_index: None,
             tx_id: None,
+            tx_count: Some(parsed_block.transactions.len() as u64),
             fields,
         };
 

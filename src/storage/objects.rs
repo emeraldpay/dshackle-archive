@@ -435,6 +435,7 @@ mod tests {
             parent_id: Some("0xdb10afd3efa45327eb284c83cc925bd9bd7966aea53067c1eebe0724d124ec1e".to_string()),
             tx_index: None,
             tx_id: None,
+            tx_count: None,
             fields: vec![Field::BlockJson(vec![1, 2, 3])],
         }
     }

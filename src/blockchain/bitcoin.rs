@@ -155,6 +155,7 @@ impl BlockchainData<BitcoinType> for BitcoinData {
             parent_id: Some(format!("{:x}", &parsed_block.previous_block_hash)),
             tx_index: None,
             tx_id: None,
+            tx_count: Some(parsed_block.transactions.len() as u64),
             fields: vec![Field::BlockJson(raw_block)],
         };
 
@@ -181,6 +182,7 @@ impl BlockchainData<BitcoinType> for BitcoinData {
             parent_id: Some(format!("{:x}", &block.previous_block_hash)),
             tx_index: Some(index as u64),
             tx_id: Some(format!("{:x}", tx_hash)),
+            tx_count: Some(block.transactions.len() as u64),
             fields: vec![
                 Field::TxJson(tx?),
                 Field::TxRaw(tx_raw?),

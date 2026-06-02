@@ -149,6 +149,11 @@ struct Entry<'a> {
     /// Transaction index within the block. Present on tx/trace rows.
     #[serde(rename = "txIndex", skip_serializing_if = "Option::is_none")]
     tx_index: Option<u64>,
+    /// Total number of transactions in the block — pairs with `txIndex`
+    /// to give a tx/trace consumer its position (`N` of `txCount`), and
+    /// surfaces the block's tx volume on block rows.
+    #[serde(rename = "txCount", skip_serializing_if = "Option::is_none")]
+    tx_count: Option<u64>,
     /// Transaction id (hash). Present on tx/trace rows.
     #[serde(rename = "txId", skip_serializing_if = "Option::is_none")]
     tx_id: Option<&'a str>,
@@ -202,6 +207,7 @@ fn encode_field(row: &ArchiveRow, field: &Field) -> Option<StreamMessage> {
         block_id: &row.block_id,
         parent_id: row.parent_id.as_deref(),
         tx_index: row.tx_index,
+        tx_count: row.tx_count,
         tx_id,
         uncle_index,
         value: &value,
@@ -316,6 +322,7 @@ mod tests {
             parent_id: Some("0xparent".to_string()),
             tx_index: tx_id.map(|_| 7),
             tx_id: tx_id.map(|s| s.to_string()),
+            tx_count: Some(12),
             fields,
         }
     }
@@ -511,6 +518,7 @@ mod tests {
             parent_id: Some("0xparent".to_string()),
             tx_index: Some(3),
             tx_id: Some("0xaaa".to_string()),
+            tx_count: Some(25),
             fields: vec![Field::TxJson(
                 br#"{"hash":"0xaaa","nonce":"0x1","input":"0x"}"#.to_vec(),
             )],
@@ -520,7 +528,7 @@ mod tests {
         let payload = std::str::from_utf8(&msgs[0].payload).expect("utf-8 json");
         assert_eq!(
             payload,
-            r#"{"blockchain":"ETH","timestamp":"2025-08-12T02:55:35Z","table":"transactions","field":"tx-json","height":23110555,"blockId":"0xbbb","parentId":"0xparent","txIndex":3,"txId":"0xaaa","value":{"hash":"0xaaa","nonce":"0x1","input":"0x"}}"#
+            r#"{"blockchain":"ETH","timestamp":"2025-08-12T02:55:35Z","table":"transactions","field":"tx-json","height":23110555,"blockId":"0xbbb","parentId":"0xparent","txIndex":3,"txCount":25,"txId":"0xaaa","value":{"hash":"0xaaa","nonce":"0x1","input":"0x"}}"#
         );
     }
 
@@ -541,6 +549,7 @@ mod tests {
             parent_id: Some("0xparent".to_string()),
             tx_index: Some(3),
             tx_id: Some("0xaaa".to_string()),
+            tx_count: Some(25),
             fields: vec![Field::TxRaw(vec![0xde, 0xad, 0xbe, 0xef])],
         };
         let msgs = encode_row(&r);
@@ -548,7 +557,7 @@ mod tests {
         let payload = std::str::from_utf8(&msgs[0].payload).expect("utf-8 json");
         assert_eq!(
             payload,
-            r#"{"blockchain":"ETH","timestamp":"2025-08-12T02:55:35Z","table":"transactions","field":"tx-raw","height":23110555,"blockId":"0xbbb","parentId":"0xparent","txIndex":3,"txId":"0xaaa","value":"0xdeadbeef"}"#
+            r#"{"blockchain":"ETH","timestamp":"2025-08-12T02:55:35Z","table":"transactions","field":"tx-raw","height":23110555,"blockId":"0xbbb","parentId":"0xparent","txIndex":3,"txCount":25,"txId":"0xaaa","value":"0xdeadbeef"}"#
         );
     }
 
@@ -569,6 +578,7 @@ mod tests {
             parent_id: None,
             tx_index: Some(0),
             tx_id: Some("0xtx".to_string()),
+            tx_count: None,
             fields: vec![Field::TxJson(b"{\"v\":1}".to_vec())],
         };
         let reorged = ArchiveRow {
@@ -713,6 +723,7 @@ mod tests {
             parent_id: None,
             tx_index: Some(0),
             tx_id: Some("0xabc".to_string()),
+            tx_count: None,
             fields: vec![
                 Field::BlockJson(b"{}".to_vec()),
                 Field::Uncle { index: 0, json: b"{}".to_vec() },

@@ -130,6 +130,7 @@ impl BlockchainData<MockType> for MockData {
             parent_id: Some(block.parent.clone()),
             tx_index: None,
             tx_id: None,
+            tx_count: Some(block.transactions.len() as u64),
             fields: vec![Field::BlockJson(serde_json::to_vec(&block).unwrap())],
         };
 
@@ -156,6 +157,7 @@ impl BlockchainData<MockType> for MockData {
             parent_id: None,
             tx_index: Some(index as u64),
             tx_id: Some(tx.hash.clone()),
+            tx_count: Some(block.transactions.len() as u64),
             fields: vec![
                 Field::TxJson(json.clone()),
                 Field::TxRaw(json),
@@ -182,6 +184,7 @@ impl BlockchainData<MockType> for MockData {
             parent_id: None,
             tx_index: Some(index as u64),
             tx_id: Some(tx_hash.clone()),
+            tx_count: Some(block.transactions.len() as u64),
             fields: Vec::new(),
         };
 

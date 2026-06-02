@@ -67,6 +67,11 @@ pub struct ArchiveRow {
     pub tx_index: Option<u64>,
     /// Tx/Trace-kind only: transaction id (hash).
     pub tx_id: Option<String>,
+    /// Total number of transactions in the enclosing block. Lets a
+    /// consumer reading a single tx/trace message know its position (tx
+    /// `N` of `tx_count`); also surfaces the block's tx volume on block
+    /// rows.
+    pub tx_count: Option<u64>,
 
     pub fields: Vec<Field>,
 }
