@@ -121,15 +121,34 @@ pub enum Field {
 }
 
 impl Field {
-    /// Canonical kebab-case identifier for this field variant.
+    /// Singular content-type identifier — the kind of value this variant
+    /// carries, independent of any table context.
     ///
-    /// Provides a stable, format-neutral name that callers can use to label
-    /// the field externally. The streaming layout uses it directly as the
-    /// per-field topic label (`<prefix>-<name>`); other formats compose their
-    /// own presentations (e.g. the JSON file layout builds filenames like
-    /// `block.json` and `tx-<HASH>.json` rather than reusing this string), so
-    /// changes here are visible to consumers — keep the values stable.
+    /// Suitable for callers where the enclosing table is already known
+    /// (e.g. directory-based layouts where the table appears in the path):
+    /// the name doesn't need to repeat it. Plural is reserved for variants
+    /// whose payload is itself a collection (`calls` — the callTracer
+    /// returns a nested call tree).
     pub fn name(&self) -> &'static str {
+        match self {
+            Field::BlockJson(_) => "block",
+            Field::Uncle { .. } => "uncle",
+            Field::TxJson(_) => "tx",
+            Field::TxRaw(_) => "raw",
+            Field::Receipt(_) => "receipt",
+            Field::From(_) => "from",
+            Field::To(_) => "to",
+            Field::Trace(_) => "calls",
+            Field::StateDiff(_) => "statediff",
+        }
+    }
+
+    /// Streaming topic suffix for this variant. Used by
+    /// [`crate::formats::stream`] as the per-field topic label
+    /// (`<prefix>-<topic_label>`), where topics share a flat namespace and
+    /// the table context isn't otherwise carried. Keep the values stable
+    /// — they're consumer-visible.
+    pub fn topic_label(&self) -> &'static str {
         match self {
             Field::BlockJson(_) => "blocks",
             Field::Uncle { .. } => "blocks-uncles",

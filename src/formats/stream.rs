@@ -190,7 +190,7 @@ fn encode_field(row: &ArchiveRow, field: &Field) -> Option<StreamMessage> {
         Field::StateDiff(bytes) => (raw_value_from_bytes(bytes)?, true, None),
     };
 
-    let label = field.name();
+    let label = field.topic_label();
     let tx_id = if tx_keyed { row.tx_id.as_deref() } else { None };
 
     let entry = Entry {
