@@ -33,6 +33,7 @@ use std::collections::HashMap;
 use crate::archiver::datakind::{DataKind, DataOptions};
 use crate::archiver::range::Range;
 use crate::archiver::range_bag::RangeBag;
+use crate::notify::FileSlot;
 use crate::record::{ArchiveRow, BlockchainType, Field};
 
 /// A single file produced by [`encode_row`].
@@ -42,6 +43,9 @@ pub struct JsonFieldFile {
     pub filename: String,
     /// Exact bytes to write to the file.
     pub payload: Vec<u8>,
+    /// Which [`crate::notify::FileGroup`] field the file fills in the
+    /// notification, so writers don't re-derive it from the filename.
+    pub slot: FileSlot,
 }
 
 /// Convert an [`ArchiveRow`] into the set of per-field files it produces under
@@ -64,34 +68,41 @@ fn encode_field(
         Field::BlockJson(bytes) => Some(JsonFieldFile {
             filename: "block.json".to_string(),
             payload: bytes.clone(),
+            slot: FileSlot::Block,
         }),
         Field::Uncle { index, json } => Some(JsonFieldFile {
             filename: format!("uncle-{}.json", index),
             payload: json.clone(),
+            slot: FileSlot::Uncle,
         }),
         Field::TxJson(bytes) => tx_id.map(|id| JsonFieldFile {
             filename: format!("tx-{}.json", id),
             payload: bytes.clone(),
+            slot: FileSlot::Tx,
         }),
         // Raw transaction is stored decoded to save memory; re-encode to the
         // node's wire format here (Ethereum prefixes with `0x`, Bitcoin does not).
         Field::TxRaw(bytes) => tx_id.map(|id| JsonFieldFile {
             filename: format!("raw-{}.hex", id),
             payload: encode_tx_raw(bytes, blockchain_type),
+            slot: FileSlot::Raw,
         }),
         Field::Receipt(bytes) => tx_id.map(|id| JsonFieldFile {
             filename: format!("receipt-{}.json", id),
             payload: bytes.clone(),
+            slot: FileSlot::Receipt,
         }),
         // Convenience-only fields that are already present inside the parent JSON.
         Field::From(_) | Field::To(_) => None,
         Field::Trace(bytes) => tx_id.map(|id| JsonFieldFile {
             filename: format!("trace-{}.json", id),
             payload: bytes.clone(),
+            slot: FileSlot::Calls,
         }),
         Field::StateDiff(bytes) => tx_id.map(|id| JsonFieldFile {
             filename: format!("statediff-{}.json", id),
             payload: bytes.clone(),
+            slot: FileSlot::StateDiff,
         }),
     }
 }

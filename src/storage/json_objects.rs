@@ -25,6 +25,7 @@ use crate::archiver::datakind::{DataKind, DataOptions};
 use crate::archiver::filenames::Filenames;
 use crate::archiver::range::Range;
 use crate::formats::json;
+use crate::notify::{FileGroup, Location, RowFiles};
 use crate::record::ArchiveRow;
 use crate::storage::{ScanTarget, TargetFile, TargetFileWriter, WriteTarget};
 
@@ -77,6 +78,7 @@ impl<S: ObjectStore> WriteTarget for JsonObjectsStorage<S> {
             kind,
             range: range.clone(),
             overwrite,
+            produced: std::sync::Mutex::new(Vec::new()),
         }))
     }
 }
@@ -112,6 +114,10 @@ pub struct JsonObjectsWriter<S: ObjectStore> {
     kind: DataKind,
     range: Range,
     overwrite: bool,
+    /// Per-row file groups for the notification report. Only objects actually
+    /// written by this session — skipped pre-existing objects were announced
+    /// when they were originally written.
+    produced: std::sync::Mutex<Vec<RowFiles>>,
 }
 
 impl<S: ObjectStore> TargetFile for JsonObjectsWriter<S> {
@@ -134,6 +140,10 @@ impl<S: ObjectStore> TargetFileWriter for JsonObjectsWriter<S> {
     async fn append(&self, row: ArchiveRow) -> Result<()> {
         let dir = self.filenames.height_dir(row.height);
         let files = json::encode_row(&row);
+        let mut group = FileGroup {
+            tx_id: row.tx_id.clone(),
+            ..Default::default()
+        };
         for file in files {
             let key = format!("{}/{}", dir, file.filename);
             let path = Path::from(key);
@@ -150,10 +160,22 @@ impl<S: ObjectStore> TargetFileWriter for JsonObjectsWriter<S> {
                 .map_err(|e| anyhow!("Failed to put {}: {:?}", path, e))?;
             crate::progress::on_bytes(payload_len);
             crate::metrics::add_bytes(&self.kind, crate::metrics::Direction::Write, payload_len);
+            group.set(file.slot, format!("s3://{}/{}", self.bucket, path));
+        }
+        if !group.is_empty() {
+            self.produced.lock().unwrap().push(RowFiles {
+                height: row.height,
+                tx_index: row.tx_index,
+                group,
+            });
         }
         crate::progress::on_record();
         crate::metrics::add_items(&self.kind, crate::metrics::Direction::Write, 1);
         Ok(())
+    }
+
+    fn locations(&self) -> Vec<(Range, Location)> {
+        Location::files_per_height(self.produced.lock().unwrap().clone())
     }
 
     async fn close(self) -> Result<()> {

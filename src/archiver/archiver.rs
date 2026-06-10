@@ -5,10 +5,10 @@ use chrono::Utc;
 use tokio::sync::mpsc::Sender;
 use tokio_util::sync::CancellationToken;
 use crate::blockchain::{BlockchainData, BlockchainTypes};
-use crate::archiver::datakind::{DataKind, DataOptions};
+use crate::archiver::datakind::DataOptions;
 use crate::archiver::ProcessOutcome;
 use crate::notify::empty::EmptyNotifier;
-use crate::notify::{Maturity, Notification, Notifier, RunMode};
+use crate::notify::{Maturity, Notification, NotificationBuilder, Notifier, RunMode};
 use crate::archiver::range::{Height, Range};
 use crate::global;
 use crate::storage::WriteTarget;
@@ -89,26 +89,17 @@ impl<B: BlockchainTypes, TS: WriteTarget> ArchiveAll<Height> for Archiver<B, TS>
     ) -> anyhow::Result<()> {
         let start_time = Utc::now();
 
-        let notification = Notification {
-            // common fields
-            version: Notification::version(),
-            ts: Utc::now(),
+        let template = NotificationBuilder {
             blockchain: self.data_provider.blockchain_id(),
             run: mode,
-            height_start: what.height,
-            height_end: what.height,
             maturity,
-
-            // specific fields, should be overridden later
-            file_type: DataKind::Blocks,
-            location: "".to_string(),
         };
 
-        let (blocks, blocks_notif) = match self
-            .process_blocks(Range::Single(what.clone()), notification.clone(), options, cancel)
+        let (blocks, blocks_notifs) = match self
+            .process_blocks(Range::Single(what.clone()), template.clone(), options, cancel)
             .await?
         {
-            ProcessOutcome::Completed { value, notification } => (value, notification),
+            ProcessOutcome::Completed { value, notifications } => (value, notifications),
             ProcessOutcome::Cancelled => {
                 tracing::info!(
                     "Block {} cancelled (re-org) — skipping tx/trace fetch",
@@ -129,7 +120,7 @@ impl<B: BlockchainTypes, TS: WriteTarget> ArchiveAll<Height> for Archiver<B, TS>
         let (tx_side, trace_side) = tokio::join! {
             async {
                 if options.include_tx() {
-                    match self.process_txes(range.clone(), notification.clone(), &blocks, options, cancel).await {
+                    match self.process_txes(range.clone(), template.clone(), &blocks, options, cancel).await {
                         Ok(outcome) => Some(outcome),
                         Err(e) => {
                             tracing::warn!("Failed to archive txes for block {}: {}", what, e);
@@ -137,12 +128,12 @@ impl<B: BlockchainTypes, TS: WriteTarget> ArchiveAll<Height> for Archiver<B, TS>
                         }
                     }
                 } else {
-                    Some(ProcessOutcome::Completed { value: (), notification: None })
+                    Some(ProcessOutcome::Completed { value: (), notifications: vec![] })
                 }
             },
             async {
                 if options.include_trace() {
-                    match self.process_traces(range.clone(), notification.clone(), &blocks, options, cancel).await {
+                    match self.process_traces(range.clone(), template.clone(), &blocks, options, cancel).await {
                         Ok(outcome) => Some(outcome),
                         Err(e) => {
                             tracing::warn!("Failed to archive traces for block {}: {}", what, e);
@@ -150,7 +141,7 @@ impl<B: BlockchainTypes, TS: WriteTarget> ArchiveAll<Height> for Archiver<B, TS>
                         }
                     }
                 } else {
-                    Some(ProcessOutcome::Completed { value: (), notification: None })
+                    Some(ProcessOutcome::Completed { value: (), notifications: vec![] })
                 }
             }
         };
@@ -170,11 +161,12 @@ impl<B: BlockchainTypes, TS: WriteTarget> ArchiveAll<Height> for Archiver<B, TS>
         // artifacts have already been cleaned up via writer Drop in the
         // process_* functions; the doomed block is invisible to consumers.
         if !cancelled && !global::get_shutdown().is_signalled() {
-            self.publish_notifications([
-                blocks_notif,
-                extract_notification(tx_side.as_ref()),
-                extract_notification(trace_side.as_ref()),
-            ])
+            self.publish_notifications(
+                blocks_notifs
+                    .into_iter()
+                    .chain(extract_notifications(tx_side.as_ref()))
+                    .chain(extract_notifications(trace_side.as_ref())),
+            )
             .await;
         }
 
@@ -214,26 +206,17 @@ impl<B: BlockchainTypes, TS: WriteTarget> ArchiveAll<Range> for Archiver<B, TS> 
         let start_time = Utc::now();
         tracing::debug!("Archiving range: {}", what);
 
-        let notification = Notification {
-            // common fields
-            version: Notification::version(),
-            ts: Utc::now(),
+        let template = NotificationBuilder {
             blockchain: self.data_provider.blockchain_id(),
             run: mode,
-            height_start: what.start(),
-            height_end: what.end(),
             maturity,
-
-            // specific fields, should be overridden later
-            file_type: DataKind::Blocks,
-            location: "".to_string(),
         };
 
-        let (blocks, blocks_notif) = match self
-            .process_blocks(what.clone(), notification.clone(), options, cancel)
+        let (blocks, blocks_notifs) = match self
+            .process_blocks(what.clone(), template.clone(), options, cancel)
             .await?
         {
-            ProcessOutcome::Completed { value, notification } => (value, notification),
+            ProcessOutcome::Completed { value, notifications } => (value, notifications),
             ProcessOutcome::Cancelled => {
                 tracing::info!(range = %what, "Range archive cancelled before tx/trace fetch");
                 return Ok(());
@@ -244,17 +227,17 @@ impl<B: BlockchainTypes, TS: WriteTarget> ArchiveAll<Range> for Archiver<B, TS> 
             async {
                 if options.include_tx() {
                     tracing::debug!(range = %what, "Process txes");
-                    self.process_txes(what.clone(), notification.clone(), &blocks, options, cancel).await
+                    self.process_txes(what.clone(), template.clone(), &blocks, options, cancel).await
                 } else {
-                    Ok(ProcessOutcome::Completed { value: (), notification: None })
+                    Ok(ProcessOutcome::Completed { value: (), notifications: vec![] })
                 }
             },
             async {
                 if options.include_trace() {
                     tracing::debug!(range = %what, "Process traces");
-                    self.process_traces(what.clone(), notification.clone(), &blocks, options, cancel).await
+                    self.process_traces(what.clone(), template.clone(), &blocks, options, cancel).await
                 } else {
-                    Ok(ProcessOutcome::Completed { value: (), notification: None })
+                    Ok(ProcessOutcome::Completed { value: (), notifications: vec![] })
                 }
             }
         );
@@ -278,11 +261,12 @@ impl<B: BlockchainTypes, TS: WriteTarget> ArchiveAll<Range> for Archiver<B, TS> 
 
         let cancelled = tx_outcome.is_cancelled() || trace_outcome.is_cancelled();
         if !cancelled {
-            self.publish_notifications([
-                blocks_notif,
-                extract_notification(Some(&tx_outcome)),
-                extract_notification(Some(&trace_outcome)),
-            ])
+            self.publish_notifications(
+                blocks_notifs
+                    .into_iter()
+                    .chain(extract_notifications(Some(&tx_outcome)))
+                    .chain(extract_notifications(Some(&trace_outcome))),
+            )
             .await;
         }
 
@@ -303,20 +287,17 @@ impl<B: BlockchainTypes, TS: WriteTarget> ArchiveAll<Range> for Archiver<B, TS> 
     }
 }
 
-/// Extract the deferred [`Notification`] from a [`ProcessOutcome`], if any.
+/// Extract the deferred [`Notification`]s from a [`ProcessOutcome`].
 ///
-/// Returns `None` when the side errored (outer Option is None), was
-/// cancelled, or completed without producing a notification (target skipped
+/// Returns nothing when the side errored (outer Option is None), was
+/// cancelled, or completed without producing notifications (target skipped
 /// an existing file). The archiver coordinator collects these across all
 /// three process_* calls and publishes them as a batch — only when the
 /// whole run is known to be uncancelled.
-fn extract_notification<T>(side: Option<&ProcessOutcome<T>>) -> Option<Notification> {
+fn extract_notifications<T>(side: Option<&ProcessOutcome<T>>) -> Vec<Notification> {
     match side {
-        Some(ProcessOutcome::Completed {
-            notification: Some(n),
-            ..
-        }) => Some(n.clone()),
-        _ => None,
+        Some(ProcessOutcome::Completed { notifications, .. }) => notifications.clone(),
+        _ => vec![],
     }
 }
 
@@ -325,8 +306,8 @@ impl<B: BlockchainTypes, TS: WriteTarget> Archiver<B, TS> {
     /// the notification channel are logged but not propagated — the data
     /// itself has already landed in the archive; a failed notify shouldn't
     /// fail the whole run.
-    async fn publish_notifications(&self, notifs: impl IntoIterator<Item = Option<Notification>>) {
-        for notif in notifs.into_iter().flatten() {
+    async fn publish_notifications(&self, notifs: impl IntoIterator<Item = Notification>) {
+        for notif in notifs {
             if let Err(e) = self.notifications.send(notif).await {
                 tracing::warn!("Failed to publish notification: {}", e);
             }

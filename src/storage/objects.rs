@@ -24,6 +24,7 @@ use crate::archiver::filenames::{Filenames, Level, LevelDouble, LevelSingle};
 use crate::archiver::range::Range;
 use crate::formats::avro;
 use crate::global;
+use crate::notify::Location;
 use crate::record::ArchiveRow;
 use crate::storage::{
     avro_reader, copy, find_incomplete_by_listing, sorted_files, FileReference, ReadTarget,
@@ -55,7 +56,7 @@ impl<S: ObjectStore> WriteTarget for ObjectsStorage<S> {
                 return Ok(None);
             }
         }
-        Ok(Some(NewObjectsFile::new(self.os.clone(), kind, self.bucket.clone(), filename)))
+        Ok(Some(NewObjectsFile::new(self.os.clone(), kind, range.clone(), self.bucket.clone(), filename)))
     }
 }
 
@@ -198,6 +199,7 @@ pub struct NewObjectsFile<'a> {
     bucket: String,
     path: Path,
     kind: DataKind,
+    range: Range,
 }
 
 impl TargetFile for NewObjectsFile<'_> {
@@ -233,6 +235,10 @@ impl TargetFileWriter for NewObjectsFile<'_> {
 
     async fn append_avro_record(&self, data: Record<'_>) -> anyhow::Result<()> {
         self.append_record(data).await
+    }
+
+    fn locations(&self) -> Vec<(Range, Location)> {
+        vec![(self.range.clone(), Location::File { url: self.get_url() })]
     }
 
     async fn close(self: Self) -> anyhow::Result<()> {
@@ -284,7 +290,7 @@ impl TargetFileReader for ExisingObjectsFile {
 }
 
 impl NewObjectsFile<'_> {
-    fn new(storage: Arc<dyn ObjectStore>, kind: DataKind, bucket: String, path: Path) -> Self {
+    fn new(storage: Arc<dyn ObjectStore>, kind: DataKind, range: Range, bucket: String, path: Path) -> Self {
         tracing::debug!("Create object: s3://{}/{}", bucket, path.to_string());
         let buf = BufWriter::new(storage, path.clone());
         let (closed_tx, closed_rx) = oneshot::channel();
@@ -297,6 +303,7 @@ impl NewObjectsFile<'_> {
             bucket,
             path,
             kind,
+            range,
         }
     }
 
@@ -444,13 +451,20 @@ mod tests {
     pub async fn can_write() {
         testing::start_test();
         let mem = Arc::new(InMemory::new());
-        let file = Box::new(NewObjectsFile::new(mem.clone(), DataKind::Blocks, "test".to_string(), Path::from("test.avro")));
+        let file = Box::new(NewObjectsFile::new(mem.clone(), DataKind::Blocks, Range::Single(100.into()), "test".to_string(), Path::from("test.avro")));
         tokio::time::sleep(std::time::Duration::from_secs(1)).await;
 
         let added = file.append(sample_block_row(100)).await;
         if let Err(e) = added {
             panic!("Error: {:?}", e);
         }
+        assert_eq!(
+            file.locations(),
+            vec![(
+                Range::Single(100.into()),
+                Location::File { url: "s3://test/test.avro".to_string() }
+            )]
+        );
         let closed = file.close().await;
         if let Err(e) = closed {
             panic!("Error: {:?}", e);
@@ -622,7 +636,7 @@ mod tests {
         let bucket = "test".to_string();
 
 
-        let file = NewObjectsFile::new(mem.clone(), DataKind::Blocks, bucket.clone(), path.clone());
+        let file = NewObjectsFile::new(mem.clone(), DataKind::Blocks, Range::new(0, 9_999), bucket.clone(), path.clone());
         for i in 0..10_000u64 {
             use chrono::TimeZone;
             let mut row = sample_block_row(i);

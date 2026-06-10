@@ -373,7 +373,7 @@ NOTE: Applicable only for Ethereum-compatible blockchains.
 [source, json]
 ----
 {
-  "version":"https://schema.emrld.io/dshackle-archive/notify",
+  "version":"https://schema.emrld.io/dshackle-archive/notify/v2",
   "ts":"2022-05-20T23:14:24.481327Z",
   "blockchain":"ETH",
   "type":"transactions",
@@ -381,7 +381,10 @@ NOTE: Applicable only for Ethereum-compatible blockchains.
   "maturity": "finalized",
   "heightStart":14813875,
   "heightEnd":14813875,
-  "location":"gs://my-bucket/blockchain-archive/eth/014000000/014813000/014813875.txes.avro"
+  "location": {
+    "type": "file",
+    "url": "s3://my-bucket/blockchain-archive/eth/014000000/014813000/014813875.txes.avro"
+  }
 }
 ----
 
@@ -389,11 +392,82 @@ NOTE: Applicable only for Ethereum-compatible blockchains.
 - `version` id of the current JSON format
 - `ts` timestamp of the archive event
 - `blockchain` blockchain
-- `type` type of file (`transactions`, `blocks`, or `traces`)
+- `type` type of data (`transactions`, `blocks`, or `traces`)
 - `run` mode in which the Dshackle Archive is run (`archive`, `stream`, `copy` or `compact`)
 - `maturity` block maturity level (`latest` or `finalized`); `finalized` is applicable to Ethereum PoS chains only
-- `heightStart` and `heightEnd` range of blocks in the archived files
-- `location` a URL to the archived file
+- `heightStart` and `heightEnd` range of blocks covered by the notification
+- `location` where the data landed; an object distinguished by its own `type` field, see <<notification-location>>
+
+[[notification-location]]
+==== Location types
+
+The shape of `location` depends on the target the archive writes to.
+The `location.type` defines the structure of the location object.
+
+===== `file`
+
+One row-batched file (the Avro layout):
+
+[source, json]
+----
+{
+  "type": "file",
+  "url": "s3://my-bucket/eth/014000000/range-014813000_014813999.txes.avro"
+}
+----
+
+===== `files`
+
+Per-field files of a single height (ex. for the `--format=json`).
+
+One notification is sent per kind per height.
+Each entry of `files` describes one block or one transaction, pointing to its individual files.
+
+[source, json]
+----
+{
+  "type": "files",
+  "files": [
+    {
+      "txId": "0x40846886cf7b8...",
+      "tx": "s3://my-bucket/eth/014000000/014813000/014813875/tx-0x40846886cf7b8....json",
+      "raw": "s3://my-bucket/eth/014000000/014813000/014813875/raw-0x40846886cf7b8....hex",
+      "receipt": "s3://my-bucket/eth/014000000/014813000/014813875/receipt-0x40846886cf7b8....json"
+    }
+  ]
+}
+----
+
+.Per-entry fields (only the produced ones are present)
+- `txId` - transaction id, on per-transaction entries
+- `block` - URL of the block JSON
+- `uncles` - URLs of the uncle JSONs, in uncle-index order
+- `tx` - URL of the transaction JSON
+- `raw` - URL of the raw transaction (hex)
+- `receipt` - URL of the transaction receipt JSON
+- `calls` - URL of the `callTracer` trace JSON
+- `stateDiff` - URL of the `prestateTracer` trace JSON
+
+===== `pulsar`
+
+Messages published to per-field topics of an Apache Pulsar broker (For the `--stream.url` target).
+
+One notification is sent per kind per height; each message names its actual topic and is identified by its broker message id (`ledgerId:entryId:partition[:batchIndex]`):
+
+[source, json]
+----
+{
+  "type": "pulsar",
+  "messages": [
+    {
+      "topic": "persistent://public/default/archive-eth-tx-json",
+      "field": "tx-json",
+      "txId": "0x40846886cf7b8...",
+      "messageId": "125:4:-1"
+    }
+  ]
+}
+----
 
 == Community
 

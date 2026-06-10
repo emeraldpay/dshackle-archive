@@ -9,6 +9,7 @@ use crate::archiver::datakind::{DataKind, DataOptions};
 use crate::archiver::filenames::{Filenames, Level, LevelDouble};
 use crate::archiver::range::Range;
 use crate::formats::avro;
+use crate::notify::Location;
 use crate::record::ArchiveRow;
 use crate::storage::{
     avro_reader, copy, find_incomplete_by_listing, FileReference, ReadTarget, ScanTarget,
@@ -39,7 +40,7 @@ impl WriteTarget for FsStorage {
         if !overwrite && filename.exists() {
             return Ok(None);
         }
-        Ok(Some(FsFileWriter::new(filename.clone(), kind).context(format!("Path: {:?}", &filename))?))
+        Ok(Some(FsFileWriter::new(filename.clone(), kind, range.clone()).context(format!("Path: {:?}", &filename))?))
     }
 }
 
@@ -157,16 +158,17 @@ pub struct FsFileWriter<'a> {
     path: PathBuf,
     pub writer: Option<Mutex<Writer<'a, File>>>,
     kind: DataKind,
+    range: Range,
 }
 
 impl FsFileWriter<'_> {
-    pub fn new(path: PathBuf, kind: DataKind) -> Result<Self> {
+    pub fn new(path: PathBuf, kind: DataKind, range: Range) -> Result<Self> {
         tracing::debug!("Create file: {:?}", path);
         let _ = fs::create_dir_all(path.parent().unwrap())?;
         let file = File::create(path.clone())?;
         let writer = Writer::with_codec(avro::schema_for(kind), file, global::get_avro_codec());
         let writer = Mutex::new(writer);
-        Ok(Self { path, writer: Some(writer), kind })
+        Ok(Self { path, writer: Some(writer), kind, range })
     }
 
     ///
@@ -215,6 +217,10 @@ impl TargetFileWriter for FsFileWriter<'_> {
 
     async fn append_avro_record(&self, data: Record<'_>) -> Result<()> {
         self.append_record(data)
+    }
+
+    fn locations(&self) -> Vec<(Range, Location)> {
+        vec![(self.range.clone(), Location::File { url: self.get_url() })]
     }
 
     async fn close(mut self: Self) -> Result<()> {
