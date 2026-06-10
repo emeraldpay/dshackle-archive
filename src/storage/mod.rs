@@ -835,6 +835,33 @@ mod tests {
         assert!(sorted[1].1.contains(&DataKind::Transactions));
     }
 
+    ///
+    /// A range file may cover a non-standard number of blocks (e.g., copied from
+    /// an archive built with a different `--range.chunk`). Such a file forms its
+    /// own group, so the missing tables must still be reported for its exact range.
+    #[tokio::test]
+    async fn test_find_incomplete_tables_nonstandard_range_missing_txes() {
+        let storage = create_test_storage(vec![
+            // standard 1000-block neighbours
+            "archive/eth/012000000/range-012344000_012344999.blocks.avro",
+            "archive/eth/012000000/range-012344000_012344999.txes.avro",
+            // a 5000-block wide blocks file, with no txes for any part of it
+            "archive/eth/012000000/range-012345000_012349999.blocks.avro",
+            // standard 1000-block neighbours
+            "archive/eth/012000000/range-012350000_012350999.blocks.avro",
+            "archive/eth/012000000/range-012350000_012350999.txes.avro",
+        ]).await;
+
+        let range = Range::new(12_344_000, 12_350_999);
+        let tx_options = DataOptions::default();
+
+        let incomplete = storage.find_incomplete_tables(range, &tx_options).await.unwrap();
+
+        assert_eq!(incomplete.len(), 1);
+        assert_eq!(incomplete[0].0, Range::new(12_345_000, 12_349_999));
+        assert_eq!(incomplete[0].1, vec![DataKind::Transactions]);
+    }
+
     #[tokio::test]
     async fn test_find_incomplete_tables_large_missing_gap() {
         let storage = create_test_storage(vec![
