@@ -1,3 +1,7 @@
+// Copyright 2026 EmeraldPay Ltd
+//
+// Licensed under the Apache License, Version 2.0
+
 use std::fmt::{Formatter, LowerHex};
 use std::str::FromStr;
 use std::sync::Arc;
@@ -7,9 +11,12 @@ use anyhow::{Result, Error};
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Deserializer};
-use crate::blockchain::{BitcoinType, BlockDetails, BlockReference, BlockchainData, BlockchainTypes, JsonString};
+use tokio_retry2::{Retry, RetryError};
+use crate::blockchain::{parse_json_response, BitcoinType, BlockDetails, BlockHeaderInfo, BlockReference, BlockchainData, BlockchainTypes, JsonString};
 use crate::archiver::datakind::{DataKind, TraceOptions};
 use crate::blockchain::next_block::NextBlock;
+use crate::errors::BlockchainError;
+use crate::global::RETRY_MAX_DELAY_FAST_SECS;
 use crate::record::{ArchiveRow, BlockchainType as ArchiveBlockchainType, Field};
 
 #[derive(Clone)]
@@ -88,6 +95,31 @@ impl BitcoinData {
         Ok(data)
     }
 
+    /// Fetch a block by hash, retrying transient failures.
+    ///
+    /// Right after a head event the load balancer can route the call to a
+    /// node that has not seen the announced block yet. Unlike Ethereum,
+    /// Bitcoin nodes report an unknown block as an error response, so any
+    /// failure here is retried as transient rather than crashing the run.
+    async fn get_block_expected(&self, hash: &BlockHash) -> Result<Vec<u8>> {
+        let retry_strategy = crate::global::retry_strategy(RETRY_MAX_DELAY_FAST_SECS);
+        Retry::spawn(retry_strategy, async || {
+            self.get_block(hash).await
+                .map_err(|e| RetryError::transient(e))
+        }).await
+    }
+
+    /// Same as [`Self::get_block_expected`] but for a height-based lookup —
+    /// covers both the `getblockhash` and `getblock` calls, since either can
+    /// land on a node that is still behind that height.
+    async fn get_block_at_expected(&self, height: u64) -> Result<Vec<u8>> {
+        let retry_strategy = crate::global::retry_strategy(RETRY_MAX_DELAY_FAST_SECS);
+        Retry::spawn(retry_strategy, async || {
+            self.get_block_at(height).await
+                .map_err(|e| RetryError::transient(e))
+        }).await
+    }
+
     async fn get_tx(&self, hash: &TxHash) -> Result<Vec<u8>> {
         tracing::debug!(tx_hash = %format!("{:x}", hash), "Get transaction by hash");
         let params = format!("[\"{:x}\", true]", &hash).as_bytes().to_vec();
@@ -108,12 +140,22 @@ impl BitcoinData {
 #[derive(Debug, Clone, Deserialize)]
 pub struct BitcoinBlock {
     hash: BlockHash,
+    /// Absent in the node response for the genesis block only.
     #[serde(rename = "previousblockhash")]
-    previous_block_hash: BlockHash,
+    previous_block_hash: Option<BlockHash>,
     height: u64,
     #[serde(rename = "tx")]
     pub transactions: Vec<TxHash>,
     time: u64
+}
+
+impl BitcoinBlock {
+    /// Parent hash with the genesis convention applied: the node omits
+    /// `previousblockhash` for block 0, whose parent is all zeros by
+    /// consensus definition.
+    fn parent_hash(&self) -> BlockHash {
+        self.previous_block_hash.clone().unwrap_or(Hex32([0u8; 32]))
+    }
 }
 
 impl BlockDetails<BitcoinType> for BitcoinBlock {
@@ -126,8 +168,13 @@ impl BlockDetails<BitcoinType> for BitcoinBlock {
     }
 
     fn parent(&self) -> <BitcoinType as BlockchainTypes>::BlockHash {
-        self.previous_block_hash.clone()
+        self.parent_hash()
     }
+}
+
+/// Parse a block JSON payload; see [`parse_json_response`] for the error handling.
+fn parse_block(raw: &[u8]) -> Result<BitcoinBlock, BlockchainError> {
+    parse_json_response(raw)
 }
 
 #[async_trait]
@@ -139,10 +186,10 @@ impl BlockchainData<BitcoinType> for BitcoinData {
 
     async fn fetch_block(&self, height: &BlockReference<BlockHash>) -> Result<(ArchiveRow, BitcoinBlock, Vec<TxHash>)> {
         let raw_block = match height {
-            BlockReference::Hash(hash) => self.get_block(hash).await?,
-            BlockReference::Height(height) => self.get_block_at(height.height).await?,
+            BlockReference::Hash(hash) => self.get_block_expected(hash).await?,
+            BlockReference::Height(height) => self.get_block_at_expected(height.height).await?,
         };
-        let parsed_block = serde_json::from_slice::<BitcoinBlock>(&raw_block)?;
+        let parsed_block = parse_block(&raw_block)?;
 
         let row = ArchiveRow {
             kind: DataKind::Blocks,
@@ -152,7 +199,7 @@ impl BlockchainData<BitcoinType> for BitcoinData {
             height: parsed_block.height,
             block_id: format!("{:x}", &parsed_block.hash),
             timestamp: block_timestamp(parsed_block.time),
-            parent_id: Some(format!("{:x}", &parsed_block.previous_block_hash)),
+            parent_id: Some(format!("{:x}", parsed_block.parent_hash())),
             tx_index: None,
             tx_id: None,
             tx_count: Some(parsed_block.transactions.len() as u64),
@@ -161,6 +208,35 @@ impl BlockchainData<BitcoinType> for BitcoinData {
 
         let transactions = parsed_block.transactions.clone();
         Ok((row, parsed_block, transactions))
+    }
+
+    /// Header-only linkage fetch for the re-org follower.
+    ///
+    /// Overridden not for cost but for its retry shape: the default
+    /// implementation delegates to `fetch_block`, whose retries follow the
+    /// `--retry` policy and may run forever. The caller here is the re-org
+    /// follower itself — the very component that cancels fetches of replaced
+    /// blocks — so nothing can cancel *it* out of retrying a block that was
+    /// re-orged away. Retries stay bounded, and on give-up the follower
+    /// re-validates the chain on the next head event.
+    async fn fetch_block_link(
+        &self,
+        reference: &BlockReference<BlockHash>,
+    ) -> Result<BlockHeaderInfo> {
+        let retry_strategy = crate::global::retry_strategy_bounded(RETRY_MAX_DELAY_FAST_SECS);
+        let raw = Retry::spawn(retry_strategy, async || {
+            let result = match reference {
+                BlockReference::Hash(hash) => self.get_block(hash).await,
+                BlockReference::Height(h) => self.get_block_at(h.height).await,
+            };
+            result.map_err(|e| RetryError::transient(e))
+        }).await?;
+        let parsed = parse_block(&raw)?;
+        Ok(BlockHeaderInfo {
+            height: parsed.height,
+            hash: format!("{:x}", parsed.hash),
+            parent: format!("{:x}", parsed.parent_hash()),
+        })
     }
 
     async fn fetch_tx(&self, block: &BitcoinBlock, index: usize) -> Result<ArchiveRow> {
@@ -179,7 +255,7 @@ impl BlockchainData<BitcoinType> for BitcoinData {
             height: block.height,
             block_id: format!("{:x}", &block.hash),
             timestamp: block_timestamp(block.time),
-            parent_id: Some(format!("{:x}", &block.previous_block_hash)),
+            parent_id: Some(format!("{:x}", block.parent_hash())),
             tx_index: Some(index as u64),
             tx_id: Some(format!("{:x}", tx_hash)),
             tx_count: Some(block.transactions.len() as u64),
@@ -196,8 +272,8 @@ impl BlockchainData<BitcoinType> for BitcoinData {
 
     async fn height(&self) -> Result<(u64, BlockHash)> {
         let best_block = self.get_bet_block_hash().await?;
-        let raw_block = self.get_block(&best_block).await?;
-        let parsed_block = serde_json::from_slice::<BitcoinBlock>(&raw_block)?;
+        let raw_block = self.get_block_expected(&best_block).await?;
+        let parsed_block = parse_block(&raw_block)?;
         Ok((parsed_block.height, best_block))
     }
 
