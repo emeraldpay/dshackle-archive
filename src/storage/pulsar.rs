@@ -38,18 +38,20 @@
 //!
 //! [`dedup-key`]: crate::formats::stream
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
 
 use anyhow::{anyhow, Result};
 use async_trait::async_trait;
 use pulsar::producer::{Producer, ProducerOptions};
+use pulsar::proto::MessageIdData;
 use pulsar::{Pulsar, TokioExecutor};
 use tokio::sync::Mutex;
 
 use crate::archiver::datakind::DataKind;
 use crate::archiver::range::Range;
 use crate::formats::stream;
+use crate::notify::{Location, MessageRef};
 use crate::record::ArchiveRow;
 use crate::storage::{TargetFile, TargetFileWriter, WriteTarget};
 
@@ -130,6 +132,7 @@ impl WriteTarget for PulsarStorage {
             range: range.clone(),
             producers: self.producers.clone(),
             topic_prefix: self.topic_prefix.clone(),
+            published: std::sync::Mutex::new(Vec::new()),
         }))
     }
 
@@ -139,13 +142,32 @@ impl WriteTarget for PulsarStorage {
     }
 }
 
-/// Per-(kind, range) writer. Carries no per-session state — the producers it
-/// uses are owned by [`PulsarStorage`] and shared across all writers.
+/// Per-(kind, range) writer. The producers it uses are owned by
+/// [`PulsarStorage`] and shared across all writers; per-session it only
+/// accumulates the broker receipts for the notification report.
 pub struct PulsarWriter {
     kind: DataKind,
     range: Range,
     producers: Arc<HashMap<&'static str, Arc<Mutex<Producer<TokioExecutor>>>>>,
     topic_prefix: String,
+    published: std::sync::Mutex<Vec<PublishedMessage>>,
+}
+
+/// A broker-acknowledged message, tagged with the height it belongs to so the
+/// notification report can group messages per height.
+struct PublishedMessage {
+    height: u64,
+    message: MessageRef,
+}
+
+/// Standard Pulsar string form of a message id:
+/// `ledgerId:entryId:partition[:batchIndex]`.
+fn format_message_id(id: &MessageIdData) -> String {
+    let partition = id.partition.unwrap_or(-1);
+    match id.batch_index {
+        Some(batch) => format!("{}:{}:{}:{}", id.ledger_id, id.entry_id, partition, batch),
+        None => format!("{}:{}:{}", id.ledger_id, id.entry_id, partition),
+    }
 }
 
 impl TargetFile for PulsarWriter {
@@ -185,9 +207,19 @@ impl TargetFileWriter for PulsarWriter {
                 .map_err(|e| anyhow!("Pulsar send failed: {:?}", e))?;
             // Block on the broker ack before releasing the lock — otherwise a
             // later message could overtake this one on the broker side.
-            send_future
+            let receipt = send_future
                 .await
                 .map_err(|e| anyhow!("Pulsar ack failed: {:?}", e))?;
+
+            self.published.lock().unwrap().push(PublishedMessage {
+                height: row.height,
+                message: MessageRef {
+                    topic: format!("{}-{}", self.topic_prefix, msg.field),
+                    field: msg.field.to_string(),
+                    tx_id: row.tx_id.clone(),
+                    message_id: receipt.message_id.as_ref().map(format_message_id),
+                },
+            });
 
             crate::progress::on_bytes(payload_len);
             crate::metrics::add_bytes(&self.kind, crate::metrics::Direction::Write, payload_len);
@@ -195,6 +227,23 @@ impl TargetFileWriter for PulsarWriter {
         crate::progress::on_record();
         crate::metrics::add_items(&self.kind, crate::metrics::Direction::Write, 1);
         Ok(())
+    }
+
+    fn locations(&self) -> Vec<(Range, Location)> {
+        let mut by_height: BTreeMap<u64, Vec<MessageRef>> = BTreeMap::new();
+        for published in self.published.lock().unwrap().iter() {
+            by_height
+                .entry(published.height)
+                .or_default()
+                .push(published.message.clone());
+        }
+        by_height
+            .into_iter()
+            .map(|(height, messages)| (
+                Range::Single(height.into()),
+                Location::Pulsar { messages },
+            ))
+            .collect()
     }
 
     async fn close(self) -> Result<()> {

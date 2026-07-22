@@ -23,6 +23,7 @@ use crate::archiver::datakind::{DataKind, DataOptions};
 use crate::archiver::filenames::Filenames;
 use crate::archiver::range::Range;
 use crate::formats::json;
+use crate::notify::{FileGroup, Location, RowFiles};
 use crate::record::ArchiveRow;
 use crate::storage::{ScanTarget, TargetFile, TargetFileWriter, WriteTarget};
 
@@ -80,6 +81,7 @@ impl WriteTarget for JsonFsStorage {
             range: range.clone(),
             overwrite,
             written_files: Mutex::new(Vec::new()),
+            produced: Mutex::new(Vec::new()),
             closed: AtomicBool::new(false),
         }))
     }
@@ -123,6 +125,10 @@ pub struct JsonFsWriter {
     range: Range,
     overwrite: bool,
     written_files: Mutex<Vec<PathBuf>>,
+    /// Per-row file groups for the notification report. Only files actually
+    /// written by this session — skipped pre-existing files were announced
+    /// when they were originally written.
+    produced: Mutex<Vec<RowFiles>>,
     closed: AtomicBool,
 }
 
@@ -153,6 +159,10 @@ impl TargetFileWriter for JsonFsWriter {
             .map_err(|e| anyhow!("Failed to create dir {:?}: {}", dir, e))?;
 
         let files = json::encode_row(&row);
+        let mut group = FileGroup {
+            tx_id: row.tx_id.clone(),
+            ..Default::default()
+        };
         for file in files {
             let path = dir.join(&file.filename);
             if !self.overwrite && path.exists() {
@@ -167,11 +177,24 @@ impl TargetFileWriter for JsonFsWriter {
                 crate::metrics::Direction::Write,
                 file.payload.len(),
             );
-            self.written_files.lock().unwrap().push(path);
+            self.written_files.lock().unwrap().push(path.clone());
+            let canonical = path.canonicalize().unwrap_or(path);
+            group.set(file.slot, format!("file://{}", canonical.to_str().unwrap_or("invalid")));
+        }
+        if !group.is_empty() {
+            self.produced.lock().unwrap().push(RowFiles {
+                height: row.height,
+                tx_index: row.tx_index,
+                group,
+            });
         }
         crate::progress::on_record();
         crate::metrics::add_items(&self.kind, crate::metrics::Direction::Write, 1);
         Ok(())
+    }
+
+    fn locations(&self) -> Vec<(Range, Location)> {
+        Location::files_per_height(self.produced.lock().unwrap().clone())
     }
 
     async fn close(self) -> Result<()> {
@@ -396,6 +419,109 @@ mod tests {
                     "missing raw-{}.hex",
                     tx_id
                 );
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn reports_one_location_per_height() {
+        let tmp = tempdir().unwrap();
+        let storage = JsonFsStorage::new(tmp.path().to_path_buf(), Filenames::with_dir("eth".to_string()));
+
+        let writer = storage
+            .create(DataKind::Transactions, &Range::new(100, 101), true)
+            .await
+            .unwrap()
+            .unwrap();
+        writer.append(tx_row(100, "0xa")).await.unwrap();
+        writer.append(tx_row(101, "0xb")).await.unwrap();
+        writer.append(tx_row(100, "0xc")).await.unwrap();
+
+        let locations = writer.locations();
+        writer.close().await.unwrap();
+
+        assert_eq!(locations.len(), 2);
+        assert_eq!(locations[0].0, Range::Single(100.into()));
+        assert_eq!(locations[1].0, Range::Single(101.into()));
+        match &locations[0].1 {
+            crate::notify::Location::Files { files } => {
+                assert_eq!(files.len(), 2);
+                assert_eq!(files[0].tx_id, Some("0xa".to_string()));
+                assert!(files[0].tx.as_ref().unwrap().starts_with("file://"));
+                assert!(files[0].tx.as_ref().unwrap().ends_with("/000000100/tx-0xa.json"));
+                assert!(files[0].raw.as_ref().unwrap().ends_with("/000000100/raw-0xa.hex"));
+                assert!(files[0].receipt.as_ref().unwrap().ends_with("/000000100/receipt-0xa.json"));
+                assert_eq!(files[1].tx_id, Some("0xc".to_string()));
+            }
+            other => panic!("Expected files location, got {:?}", other),
+        }
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn archive_command_notifies_once_per_kind_per_height() {
+        use crate::archiver::Archiver;
+        use crate::args::Args;
+        use crate::blockchain::mock::{MockBlock, MockData, MockTx, MockType};
+        use crate::command::archive::ArchiveCommand;
+        use crate::command::CommandExecutor;
+        use crate::notify::Location;
+        use std::sync::Arc;
+
+        crate::testing::start_test();
+        let tmp = tempdir().unwrap();
+
+        let data_provider: Arc<MockData> = Arc::new(MockData::new("TEST"));
+        for h in 100..103u64 {
+            let txs = vec![format!("0xTX{}-A", h), format!("0xTX{}-B", h)];
+            data_provider.add_block(MockBlock {
+                height: h,
+                hash: format!("0xB{}", h),
+                parent: format!("0xB{}", h - 1),
+                transactions: txs.clone(),
+            });
+            for tx in &txs {
+                data_provider.add_tx(MockTx { hash: tx.clone() });
+            }
+        }
+
+        let storage = JsonFsStorage::new(
+            tmp.path().to_path_buf(),
+            Filenames::with_dir("test".to_string()),
+        );
+        let (notifications_tx, mut notifications_rx) = tokio::sync::mpsc::channel(100);
+        let archiver: Archiver<MockType, JsonFsStorage> =
+            Archiver::new(Arc::new(storage), data_provider, notifications_tx);
+
+        let args = Args {
+            range: Some("100..102".to_string()),
+            range_chunk: Some(10),
+            ..Default::default()
+        };
+        let cmd = ArchiveCommand::new(&args, archiver).unwrap();
+        cmd.execute().await.unwrap();
+
+        let mut received = Vec::new();
+        while let Ok(n) = notifications_rx.try_recv() {
+            received.push(n);
+        }
+
+        // one notification per kind per height: 3 heights x (blocks + txes)
+        assert_eq!(received.len(), 6);
+        for kind in [DataKind::Blocks, DataKind::Transactions] {
+            for h in 100..103u64 {
+                let matching: Vec<_> = received.iter()
+                    .filter(|n| n.file_type == kind && n.height_start == h)
+                    .collect();
+                assert_eq!(matching.len(), 1, "expected one {} notification for height {}", kind, h);
+                let notification = matching[0];
+                assert_eq!(notification.height_end, h);
+                match &notification.location {
+                    Location::Files { files } => {
+                        let expected = if kind == DataKind::Blocks { 1 } else { 2 };
+                        assert_eq!(files.len(), expected, "{} files at height {}", kind, h);
+                    }
+                    other => panic!("Expected files location, got {:?}", other),
+                }
             }
         }
     }

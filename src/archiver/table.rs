@@ -1,6 +1,5 @@
 use std::sync::Arc;
 use anyhow::anyhow;
-use chrono::Utc;
 use tokio::sync::Semaphore;
 use tokio::task::JoinSet;
 use tokio_util::sync::CancellationToken;
@@ -9,17 +8,17 @@ use crate::archiver::order::AppendSink;
 use crate::archiver::{BlockTransactions, ProcessOutcome};
 use crate::blockchain::{BlockchainData, BlockchainTypes};
 use crate::archiver::datakind::{DataKind, DataOptions};
-use crate::notify::Notification;
+use crate::notify::NotificationBuilder;
 use crate::archiver::range::Range;
 use crate::global;
-use crate::storage::{TargetFile, TargetFileWriter, WriteTarget};
+use crate::storage::{TargetFileWriter, WriteTarget};
 
 
 impl<B: BlockchainTypes, TS: WriteTarget> Archiver<B, TS> {
     pub async fn process_traces(
         &self,
         range: Range,
-        notification: Notification,
+        template: NotificationBuilder,
         blocks: &BlockTransactions<B>,
         options: &DataOptions,
         cancel: &CancellationToken,
@@ -28,7 +27,7 @@ impl<B: BlockchainTypes, TS: WriteTarget> Archiver<B, TS> {
         if shutdown.is_signalled() {
             return Ok(ProcessOutcome::Completed {
                 value: (),
-                notification: None,
+                notifications: vec![],
             });
         }
         let dry_run = global::is_dry_run();
@@ -39,13 +38,12 @@ impl<B: BlockchainTypes, TS: WriteTarget> Archiver<B, TS> {
             tracing::debug!(range = %range, "Skipping existing file");
             return Ok(ProcessOutcome::Completed {
                 value: (),
-                notification: None,
+                notifications: vec![],
             });
         }
         let file = file.unwrap();
         let options = options.trace.as_ref().unwrap();
 
-        let file_url = file.get_url();
         let file = Arc::new(file);
         // Order traces by a flat `(block_position, tx_index)` ordinal so block
         // N's traces are all published before block N+1's, and within a block
@@ -114,30 +112,35 @@ impl<B: BlockchainTypes, TS: WriteTarget> Archiver<B, TS> {
             return Ok(ProcessOutcome::Cancelled);
         }
 
-        if !dry_run {
+        let locations = if !dry_run {
+            // Close the ordering layer first so any buffered rows reach the
+            // writer before it reports where the data landed.
             let sink = Arc::into_inner(sink)
                 .ok_or_else(|| anyhow!("AppendSink still referenced after all tasks completed"))?;
             sink.close().await?;
             let file = Arc::into_inner(file)
                 .ok_or_else(|| anyhow!("File writer still referenced after all tasks completed"))?;
+            let locations = file.locations();
             let _ = file.close().await?;
-        }
-        let notification = Notification {
-            file_type: DataKind::TransactionTraces,
-            location: file_url,
-            ts: Utc::now(),
-            ..notification
+            locations
+        } else {
+            // dry-run writes nothing, so there is nothing to notify about
+            vec![]
         };
+        let notifications = locations
+            .into_iter()
+            .map(|(range, location)| template.notification(DataKind::TransactionTraces, &range, location))
+            .collect();
         Ok(ProcessOutcome::Completed {
             value: (),
-            notification: Some(notification),
+            notifications,
         })
     }
 
     pub async fn process_txes(
         &self,
         range: Range,
-        notification: Notification,
+        template: NotificationBuilder,
         blocks: &BlockTransactions<B>,
         options: &DataOptions,
         cancel: &CancellationToken,
@@ -146,7 +149,7 @@ impl<B: BlockchainTypes, TS: WriteTarget> Archiver<B, TS> {
         if shutdown.is_signalled() {
             return Ok(ProcessOutcome::Completed {
                 value: (),
-                notification: None,
+                notifications: vec![],
             });
         }
         let dry_run = global::is_dry_run();
@@ -157,12 +160,11 @@ impl<B: BlockchainTypes, TS: WriteTarget> Archiver<B, TS> {
             tracing::debug!(range = %range, "Skipping existing file");
             return Ok(ProcessOutcome::Completed {
                 value: (),
-                notification: None,
+                notifications: vec![],
             });
         }
         let file = file.unwrap();
 
-        let file_url = file.get_url();
         let file = Arc::new(file);
         // Tx ordering: a flat `(block_position, tx_index)` ordinal across the
         // whole range. `blocks` is already sorted by height by
@@ -232,23 +234,28 @@ impl<B: BlockchainTypes, TS: WriteTarget> Archiver<B, TS> {
             return Ok(ProcessOutcome::Cancelled);
         }
 
-        if !dry_run {
+        let locations = if !dry_run {
+            // Close the ordering layer first so any buffered rows reach the
+            // writer before it reports where the data landed.
             let sink = Arc::into_inner(sink)
                 .ok_or_else(|| anyhow!("AppendSink still referenced after all tasks completed"))?;
             sink.close().await?;
             let file = Arc::into_inner(file)
                 .ok_or_else(|| anyhow!("File writer still referenced after all tasks completed"))?;
+            let locations = file.locations();
             let _ = file.close().await?;
-        }
-        let notification = Notification {
-            file_type: DataKind::Transactions,
-            location: file_url,
-            ts: Utc::now(),
-            ..notification
+            locations
+        } else {
+            // dry-run writes nothing, so there is nothing to notify about
+            vec![]
         };
+        let notifications = locations
+            .into_iter()
+            .map(|(range, location)| template.notification(DataKind::Transactions, &range, location))
+            .collect();
         Ok(ProcessOutcome::Completed {
             value: (),
-            notification: Some(notification),
+            notifications,
         })
     }
 }

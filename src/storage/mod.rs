@@ -18,6 +18,7 @@ use crate::{
     },
     args::Args,
     global,
+    notify::Location,
     record::ArchiveRow,
 };
 use anyhow::{anyhow, Result};
@@ -410,6 +411,16 @@ pub trait TargetFileWriter: TargetFile {
             "append_avro_record is not supported by this target"
         ))
     }
+
+    ///
+    /// Where the data appended so far landed, one entry per range that should
+    /// get its own [`crate::notify::Notification`]. Row-batched files report a
+    /// single entry covering the whole session range; per-height layouts (JSON
+    /// files, streaming brokers) report one entry per archived height — that's
+    /// what keeps notifications at no more than one per kind per height.
+    ///
+    /// Call after all appends are done, before [`Self::close`] consumes the writer.
+    fn locations(&self) -> Vec<(Range, Location)>;
 
     ///
     /// MUST BE called if everything is written ok. Otherwise, the file is deleted on Drop.

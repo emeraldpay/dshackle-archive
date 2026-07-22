@@ -1,6 +1,5 @@
 use std::sync::Arc;
 use anyhow::anyhow;
-use chrono::Utc;
 use tokio::sync::Semaphore;
 use tokio::task::JoinSet;
 use tokio_util::sync::CancellationToken;
@@ -9,10 +8,10 @@ use crate::archiver::order::AppendSink;
 use crate::archiver::{BlockTransactions, ProcessOutcome};
 use crate::blockchain::{BlockReference, BlockchainData, BlockchainTypes};
 use crate::archiver::datakind::{DataKind, DataOptions};
-use crate::notify::Notification;
+use crate::notify::NotificationBuilder;
 use crate::archiver::range::{Height, Range};
 use crate::global;
-use crate::storage::{TargetFile, TargetFileWriter, WriteTarget};
+use crate::storage::{TargetFileWriter, WriteTarget};
 
 impl<B: BlockchainTypes, TS: WriteTarget> Archiver<B, TS> {
 
@@ -26,7 +25,7 @@ impl<B: BlockchainTypes, TS: WriteTarget> Archiver<B, TS> {
     pub async fn process_blocks(
         &self,
         blocks: Range,
-        notification: Notification,
+        template: NotificationBuilder,
         options: &DataOptions,
         cancel: &CancellationToken,
     ) -> anyhow::Result<ProcessOutcome<BlockTransactions<B>>> {
@@ -34,7 +33,7 @@ impl<B: BlockchainTypes, TS: WriteTarget> Archiver<B, TS> {
         if shutdown.is_signalled() {
             return Ok(ProcessOutcome::Completed {
                 value: vec![],
-                notification: None,
+                notifications: vec![],
             });
         }
         let dry_run = global::is_dry_run();
@@ -45,7 +44,6 @@ impl<B: BlockchainTypes, TS: WriteTarget> Archiver<B, TS> {
             // note even though we skip the file, we still fetch the blocks to return them
             tracing::debug!(range = %blocks, "Skipping existing file");
         }
-        let file_url = file.as_ref().map(|f| f.get_url());
         let file = file.map(Arc::new);
         // Order block appends by height when the target requires it
         // (streaming backends). For file backends `needs_ordering()` is false
@@ -135,11 +133,16 @@ impl<B: BlockchainTypes, TS: WriteTarget> Archiver<B, TS> {
             .map(|(_, block, txes)| (block, txes))
             .collect();
 
-        if !dry_run {
+        // Build the notifications (one per location the writer reports) but
+        // defer the send to `archive()`. If a concurrent process_txes /
+        // process_traces ends up cancelled, the archiver will discard all
+        // queued notifications atomically so the consumer never sees a torn
+        // notification stream for the doomed block.
+        let notifications = if !dry_run {
             // Close the ordering layer first — it drains any buffered rows
             // into the underlying writer (no-op for the direct variant). Only
-            // then is it safe to take the sole reference to the writer and
-            // close it.
+            // then is it safe to take the sole reference to the writer, ask it
+            // where the data landed, and close it.
             if let Some(sink) = sink {
                 let sink = Arc::into_inner(sink)
                     .ok_or_else(|| anyhow!("AppendSink still referenced after all tasks completed"))?;
@@ -148,23 +151,23 @@ impl<B: BlockchainTypes, TS: WriteTarget> Archiver<B, TS> {
             if let Some(file) = file {
                 let file = Arc::into_inner(file)
                     .ok_or_else(|| anyhow!("File writer still referenced after all tasks completed"))?;
+                let locations = file.locations();
                 let _ = file.close().await?;
+                locations
+            } else {
+                vec![]
             }
-        }
-        // Build the notification but defer the send to `archive()`. If a
-        // concurrent process_txes / process_traces ends up cancelled, the
-        // archiver will discard all queued notifications atomically so the
-        // consumer never sees a torn notification stream for the doomed
-        // block.
-        let notification = file_url.map(|file_url| Notification {
-            file_type: DataKind::Blocks,
-            location: file_url,
-            ts: Utc::now(),
-            ..notification
-        });
+        } else {
+            // dry-run writes nothing, so there is nothing to notify about
+            vec![]
+        };
+        let notifications = notifications
+            .into_iter()
+            .map(|(range, location)| template.notification(DataKind::Blocks, &range, location))
+            .collect();
         Ok(ProcessOutcome::Completed {
             value: results,
-            notification,
+            notifications,
         })
     }
 }

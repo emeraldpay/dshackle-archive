@@ -26,15 +26,16 @@ pub type BlockHash = String;
 /// upstream cancellation (e.g., a re-org invalidating the block being
 /// fetched).
 ///
-/// `Completed { value, notification }` is the normal outcome — work
-/// finished and produced the inner value, plus an optional notification
-/// the caller should publish once the entire run is known to be
-/// uncancelled. Notifications are NOT sent inside the process step itself:
-/// otherwise a concurrent `process_txes` and `process_traces` could race
-/// the cancellation signal and emit a torn notification stream (one side
-/// publishes before observing the cancel, the other observes it and
-/// stays silent), leaving downstream consumers with partial-block state
-/// they can't distinguish from corruption.
+/// `Completed { value, notifications }` is the normal outcome — work
+/// finished and produced the inner value, plus the notifications the
+/// caller should publish once the entire run is known to be uncancelled
+/// (one per location the target reported; per-height targets produce one
+/// per archived height). Notifications are NOT sent inside the process
+/// step itself: otherwise a concurrent `process_txes` and
+/// `process_traces` could race the cancellation signal and emit a torn
+/// notification stream (one side publishes before observing the cancel,
+/// the other observes it and stays silent), leaving downstream consumers
+/// with partial-block state they can't distinguish from corruption.
 ///
 /// `Cancelled` means the run was abandoned cooperatively; any
 /// partially-written rows are dropped and the file is left to Drop (which
@@ -46,7 +47,7 @@ pub type BlockHash = String;
 pub enum ProcessOutcome<T> {
     Completed {
         value: T,
-        notification: Option<Notification>,
+        notifications: Vec<Notification>,
     },
     Cancelled,
 }

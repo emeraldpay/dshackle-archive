@@ -239,6 +239,9 @@ mod tests {
             self.appended.lock().unwrap().push(row.height);
             Ok(())
         }
+        fn locations(&self) -> Vec<(crate::archiver::range::Range, crate::notify::Location)> {
+            vec![]
+        }
         async fn close(self) -> Result<()> {
             Ok(())
         }
@@ -427,6 +430,9 @@ mod tests {
     impl TargetFileWriter for FailingWriter {
         async fn append(&self, _row: ArchiveRow) -> Result<()> {
             Err(anyhow!("simulated broker reject"))
+        }
+        fn locations(&self) -> Vec<(crate::archiver::range::Range, crate::notify::Location)> {
+            vec![]
         }
         async fn close(self) -> Result<()> {
             Ok(())

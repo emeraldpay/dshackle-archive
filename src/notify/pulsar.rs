@@ -121,7 +121,9 @@ mod tests {
             height_start: 100,
             height_end: 120,
             maturity: None,
-            location: "file://archive/range-100_120.blocks.avro".to_string(),
+            location: crate::notify::Location::File {
+                url: "file://archive/range-100_120.blocks.avro".to_string(),
+            },
         }).await;
 
         tokio::time::sleep(Duration::from_secs(1)).await;
