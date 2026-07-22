@@ -1,7 +1,12 @@
+// Copyright 2026 EmeraldPay Ltd
+//
+// Licensed under the Apache License, Version 2.0
+
 use std::collections::BTreeMap;
 use std::collections::btree_map::Entry;
 use std::str::FromStr;
 use std::sync::Arc;
+use std::time::Duration;
 use async_trait::async_trait;
 use tokio::sync::mpsc::Receiver;
 use tokio_util::sync::CancellationToken;
@@ -151,6 +156,32 @@ impl<B: BlockchainTypes + 'static> NextBlock for ReorgAwareFollower<B> {
     }
 }
 
+/// Upper bound on a single linkage fetch during the re-org walk.
+///
+/// The follower must never block indefinitely: it is the component that
+/// detects re-orgs and fires the cancellation tokens, so nothing can cancel
+/// *it*, and a hung fetch would also block the head event that announces the
+/// replacement. The chain providers keep their `fetch_block_link` retries
+/// bounded for the same reason; this timeout enforces the invariant for any
+/// provider that inherits the trait's default, policy-driven implementation.
+const LINK_FETCH_TIMEOUT: Duration = Duration::from_secs(60);
+
+/// [`BlockchainData::fetch_block_link`] wrapped in [`LINK_FETCH_TIMEOUT`].
+async fn fetch_link_bounded<B: BlockchainTypes>(
+    data_provider: &Arc<B::DataProvider>,
+    reference: &BlockReference<B::BlockHash>,
+) -> anyhow::Result<BlockHeaderInfo> {
+    tokio::time::timeout(LINK_FETCH_TIMEOUT, data_provider.fetch_block_link(reference))
+        .await
+        .map_err(|_| {
+            let what = match reference {
+                BlockReference::Hash(hash) => format!("{:?}", hash),
+                BlockReference::Height(h) => format!("height {}", h.height),
+            };
+            anyhow::anyhow!("Timed out fetching block linkage for {}", what)
+        })?
+}
+
 /// Process one head event: validate parent linkage, walk back if needed,
 /// emit the newly-linked heights in chain order — cancelling any prior
 /// token at a height that's being replaced.
@@ -173,7 +204,7 @@ async fn handle_head_event<B: BlockchainTypes>(
     // subscription only gives us `(height, hash)`; the parent_hash comes from
     // the block header itself.
     let head_ref: BlockReference<B::BlockHash> = head_evt.clone().into();
-    let head_link = data_provider.fetch_block_link(&head_ref).await?;
+    let head_link = fetch_link_bounded::<B>(data_provider, &head_ref).await?;
 
     // Idempotency: skip only when the latest *live* hash at this height
     // matches the incoming one — i.e., this is the broker re-emitting a
@@ -224,7 +255,7 @@ async fn handle_head_event<B: BlockchainTypes>(
             break;
         }
         let parent_ref = BlockReference::Hash(cursor_parent_typed);
-        cursor = data_provider.fetch_block_link(&parent_ref).await?;
+        cursor = fetch_link_bounded::<B>(data_provider, &parent_ref).await?;
     }
 
     // Walk fully succeeded — now commit. Trim BEFORE inserts so a deep

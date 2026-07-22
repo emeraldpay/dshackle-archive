@@ -1,3 +1,7 @@
+// Copyright 2026 EmeraldPay Ltd
+//
+// Licensed under the Apache License, Version 2.0
+
 use std::sync::Mutex;
 use std::time::Duration;
 use apache_avro::{Codec, ZstandardSettings};
@@ -157,6 +161,12 @@ fn read_env(name: &str) -> Option<usize> {
 /// accept the default or switch to `Forever`.
 pub const DEFAULT_RETRY_MAX_ATTEMPTS: usize = 10;
 
+/// Default cap on the time between retry attempts for blockchain fetches,
+/// shared by all chain providers. Higher than the typical 95th-percentile RPC
+/// latency so a degraded node has space to recover, but low enough that a
+/// transient blip doesn't stall a block for noticeably long.
+pub const RETRY_MAX_DELAY_FAST_SECS: u64 = 2;
+
 /// Runtime retry policy resolved from CLI args (and the target type).
 ///
 /// File targets default to [`RetryPolicy::Bounded`]: a transient node failure
@@ -215,13 +225,31 @@ pub fn get_retry_policy() -> RetryPolicy {
 /// have the same type at the call site (the underlying iterator types
 /// otherwise differ between `Take<…>` and the unbounded form).
 pub fn retry_strategy(max_delay_secs: u64) -> Box<dyn Iterator<Item = Duration> + Send> {
-    let base = ExponentialFactorBackoff::from_millis(100, 1.75)
-        .max_delay(Duration::from_secs(max_delay_secs))
-        .map(jitter);
     match get_retry_policy() {
-        RetryPolicy::Bounded { max_attempts } => Box::new(base.take(max_attempts)),
-        RetryPolicy::Forever => Box::new(base),
+        RetryPolicy::Bounded { max_attempts } => Box::new(backoff(max_delay_secs).take(max_attempts)),
+        RetryPolicy::Forever => Box::new(backoff(max_delay_secs)),
     }
+}
+
+/// Always-bounded variant of [`retry_strategy`] that ignores the `--retry`
+/// policy.
+///
+/// For callers that must not wait indefinitely even under `--retry=forever`.
+/// Specifically the re-org follower's linkage walk: the follower is the
+/// component that *detects* replaced blocks and fires the cancellation
+/// tokens, so no signal can ever break it out of a retry on a block that was
+/// re-orged away and will never appear. It has to give up on its own and let
+/// the next head event re-validate the chain.
+pub fn retry_strategy_bounded(max_delay_secs: u64) -> Box<dyn Iterator<Item = Duration> + Send> {
+    Box::new(backoff(max_delay_secs).take(DEFAULT_RETRY_MAX_ATTEMPTS))
+}
+
+/// Backoff shape shared by every retry strategy: exponential with jitter,
+/// capped at `max_delay_secs` between attempts.
+fn backoff(max_delay_secs: u64) -> impl Iterator<Item = Duration> + Send {
+    ExponentialFactorBackoff::from_millis(100, 1.75)
+        .max_delay(Duration::from_secs(max_delay_secs))
+        .map(jitter)
 }
 
 #[cfg(test)]

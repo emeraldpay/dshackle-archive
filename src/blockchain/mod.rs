@@ -1,3 +1,7 @@
+// Copyright 2026 EmeraldPay Ltd
+//
+// Licensed under the Apache License, Version 2.0
+
 pub mod ethereum;
 pub mod connection;
 pub mod bitcoin;
@@ -25,6 +29,22 @@ use crate::{
     record::{ArchiveRow, BlockchainType},
 };
 use crate::archiver::range::Height;
+use crate::errors::BlockchainError;
+
+/// Parse a JSON payload from a blockchain response, keeping the failure
+/// diagnosable: `null` responses are retried away before parsing (see the
+/// chain providers' `*_expected` fetchers), so a failure here means the
+/// upstream returned genuinely malformed data — log the serde error and a
+/// payload sample before collapsing it into the opaque
+/// [`BlockchainError::InvalidResponse`].
+pub fn parse_json_response<T: serde::de::DeserializeOwned>(raw: &[u8]) -> Result<T, BlockchainError> {
+    serde_json::from_slice::<T>(raw)
+        .map_err(|e| {
+            let sample = String::from_utf8_lossy(&raw[..raw.len().min(1024)]);
+            tracing::warn!("Invalid JSON response ({}): {}", e, sample);
+            BlockchainError::InvalidResponse
+        })
+}
 
 ///
 /// Defined the data types for a blockchain
