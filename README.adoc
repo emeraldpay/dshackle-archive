@@ -8,15 +8,15 @@ image:https://img.shields.io/docker/pulls/emeraldpay/dshackle-archive?style=flat
 image:https://img.shields.io/github/license/emeraldpay/dshackle-archive.svg?style=flat-square&maxAge=2592000["License",link="https://github.com/emeraldpay/dshackle-archive/blob/master/LICENSE"]
 image:https://img.shields.io/discord/1107840420240707704?style=flat-square[Discord,link="https://discord.gg/k9HpF9Jqee"]
 
-Dshackle Archive copies JSON data from a blockchain to a plain files ("tables") archive
-(i.e., it's the _Extraction_ of data, as in ETL).
-The archive is Avro files which contain blocks and transaction details fetched from blockchain nodes via their APIs.
-The Avro tables contain the JSON responses _as is_.
+Dshackle Archive copies JSON data from a blockchain to a plain files ("tables") archive (i.e., it's the _Extraction_ of data, as in ETL).
+
+The archive is Avro or JSON files which contain blocks and transaction details fetched from blockchain nodes via their APIs.
+The resulting archive contain the JSON responses _as is_.
 
 Features:
 
 - Extracts data from *Bitcoin and Ethereum* compatible blockchains.
-- Produces data in *Avro format*, where one file could be a _range_ of blocks or a _separate_ file per each block
+- Produces data in *Avro* or *JSON*, where one file could be a _range_ of blocks or a _separate_ file per each block
 - Archival can be scaled by using multiple blockchain nodes by using https://github.com/emeraldpay/dshackle[Dshackle Load Balancer].
 - Runs in:
 ** batch archive mode, when _historical data_ is archived
@@ -24,11 +24,12 @@ Features:
 - Archive to:
 ** Filesystem
 ** S3
+** Apache Pulsar
 - Produces Notification to:
 ** Filesystem
 ** Apache Pulsar
 
-The general idea it to use Dshackle Archive to copy data from a blockchain to a plain files, keeping the data structures as is, and then use traditional Big Data tools (Spark, Beam, etc.) to analyse data in a scalable way.
+The general idea it to use Dshackle Archive to copy data from a blockchain to a plain files, keeping the data structures as is, and then use traditional Big Data tools (Spark, Flink, Beam, etc.) to analyze the blockchain data.
 
 NOTE: It takes several weeks to archive the whole blockchain. It's a very IO intensive operation, but can be scaled by using multiple nodes.
 
