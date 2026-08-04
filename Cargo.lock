@@ -2017,7 +2017,7 @@ dependencies = [
 
 [[package]]
 name = "dshackle-archive"
-version = "0.8.0-dev"
+version = "0.8.0"
 dependencies = [
  "alloy",
  "anyhow",
