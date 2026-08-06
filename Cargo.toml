@@ -9,7 +9,7 @@ description = "Extract blockchain data in JSON format and archive it as Avro fil
 clap = { version = "4.6", features = ["derive", "string"] }
 serde = { version = "1.0" , features = ["derive"] }
 serde_json = { version = "1.0", features = ["raw_value"] }
-tokio = { version = "1.50", features = ["fs", "rt-multi-thread", "macros"] }
+tokio = { version = "1.53", features = ["fs", "rt-multi-thread", "macros"] }
 tokio-retry2 = { version = "0.9", features = ["jitter"] }
 tokio-util = { version = "0.7" , features = ["io", "io-util", "rt"] }
 tonic = { version = "0.14", features = ["tls-ring", "tls-native-roots", "gzip"] }
@@ -17,7 +17,7 @@ futures = "0.3"
 async-trait = "0.1"
 #ginepro = "0.9"
 ginepro = { git = "https://github.com/dmarteau/ginepro", branch = "tonic-0.14-support"}
-pulsar = "6.7"
+pulsar = "6.8"
 apache-avro = { version = "0.21", features = ["snappy", "zstandard"] }
 strum = "0.27"
 emerald-api = { version = "0.1", features = ["client-blockchain"] }
@@ -25,27 +25,27 @@ enum-display-derive = "0.1"
 futures-util = "0.3"
 lazy_static = "1.5"
 chrono = "0.4"
-alloy = { version = "1.8", features = ["rpc-types"] }
+alloy = { version = "2.3", features = ["rpc-types"] }
 hex = "0.4.3"
 shutdown = "0.5"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 anyhow = { version = "1.0", features = ["backtrace"] }
 thiserror = "2.0"
-regex = "1.12"
-object_store = { version = "0.13", features = ["aws"] }
-bytes = "1.11"
+regex = "1.13"
+object_store = { version = "0.14", features = ["aws"] }
+bytes = "1.12"
 url = "2.5"
-rustls-platform-verifier = "0.6"
-shadow-rs = { version = "1.4", default-features = false }
-itertools = "0.14"
+rustls-platform-verifier = "0.7"
+shadow-rs = { version = "2.0", default-features = false }
+itertools = "0.15"
 prometheus = "0.14"
 warp = { version = "0.4", features = ["server"] }
 
 [build-dependencies]
-shadow-rs = "1.4"
+shadow-rs = "2.0"
 
 [dev-dependencies]
-testcontainers = "0.27"
+testcontainers = "0.28"
 rand = "0.10"
 tempfile = "3"
