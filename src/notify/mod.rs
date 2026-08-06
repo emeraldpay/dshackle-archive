@@ -1,16 +1,22 @@
 pub mod pulsar;
+pub mod kafka;
 pub mod empty;
 pub mod fs;
 pub mod location;
+pub mod target;
 
+use std::sync::Arc;
+use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use crate::archiver::datakind::DataKind;
 use crate::archiver::range::Range;
 use tokio::sync::mpsc::{Sender};
 use crate::args::Args;
+use crate::kafka::BootstrapBrokers;
 use anyhow::Result;
 
 pub use location::{FileGroup, FileSlot, Location, MessageRef, RowFiles};
+pub use target::NotifyTarget;
 
 /// Notification represents the metadata for an archive event.
 #[derive(Clone, Serialize, Deserialize, Debug)]
@@ -95,25 +101,36 @@ impl Notification {
     }
 }
 
-pub trait Notifier {
+#[async_trait]
+pub trait Notifier: Send + Sync {
     fn start(&self) -> Sender<Notification>;
+
+    ///
+    /// Wait for the notifications already submitted to be delivered, and
+    /// report a delivery failure that happened in the background.
+    ///
+    /// Called once the command is over and its senders are gone. Targets that
+    /// deliver synchronously have nothing to wait for.
+    async fn flush(&self) -> Result<()> {
+        Ok(())
+    }
 }
 
-pub async fn create_notifier(args: &Args) -> Result<Box<dyn Notifier>> {
-    if let Some(notify) = &args.notify {
-        if let Some(dir) = &notify.notify_dir {
-            tracing::info!("Save updates to file in directory: {:?}", dir);
-            return Ok(Box::new(fs::FsNotifier::new(dir)));
+pub async fn create_notifier(args: &Args) -> Result<Arc<dyn Notifier>> {
+    match NotifyTarget::from_args(args)? {
+        NotifyTarget::Disabled => Ok(Arc::new(empty::EmptyNotifier::default())),
+        NotifyTarget::Dir(dir) => {
+            tracing::info!("Save updates to file in directory: {}", dir);
+            Ok(Arc::new(fs::FsNotifier::new(dir)))
         }
-        if let Some(pulsar_url) = &notify.pulsar_url {
-            if notify.pulsar_topic.is_none() {
-                tracing::warn!("Pulsar topic is not set. Notifications will not be sent.");
-                return Ok(Box::new(empty::EmptyNotifier::default()));
-            }
-            let topic = notify.pulsar_topic.clone().unwrap();
-            tracing::info!("Send updates to Pulsar at {} topic {}", &pulsar_url, topic);
-            return Ok(Box::new(pulsar::PulsarNotifier::new(pulsar_url.clone(), topic).await?));
+        NotifyTarget::Pulsar { url, topic } => {
+            tracing::info!("Send updates to Pulsar at {} topic {}", url, topic);
+            Ok(Arc::new(pulsar::PulsarNotifier::new(url, topic).await?))
+        }
+        NotifyTarget::Kafka { url, topic } => {
+            tracing::info!("Send updates to Kafka at {} topic {}", url, topic);
+            let brokers = url.parse::<BootstrapBrokers>()?;
+            Ok(Arc::new(kafka::KafkaNotifier::new(brokers, topic).await?))
         }
     }
-    Ok(Box::new(empty::EmptyNotifier::default()))
 }

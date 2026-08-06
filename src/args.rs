@@ -240,6 +240,15 @@ pub struct Notify {
     /// Send notifications as JSON to the Pulsar with specified URL (notify.pulsar.topic must be specified)
     #[arg(long = "notify.pulsar.url", required = false, alias = "notify-pulsar-url")]
     pub pulsar_url: Option<String>,
+
+    /// Send notifications as JSON to the Kafka to the specified topic (notify.kafka.url must be specified)
+    #[arg(long = "notify.kafka.topic", required = false, alias = "notify-kafka-topic")]
+    pub kafka_topic: Option<String>,
+
+    /// Send notifications as JSON to the Kafka brokers at the specified addresses, i.e. `kafka://localhost:9092`
+    /// or a comma separated list of them (notify.kafka.topic must be specified)
+    #[arg(long = "notify.kafka.url", required = false, alias = "notify-kafka-url")]
+    pub kafka_url: Option<String>,
 }
 
 impl Default for Notify {
@@ -247,6 +256,8 @@ impl Default for Notify {
         Self {
             pulsar_topic: None,
             pulsar_url: None,
+            kafka_topic: None,
+            kafka_url: None,
             notify_dir: None,
         }
     }

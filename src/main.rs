@@ -48,6 +48,7 @@ pub mod storage;
 pub mod avros;
 pub mod formats;
 pub mod notify;
+pub mod kafka;
 mod global;
 pub mod metrics;
 pub(crate) mod progress;
@@ -107,6 +108,10 @@ async fn main_inner() -> Result<()> {
             _ => {}
         }
     }
+
+    // resolved here only to reject a broken setup before the run connects to
+    // anything; the notifier itself is built later, per target
+    notify::NotifyTarget::from_args(&args)?;
 
     if storage::is_pulsar(&args) {
         if args.command != Command::Stream {
@@ -177,13 +182,24 @@ async fn run_with_read_target<B: BlockchainTypes + 'static, TS: ReadTarget + 'st
     args: &Args,
 ) -> Result<()> {
     let builder = build_with_target(builder, target, args).await?;
-    match args.command {
+    let notifier = builder.notifier();
+    let executed = match args.command {
         Command::Stream => builder.stream(args).await.execute().await,
         Command::Fix => builder.fix(args).execute().await,
         Command::Archive => builder.archive(args).execute().await,
         Command::Verify => builder.verify(args).execute().await,
         Command::Compact => builder.compact(args).execute().await,
-    }
+    };
+    finish(notifier, executed).await
+}
+
+///
+/// Deliver whatever notifications are still queued now that the command is
+/// over, and report the run's outcome. A command failure takes precedence:
+/// undelivered notifications are usually a consequence of it.
+async fn finish(notifier: Arc<dyn Notifier>, executed: Result<()>) -> Result<()> {
+    let flushed = notifier.flush().await;
+    executed.and(flushed)
 }
 
 ///
@@ -198,7 +214,8 @@ async fn run_with_scan_target<B: BlockchainTypes + 'static, TS: ScanTarget + 'st
     args: &Args,
 ) -> Result<()> {
     let builder = build_with_target(builder, target, args).await?;
-    match args.command {
+    let notifier = builder.notifier();
+    let executed = match args.command {
         Command::Stream => builder.stream(args).await.execute().await,
         Command::Fix => builder.fix(args).execute().await,
         Command::Archive => builder.archive(args).execute().await,
@@ -206,7 +223,8 @@ async fn run_with_scan_target<B: BlockchainTypes + 'static, TS: ScanTarget + 'st
             "{:?} requires a read-capable target",
             args.command
         )),
-    }
+    };
+    finish(notifier, executed).await
 }
 
 ///
@@ -220,13 +238,15 @@ async fn run_with_write_target<B: BlockchainTypes + 'static, TS: WriteTarget + '
     args: &Args,
 ) -> Result<()> {
     let builder = build_with_target(builder, target, args).await?;
-    match args.command {
+    let notifier = builder.notifier();
+    let executed = match args.command {
         Command::Stream => builder.stream_write_only(args).await.execute().await,
         _ => Err(anyhow!(
             "{:?} is not supported by a write-only streaming target",
             args.command
         )),
-    }
+    };
+    finish(notifier, executed).await
 }
 
 async fn build_with_target<B: BlockchainTypes + 'static, TS: WriteTarget + 'static>(
@@ -246,7 +266,7 @@ async fn build_with_target<B: BlockchainTypes + 'static, TS: WriteTarget + 'stat
 
 struct Builder<B: BlockchainTypes> {
     b: PhantomData<B>,
-    notifier: Option<Box<dyn Notifier>>,
+    notifier: Option<Arc<dyn Notifier>>,
 }
 
 struct BuilderWithTarget<B: BlockchainTypes, TS: WriteTarget> {
@@ -267,7 +287,7 @@ impl<B> Builder<B> where B: BlockchainTypes {
         }
     }
 
-    fn with_notifier(self, notifier: Box<dyn Notifier>) -> Self {
+    fn with_notifier(self, notifier: Arc<dyn Notifier>) -> Self {
         Self {
             notifier: Some(notifier),
             ..self
@@ -292,6 +312,12 @@ impl<B, TS> BuilderWithTarget<B, TS> where B: BlockchainTypes, TS: WriteTarget {
 }
 
 impl<B, TS> BuilderWithData<B, TS> where B: BlockchainTypes + 'static, TS: WriteTarget + 'static {
+
+    /// The notifier the commands publish to, so the caller can flush it once
+    /// the command is done and its senders are gone.
+    fn notifier(&self) -> Arc<dyn Notifier> {
+        self.parent.parent.notifier.clone().unwrap()
+    }
 
     /// `stream` with `--continue` support — requires [`ScanTarget`] so it can
     /// enumerate already-archived data before starting the live tail.

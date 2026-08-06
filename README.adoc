@@ -28,6 +28,7 @@ Features:
 - Produces Notification to:
 ** Filesystem
 ** Apache Pulsar
+** Apache Kafka
 
 The general idea it to use Dshackle Archive to copy data from a blockchain to a plain files, keeping the data structures as is, and then use traditional Big Data tools (Spark, Flink, Beam, etc.) to analyze the blockchain data.
 
@@ -69,6 +70,12 @@ Options:
 
       --notify.pulsar.url <PULSAR_URL>
           Send notifications as JSON to the Pulsar with specified URL (notify.pulsar.topic must be specified)
+
+      --notify.kafka.topic <KAFKA_TOPIC>
+          Send notifications as JSON to the Kafka to the specified topic (notify.kafka.url must be specified)
+
+      --notify.kafka.url <KAFKA_URL>
+          Send notifications as JSON to the Kafka brokers at the specified addresses, i.e. `kafka://localhost:9092` or a comma separated list of them (notify.kafka.topic must be specified)
 
       --auth.aws.access-key <ACCESS_KEY>
           AWS / S3 Access Key
@@ -193,11 +200,22 @@ I.e., each block comes with in a separate group of files.
 One for the block itself, another one for all transactions in that block, and third for traces if selected.
 To merge the individual files into larger ranges use `compact` command.
 
-To notify an external system, there are two options:
+To notify an external system, there are following options:
 
 - `--notify.dir` - write notifications as JSON line to the specified dir in a file `<dshackle-archive-%STARTTIME.jsonl>`
-- `--notify.pubsub` - send notifications as JSON to the specified Google Pubsub topic
 - `--notify.pulsar.url` + `--notify.pulsar.topic` - send notifications as JSON to the specified Apache Pulsar topic
+- `--notify.kafka.url` + `--notify.kafka.topic` - send notifications as JSON to the specified Apache Kafka topic
+
+Only one of those targets can be used at a time, and a broker needs both its URL and its topic.
+Anything else stops the archive at startup with an error, instead of quietly sending nothing.
+
+For Kafka the URL is a list of bootstrap brokers, i.e. `kafka://localhost:9092` or `kafka://kafka-1:9092,kafka-2:9092` (the `kafka://` prefix is optional).
+The topic must exist before the archive starts, unless the brokers are configured to auto-create topics.
+
+Notifications are distributed over the topic partitions by `heightStart`, the first block of the notified range.
+For `stream` and `archive` that is the block itself, so all the notifications about one block go to the same partition and keep their order.
+
+A notification that cannot be delivered stops the run with an error: otherwise the archive and the systems reading the topic would silently disagree about what has been archived.
 
 See <<notification-format>>.
 

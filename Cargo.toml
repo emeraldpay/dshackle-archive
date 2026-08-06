@@ -18,6 +18,7 @@ async-trait = "0.1"
 #ginepro = "0.9"
 ginepro = { git = "https://github.com/dmarteau/ginepro", branch = "tonic-0.14-support"}
 pulsar = "6.8"
+rskafka = "0.6"
 apache-avro = { version = "0.21", features = ["snappy", "zstandard"] }
 strum = "0.27"
 emerald-api = { version = "0.1", features = ["client-blockchain"] }
