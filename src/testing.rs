@@ -11,8 +11,57 @@ use crate::archiver::Archiver;
 use crate::archiver::datakind::{DataKind, TraceOptions};
 use crate::archiver::range::Range;
 use crate::storage::{TargetFileWriter, ReadTarget};
+use crate::kafka::BootstrapBrokers;
+use testcontainers::core::{IntoContainerPort, WaitFor};
+use testcontainers::runners::AsyncRunner;
+use testcontainers::{ContainerAsync, GenericImage, ImageExt};
 
 static INIT: std::sync::Once = std::sync::Once::new();
+
+/// Start a single-node Kafka broker in KRaft mode, and the address to reach it.
+///
+/// `partitions` becomes the broker's `num.partitions` — the shape it gives
+/// every topic it creates — so pass more than one wherever the height-to-
+/// partition mapping matters. `auto_create` toggles
+/// `auto.create.topics.enable`; turn it off to make a test go through the
+/// archive's own topic creation instead.
+pub async fn start_kafka(
+    partitions: u32,
+    auto_create: bool,
+) -> (ContainerAsync<GenericImage>, BootstrapBrokers) {
+    // A Kafka broker tells clients the address to reach it at, and for a
+    // container that has to be the mapped *host* port — which therefore has to
+    // be known before the broker starts.
+    let host_port = std::net::TcpListener::bind("127.0.0.1:0")
+        .unwrap()
+        .local_addr()
+        .unwrap()
+        .port();
+
+    let container = GenericImage::new("apache/kafka", "3.9.0")
+        .with_wait_for(WaitFor::message_on_stdout("Kafka Server started"))
+        .with_mapped_port(host_port, 9092.tcp())
+        .with_env_var("KAFKA_NODE_ID", "1")
+        .with_env_var("KAFKA_PROCESS_ROLES", "broker,controller")
+        // host left empty on purpose: it binds every interface, while a
+        // literal 0.0.0.0 makes the broker refuse to start because it also
+        // advertises the controller listener
+        .with_env_var("KAFKA_LISTENERS", "PLAINTEXT://:9092,CONTROLLER://:9093")
+        .with_env_var("KAFKA_ADVERTISED_LISTENERS", format!("PLAINTEXT://127.0.0.1:{}", host_port))
+        .with_env_var("KAFKA_LISTENER_SECURITY_PROTOCOL_MAP", "CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT")
+        .with_env_var("KAFKA_INTER_BROKER_LISTENER_NAME", "PLAINTEXT")
+        .with_env_var("KAFKA_CONTROLLER_LISTENER_NAMES", "CONTROLLER")
+        .with_env_var("KAFKA_CONTROLLER_QUORUM_VOTERS", "1@localhost:9093")
+        .with_env_var("KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR", "1")
+        .with_env_var("KAFKA_NUM_PARTITIONS", partitions.to_string())
+        .with_env_var("KAFKA_AUTO_CREATE_TOPICS_ENABLE", auto_create.to_string())
+        .start()
+        .await
+        .unwrap();
+
+    let brokers: BootstrapBrokers = format!("kafka://127.0.0.1:{}", host_port).parse().unwrap();
+    (container, brokers)
+}
 
 pub fn start_test() {
     INIT.call_once(|| {

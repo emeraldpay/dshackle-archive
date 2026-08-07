@@ -25,7 +25,7 @@ use crate::notify::Maturity;
 /// It appends fresh blocks one by one to the archive.
 ///
 /// Generic over any [`WriteTarget`], so it serves both file-based targets
-/// (Avro, JSON) and streaming targets (Pulsar). The optional [`StreamResume`]
+/// (Avro, JSON) and streaming targets (Pulsar, Kafka). The optional [`StreamResume`]
 /// strategy lets file-based callers opt into `--continue` behaviour while
 /// streaming targets simply pass `None` — they don't have a tail-scan
 /// capability in the v1 implementation.
@@ -59,9 +59,9 @@ fn stream_data_options(config: &Args) -> DataOptions {
 impl<B: BlockchainTypes, TS: WriteTarget> StreamCommand<B, TS> {
     /// Build a stream command for any [`WriteTarget`], with no resume support.
     ///
-    /// Used by streaming targets (Pulsar). Rejects `--continue` at startup
-    /// because the target can't enumerate existing data. The Pulsar dispatch
-    /// path in `main` already rejects `--continue` upfront with a clearer
+    /// Used by streaming targets (Pulsar, Kafka). Rejects `--continue` at
+    /// startup because the target can't enumerate existing data. The streaming
+    /// dispatch path in `main` already rejects `--continue` upfront with a clearer
     /// message; this check is the fallback that catches any future write-only
     /// target wired in the same way.
     pub async fn new(config: &Args, archiver: Archiver<B, TS>) -> Result<Self> {

@@ -10,8 +10,8 @@
 //! one URL, the JSON layout is a set of per-field files, a streaming broker is
 //! a set of message ids. [`Location`] carries all of them under a single
 //! `type`-tagged JSON object, so consumers can dispatch on `location.type` and
-//! new target types (e.g., Kafka) extend the enum without breaking the overall
-//! notification schema.
+//! new target types extend the enum without breaking the overall notification
+//! schema.
 
 use serde::{Deserialize, Serialize};
 use crate::archiver::range::Range;
@@ -40,6 +40,12 @@ pub enum Location {
     /// (Apache Pulsar). Each message names its actual topic — a consumer
     /// can address it directly, with no topic-name construction on its side.
     Pulsar {
+        messages: Vec<MessageRef>,
+    },
+    /// Same as [`Location::Pulsar`], for messages published to Apache Kafka.
+    /// Kept as its own variant rather than a shared "broker" one so a consumer
+    /// knows how to read `messageId` without guessing.
+    Kafka {
         messages: Vec<MessageRef>,
     },
 }
@@ -130,7 +136,8 @@ pub struct MessageRef {
     /// Transaction id. Present on per-transaction messages only.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tx_id: Option<String>,
-    /// Broker message id. For Pulsar: `ledgerId:entryId:partition[:batchIndex]`.
+    /// Broker message id. For Pulsar: `ledgerId:entryId:partition[:batchIndex]`;
+    /// for Kafka: `partition:offset`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub message_id: Option<String>,
 }
@@ -230,6 +237,23 @@ mod tests {
         assert_eq!(
             json,
             r#"{"type":"pulsar","messages":[{"topic":"persistent://public/default/archive-eth-blocks","field":"blocks","messageId":"125:4:-1"}]}"#
+        );
+    }
+
+    #[test]
+    fn kafka_location_json() {
+        let location = Location::Kafka {
+            messages: vec![MessageRef {
+                topic: "archive-eth-tx-json".to_string(),
+                field: "tx-json".to_string(),
+                tx_id: Some("0xabc".to_string()),
+                message_id: Some("2:1041".to_string()),
+            }],
+        };
+        let json = serde_json::to_string(&location).unwrap();
+        assert_eq!(
+            json,
+            r#"{"type":"kafka","messages":[{"topic":"archive-eth-tx-json","field":"tx-json","txId":"0xabc","messageId":"2:1041"}]}"#
         );
     }
 

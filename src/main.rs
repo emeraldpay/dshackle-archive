@@ -30,6 +30,7 @@ use crate::{
         Command,
         Args,
         Format,
+        StreamTarget,
     },
     blockchain::{BitcoinType, BlockchainTypes, EthereumType},
     notify::Notifier,
@@ -113,16 +114,19 @@ async fn main_inner() -> Result<()> {
     // anything; the notifier itself is built later, per target
     notify::NotifyTarget::from_args(&args)?;
 
-    if storage::is_pulsar(&args) {
+    if let Some(stream) = args.stream.as_ref().filter(|s| s.is_streaming()) {
+        // resolve the scheme first: an unknown one is a bad --stream.url, and
+        // saying so beats sending the user off to change their command
+        stream.target()?;
         if args.command != Command::Stream {
             return Err(anyhow!(
-                "{:?} is not supported with the Pulsar streaming target (topics are append-only — only `stream` can publish to them)",
+                "{:?} is not supported with a streaming target (topics are append-only — only `stream` can publish to them)",
                 args.command
             ));
         }
         if args.continue_last {
             return Err(anyhow!(
-                "--continue is not supported by the Pulsar streaming target (no tail-scan capability in v1)"
+                "--continue is not supported by a streaming target (no tail-scan capability in v1)"
             ));
         }
     }
@@ -146,19 +150,17 @@ async fn main_inner() -> Result<()> {
 }
 
 async fn run<B: BlockchainTypes + 'static>(builder: Builder<B>, args: &Args) -> Result<()> {
-    if let Some(stream) = args.stream.as_ref() {
-        if let Some(url) = stream.stream_url.as_deref() {
-            if !storage::is_pulsar(args) {
-                return Err(anyhow!(
-                    "Unsupported --stream.url scheme: {} (only pulsar:// is supported today)",
-                    url
-                ));
+    if let Some(stream) = args.stream.as_ref().filter(|s| s.is_streaming()) {
+        return match stream.target()? {
+            StreamTarget::Pulsar => {
+                run_with_write_target(builder, storage::create_pulsar::<B>(args).await?, args).await
             }
-        }
+            StreamTarget::Kafka => {
+                run_with_write_target(builder, storage::create_kafka::<B>(args).await?, args).await
+            }
+        };
     }
-    if storage::is_pulsar(&args) {
-        run_with_write_target(builder, storage::create_pulsar::<B>(&args).await?, args).await
-    } else if storage::is_fs(&args) {
+    if storage::is_fs(&args) {
         match args.format {
             Format::Avro => run_with_read_target(builder, storage::create_fs(&args)?, args).await,
             Format::Json => run_with_scan_target(builder, storage::create_fs_json(&args)?, args).await,
@@ -228,7 +230,7 @@ async fn run_with_scan_target<B: BlockchainTypes + 'static, TS: ScanTarget + 'st
 }
 
 ///
-/// Dispatch path for write-only targets (today: Pulsar). Only `stream` is
+/// Dispatch path for write-only targets (Pulsar, Kafka). Only `stream` is
 /// available; everything else was already rejected in [`main_inner`] with a
 /// clearer message, but we err here too in case the upfront check is ever
 /// loosened.
@@ -334,7 +336,7 @@ impl<B, TS> BuilderWithData<B, TS> where B: BlockchainTypes + 'static, TS: Write
         command
     }
 
-    /// `stream` against a write-only target (Pulsar). `--continue` is rejected
+    /// `stream` against a write-only target (Pulsar, Kafka). `--continue` is rejected
     /// because there's no scan capability to compute a resume point from.
     async fn stream_write_only(self, args: &Args) -> StreamCommand<B, TS> {
         let notifier = self.parent.parent.notifier.unwrap();

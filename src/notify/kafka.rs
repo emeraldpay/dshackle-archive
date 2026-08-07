@@ -204,11 +204,9 @@ impl TryFrom<&Notification> for Record {
 mod tests {
     use super::*;
     use chrono::{TimeZone, Utc};
-    use testcontainers::core::{IntoContainerPort, WaitFor};
-    use testcontainers::runners::AsyncRunner;
-    use testcontainers::{GenericImage, ImageExt};
     use crate::archiver::datakind::DataKind;
     use crate::notify::{Location, RunMode};
+    use crate::testing::start_kafka;
 
     fn notification() -> Notification {
         Notification {
@@ -239,41 +237,10 @@ mod tests {
         assert_eq!(value, serde_json::to_string(&notification).unwrap());
     }
 
-    /// A Kafka broker tells clients the address to reach it at, and for a
-    /// container that has to be the mapped *host* port — which therefore has to
-    /// be known before the broker starts.
-    fn free_port() -> u16 {
-        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-        listener.local_addr().unwrap().port()
-    }
-
     #[tokio::test]
     async fn sends_to_topic() {
-        let host_port = free_port();
-        let container = GenericImage::new("apache/kafka", "3.9.0")
-            .with_wait_for(WaitFor::message_on_stdout("Kafka Server started"))
-            .with_mapped_port(host_port, 9092.tcp())
-            .with_env_var("KAFKA_NODE_ID", "1")
-            .with_env_var("KAFKA_PROCESS_ROLES", "broker,controller")
-            // host left empty on purpose: it binds every interface, while a
-            // literal 0.0.0.0 makes the broker refuse to start because it also
-            // advertises the controller listener
-            .with_env_var("KAFKA_LISTENERS", "PLAINTEXT://:9092,CONTROLLER://:9093")
-            .with_env_var("KAFKA_ADVERTISED_LISTENERS", format!("PLAINTEXT://127.0.0.1:{}", host_port))
-            .with_env_var("KAFKA_LISTENER_SECURITY_PROTOCOL_MAP", "CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT")
-            .with_env_var("KAFKA_INTER_BROKER_LISTENER_NAME", "PLAINTEXT")
-            .with_env_var("KAFKA_CONTROLLER_LISTENER_NAMES", "CONTROLLER")
-            .with_env_var("KAFKA_CONTROLLER_QUORUM_VOTERS", "1@localhost:9093")
-            .with_env_var("KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR", "1")
-            // more than one, so the height-to-partition mapping actually matters
-            .with_env_var("KAFKA_NUM_PARTITIONS", "3")
-            .start()
-            .await
-            .unwrap();
-
-        let brokers: BootstrapBrokers = format!("kafka://127.0.0.1:{}", host_port).parse().unwrap();
-        println!("Kafka running on {}", brokers);
-
+        // more than one partition, so the height-to-partition mapping matters
+        let (container, brokers) = start_kafka(3, true).await;
         let topic_name = "test-notifications";
         // the topic doesn't exist yet: the broker auto-creates it while
         // KafkaNotifier resolves the partitions
@@ -310,30 +277,22 @@ mod tests {
         container.stop().await.unwrap();
     }
 
+    /// With `auto.create.topics.enable` off, the archive creates the topic
+    /// itself — and leaves its shape to the broker rather than naming a
+    /// partition count of its own.
     #[tokio::test]
-    async fn fails_when_topic_is_gone() {
-        let host_port = free_port();
-        let container = GenericImage::new("apache/kafka", "3.9.0")
-            .with_wait_for(WaitFor::message_on_stdout("Kafka Server started"))
-            .with_mapped_port(host_port, 9092.tcp())
-            .with_env_var("KAFKA_NODE_ID", "1")
-            .with_env_var("KAFKA_PROCESS_ROLES", "broker,controller")
-            .with_env_var("KAFKA_LISTENERS", "PLAINTEXT://:9092,CONTROLLER://:9093")
-            .with_env_var("KAFKA_ADVERTISED_LISTENERS", format!("PLAINTEXT://127.0.0.1:{}", host_port))
-            .with_env_var("KAFKA_LISTENER_SECURITY_PROTOCOL_MAP", "CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT")
-            .with_env_var("KAFKA_INTER_BROKER_LISTENER_NAME", "PLAINTEXT")
-            .with_env_var("KAFKA_CONTROLLER_LISTENER_NAMES", "CONTROLLER")
-            .with_env_var("KAFKA_CONTROLLER_QUORUM_VOTERS", "1@localhost:9093")
-            .with_env_var("KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR", "1")
-            .with_env_var("KAFKA_AUTO_CREATE_TOPICS_ENABLE", "false")
-            .start()
+    async fn creates_a_missing_topic_with_broker_defaults() {
+        // not the default of 1, so a partition count we picked ourselves
+        // would show up below
+        let (container, brokers) = start_kafka(2, false).await;
+        let topic_name = "created-on-demand";
+        KafkaNotifier::new(brokers.clone(), topic_name.to_string())
             .await
-            .unwrap();
+            .expect("Expected the missing topic to be created");
 
-        let brokers: BootstrapBrokers = format!("127.0.0.1:{}", host_port).parse().unwrap();
-        let missing = KafkaNotifier::new(brokers, "no-such-topic".to_string()).await;
-
-        assert!(missing.is_err(), "Expected a missing topic to fail the run");
+        let client = brokers.connect().await.unwrap();
+        let topic = TopicPartitions::discover(&client, topic_name).await.unwrap();
+        assert_eq!(topic.count(), 2, "topic should take the broker's num.partitions");
 
         container.stop().await.unwrap();
     }

@@ -6,9 +6,11 @@
 //! Output-format adapters.
 //!
 //! Each submodule converts the format-neutral [`crate::record::ArchiveRow`] into a
-//! concrete on-the-wire / on-disk representation. Today Avro is the only format;
-//! future modules will add JSON-per-field files and Pulsar/Kafka stream encoding.
+//! concrete on-the-wire / on-disk representation: row-batched Avro files, the
+//! per-field JSON layout, and the per-field messages the streaming targets
+//! publish.
 
 pub mod avro;
 pub mod json;
 pub mod stream;
+pub mod topics;

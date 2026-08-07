@@ -25,7 +25,8 @@ Features:
 ** Filesystem
 ** S3
 ** Apache Pulsar
-- Produces Notification to:
+** Apache Kafka
+- Produces Notifications to:
 ** Filesystem
 ** Apache Pulsar
 ** Apache Kafka
@@ -100,10 +101,12 @@ Options:
 
           - `pulsar://HOST:PORT` — Apache Pulsar.
 
+          - `kafka://HOST:PORT[,HOST:PORT]` — Apache Kafka, as a list of bootstrap brokers.
+
           Selecting a streaming target restricts the run to the `stream` command — `archive`, `fix`, `verify`, and `compact` are rejected at startup because topics are append-only.
 
       --stream.topics <STREAM_TOPICS>
-          Prefix used to build the per-field topic names. Each field is published to `<prefix>-<field>` (e.g. `<prefix>-blocks`, `<prefix>-tx-json`). For Pulsar, include the full topic path up to the prefix, e.g. `persistent://public/default/archive-eth`
+          Prefix used to build the per-field topic names. Each field is published to `<prefix>-<field>` (e.g. `<prefix>-blocks`, `<prefix>-tx-json`). For Pulsar, include the full topic path up to the prefix, e.g. `persistent://public/default/archive-eth`; for Kafka it's a plain topic name, e.g. `archive-eth`
 
   -d, --dir <DIR>
           Target directory
@@ -130,7 +133,7 @@ Options:
           [Fix Command] Set to remove any existing data in whole chunk if any of tables is missing a block in the chunk or has broken values. Default is `false`, which deleted only tables with missing / corrupted data
 
       --compression <COMPRESSION>
-          Compression algorithm to use for new output. For `--format=avro` it's the Avro file codec; for the Pulsar streaming target it's the producer compression applied to every message. Default is `zstd`
+          Compression algorithm to use for new output. For `--format=avro` it's the Avro file codec; for a streaming target it's the producer compression applied to every message. Default is `zstd`
 
           [possible values: snappy, zstd]
 
@@ -139,7 +142,7 @@ Options:
 
           - `bounded` — give up after a fixed number of attempts (current behaviour for file targets). - `forever` — keep retrying indefinitely with exponential backoff. Required for ordered streaming targets where a missed record breaks the topic-order contract.
 
-          Defaults: `forever` for streaming-ordered targets (e.g. Pulsar), `bounded` otherwise.
+          Defaults: `forever` for streaming-ordered targets (Pulsar, Kafka), `bounded` otherwise.
 
           Possible values:
           - bounded: Give up after a fixed number of attempts. Default for file targets, where a failed fetch can be repaired later by the `fix` command
@@ -221,19 +224,27 @@ See <<notification-format>>.
 
 ==== Stream as Records
 
-When `--stream.url` passed Dshackle Archive publishes stream data to a broker, such as Apache Pulsar, at the given URL.
+When `--stream.url` passed Dshackle Archive publishes stream data to a broker at the given URL.
 Topic receives each individual record in a block. I.e., instead of writing a large Avro file like in "_Stream as Tables_" mode, this mode produces a new message for each transaction in a block.
+
+The URL scheme selects the broker:
+
+- `pulsar://HOST:PORT` for Apache Pulsar
+- `kafka://HOST:PORT` for Apache Kafka, or a comma separated list of bootstrap brokers (`kafka://kafka-1:9092,kafka-2:9092`)
 
 `--stream.topics` specifies the prefix used to build the per-field topic names.
 Each field is published to `<prefix>-<field>` (e.g. `<prefix>-blocks`, `<prefix>-tx-json`).
+For Pulsar the prefix includes the full topic path (e.g. `persistent://public/default/ethereum`); for Kafka it's a plain topic name.
+
+Every message of one block goes to the same partition, selected by block height, so a consumer sees the records of a block, and of any re-org replacement for it, in publish order.
 
 .Topics used if prefix specified as `ethereum`:
 - `ethereum-blocks`
-- `ethereum-uncles`
+- `ethereum-blocks-uncles`
 - `ethereum-tx-json`
 - `ethereum-tx-raw`
-- `ethereum-tx-receipt`
-- `ethereum-trace-json`
+- `ethereum-tx-receipts`
+- `ethereum-trace-calls`
 - `ethereum-trace-statediff`
 
 .The JSON format is:
@@ -483,6 +494,27 @@ One notification is sent per kind per height; each message names its actual topi
       "field": "tx-json",
       "txId": "0x40846886cf7b8...",
       "messageId": "125:4:-1"
+    }
+  ]
+}
+----
+
+===== `kafka`
+
+Records published to per-field topics of an Apache Kafka cluster (For the `--stream.url` target).
+
+Same shape as `pulsar`, except a record is identified by its position within the topic, as `partition:offset`:
+
+[source, json]
+----
+{
+  "type": "kafka",
+  "messages": [
+    {
+      "topic": "archive-eth-tx-json",
+      "field": "tx-json",
+      "txId": "0x40846886cf7b8...",
+      "messageId": "2:1041"
     }
   ]
 }

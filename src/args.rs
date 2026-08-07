@@ -1,3 +1,4 @@
+use anyhow::{anyhow, Result};
 use clap::Parser;
 use std::fmt::Display;
 use std::str::FromStr;
@@ -103,7 +104,7 @@ pub struct Args {
 
     ///
     /// Compression algorithm to use for new output. For `--format=avro` it's
-    /// the Avro file codec; for the Pulsar streaming target it's the producer
+    /// the Avro file codec; for a streaming target it's the producer
     /// compression applied to every message. Default is `zstd`.
     #[arg(long = "compression")]
     pub compression: Option<Compression>,
@@ -116,7 +117,7 @@ pub struct Args {
     ///   Required for ordered streaming targets where a missed record breaks
     ///   the topic-order contract.
     ///
-    /// Defaults: `forever` for streaming-ordered targets (e.g. Pulsar),
+    /// Defaults: `forever` for streaming-ordered targets (Pulsar, Kafka),
     /// `bounded` otherwise.
     #[arg(long = "retry")]
     pub retry: Option<RetryMode>,
@@ -293,15 +294,22 @@ pub struct Aws {
 /// Streaming-target options. Picked up only by the `stream` command.
 ///
 /// The broker is identified by the URL scheme on `--stream.url`: `pulsar://`
-/// selects Apache Pulsar. When `--stream.url` is set the archive runs against
-/// a topic-per-field broker target instead of a file backend, so `--dir`,
-/// `--auth.aws.*`, and `--format` are ignored.
+/// selects Apache Pulsar, `kafka://` selects Apache Kafka. When `--stream.url`
+/// is set the archive runs against a topic-per-field broker target instead of
+/// a file backend, so `--dir`, `--auth.aws.*`, and `--format` are ignored.
+// Every doc comment in this struct is `--help` text, so none of them use
+// rustdoc links — those render literally in a terminal. Blank `///` lines
+// between list items are load-bearing too: without one clap joins the bullets
+// into a single run-on line.
 #[derive(Parser, Debug, Clone)]
 pub struct Stream {
     /// Publish stream data to a broker at the given URL. The scheme selects
     /// the backend:
     ///
     /// - `pulsar://HOST:PORT` — Apache Pulsar.
+    ///
+    /// - `kafka://HOST:PORT[,HOST:PORT]` — Apache Kafka, as a list of
+    ///   bootstrap brokers.
     ///
     /// Selecting a streaming target restricts the run to the `stream` command —
     /// `archive`, `fix`, `verify`, and `compact` are rejected at startup
@@ -312,7 +320,8 @@ pub struct Stream {
     /// Prefix used to build the per-field topic names. Each field is published
     /// to `<prefix>-<field>` (e.g. `<prefix>-blocks`, `<prefix>-tx-json`).
     /// For Pulsar, include the full topic path up to the prefix, e.g.
-    /// `persistent://public/default/archive-eth`.
+    /// `persistent://public/default/archive-eth`; for Kafka it's a plain topic
+    /// name, e.g. `archive-eth`.
     #[arg(long = "stream.topics", required = false, alias = "stream-topics")]
     pub stream_topics: Option<String>,
 }
@@ -326,14 +335,55 @@ impl Default for Stream {
     }
 }
 
+/// Message broker behind a streaming target, selected by the `--stream.url`
+/// scheme.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StreamTarget {
+    Pulsar,
+    Kafka,
+}
+
+impl StreamTarget {
+    /// The scheme that selects this backend, including the `://` separator.
+    fn scheme(&self) -> &'static str {
+        match self {
+            StreamTarget::Pulsar => "pulsar://",
+            StreamTarget::Kafka => "kafka://",
+        }
+    }
+
+    fn all() -> [StreamTarget; 2] {
+        [StreamTarget::Pulsar, StreamTarget::Kafka]
+    }
+}
+
 impl Stream {
-    /// True when the args carry a Pulsar streaming target (URL scheme
-    /// `pulsar://`). Other schemes will route to other backends in the future.
-    pub fn is_pulsar(&self) -> bool {
-        self.stream_url
+    /// True when a streaming target was requested, whatever its scheme.
+    ///
+    /// The stream-only restrictions key off this rather than off a *recognized*
+    /// backend, so an unknown scheme is reported as such instead of silently
+    /// falling back to the file-target rules.
+    pub fn is_streaming(&self) -> bool {
+        self.stream_url.is_some()
+    }
+
+    /// The backend the `--stream.url` scheme selects. Fails when no URL is set
+    /// or its scheme names no known broker.
+    pub fn target(&self) -> Result<StreamTarget> {
+        let url = self
+            .stream_url
             .as_deref()
-            .map(|u| u.starts_with("pulsar://"))
-            .unwrap_or(false)
+            .ok_or_else(|| anyhow!("--stream.url is required for a streaming target"))?;
+        StreamTarget::all()
+            .into_iter()
+            .find(|target| url.starts_with(target.scheme()))
+            .ok_or_else(|| {
+                anyhow!(
+                    "Unsupported --stream.url scheme: {} (supported: {})",
+                    url,
+                    StreamTarget::all().map(|t| t.scheme()).join(", ")
+                )
+            })
     }
 }
 

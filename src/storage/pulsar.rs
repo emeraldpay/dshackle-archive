@@ -11,11 +11,10 @@
 //!
 //! ## Topic layout
 //!
-//! One topic per field, named `<prefix>-<field>`. The label set comes
-//! from [`crate::formats::stream::topic_labels_for`], so only topics
-//! relevant to the running blockchain and the user's `--tables` /
-//! `--fields.trace` selection are created. Producers are built eagerly
-//! so the first append doesn't pay broker-side latency.
+//! One topic per field, named by [`TopicSet`], so only topics relevant to the
+//! running blockchain and the user's `--tables` / `--fields.trace` selection
+//! are created. Producers are built eagerly so the first append doesn't pay
+//! broker-side latency.
 //!
 //! ## Ordering & re-org handling
 //!
@@ -51,6 +50,7 @@ use tokio::sync::Mutex;
 use crate::archiver::datakind::DataKind;
 use crate::archiver::range::Range;
 use crate::formats::stream;
+use crate::formats::topics::TopicSet;
 use crate::notify::{Location, MessageRef};
 use crate::record::ArchiveRow;
 use crate::storage::{TargetFile, TargetFileWriter, WriteTarget};
@@ -58,7 +58,7 @@ use crate::storage::{TargetFile, TargetFileWriter, WriteTarget};
 /// Apache Pulsar streaming target. See the module-level doc for the
 /// topic layout and ordering contract.
 pub struct PulsarStorage {
-    topic_prefix: String,
+    topics: Arc<TopicSet>,
     /// Pre-created producers keyed by topic label. Each producer owns
     /// the broker connection internally, so no separate [`Pulsar`]
     /// client handle is needed.
@@ -67,13 +67,8 @@ pub struct PulsarStorage {
 
 impl PulsarStorage {
     /// Connect to the broker and pre-create one producer per topic in
-    /// `labels` (named `<topic_prefix>-<label>`). `labels` is typically
-    /// the output of [`crate::formats::stream::topic_labels_for`].
-    pub async fn new(
-        broker_url: String,
-        topic_prefix: String,
-        labels: &[&'static str],
-    ) -> Result<Self> {
+    /// `topics`.
+    pub async fn new(broker_url: String, topics: TopicSet) -> Result<Self> {
         let client: Pulsar<TokioExecutor> = Pulsar::builder(broker_url, TokioExecutor)
             .build()
             .await
@@ -88,8 +83,7 @@ impl PulsarStorage {
             ..Default::default()
         };
         let mut producers = HashMap::new();
-        for label in labels {
-            let topic = format!("{}-{}", topic_prefix, label);
+        for (label, topic) in topics.iter() {
             tracing::info!("Pulsar producer: {}", topic);
             let producer = client
                 .producer()
@@ -98,11 +92,11 @@ impl PulsarStorage {
                 .build()
                 .await
                 .map_err(|e| anyhow!("Failed to create Pulsar producer for {}: {:?}", topic, e))?;
-            producers.insert(*label, Arc::new(Mutex::new(producer)));
+            producers.insert(label, Arc::new(Mutex::new(producer)));
         }
 
         Ok(Self {
-            topic_prefix,
+            topics: Arc::new(topics),
             producers: Arc::new(producers),
         })
     }
@@ -110,7 +104,7 @@ impl PulsarStorage {
     /// The topic name a given field publishes to. Exposed primarily for tests
     /// and log messages.
     pub fn topic_for(&self, label: &str) -> String {
-        format!("{}-{}", self.topic_prefix, label)
+        self.topics.name_for(label)
     }
 }
 
@@ -131,7 +125,7 @@ impl WriteTarget for PulsarStorage {
             kind,
             range: range.clone(),
             producers: self.producers.clone(),
-            topic_prefix: self.topic_prefix.clone(),
+            topics: self.topics.clone(),
             published: std::sync::Mutex::new(Vec::new()),
         }))
     }
@@ -149,7 +143,10 @@ pub struct PulsarWriter {
     kind: DataKind,
     range: Range,
     producers: Arc<HashMap<&'static str, Arc<Mutex<Producer<TokioExecutor>>>>>,
-    topic_prefix: String,
+    topics: Arc<TopicSet>,
+    /// Broker receipts of this session, for the notification report. Bounded
+    /// by the writer's own range — one block in `stream` mode — and released
+    /// with the writer once [`TargetFileWriter::locations`] has read it.
     published: std::sync::Mutex<Vec<PublishedMessage>>,
 }
 
@@ -175,7 +172,7 @@ impl TargetFile for PulsarWriter {
     /// prefix and the range the writer covers, since there's no single
     /// addressable artifact like a file URL.
     fn get_url(&self) -> String {
-        format!("pulsar:{}?range={}", self.topic_prefix, self.range)
+        format!("pulsar:{}?range={}", self.topics.prefix(), self.range)
     }
 }
 
@@ -197,7 +194,7 @@ impl TargetFileWriter for PulsarWriter {
             let mut builder = producer
                 .create_message()
                 .with_content(msg.payload)
-                .with_partition_key(msg.partition_key.clone());
+                .with_partition_key(msg.partition_key.to_string());
             for (k, v) in &msg.properties {
                 builder = builder.with_property(k.clone(), v.clone());
             }
@@ -214,7 +211,7 @@ impl TargetFileWriter for PulsarWriter {
             self.published.lock().unwrap().push(PublishedMessage {
                 height: row.height,
                 message: MessageRef {
-                    topic: format!("{}-{}", self.topic_prefix, msg.field),
+                    topic: self.topics.name_for(msg.field),
                     field: msg.field.to_string(),
                     tx_id: row.tx_id.clone(),
                     message_id: receipt.message_id.as_ref().map(format_message_id),
@@ -349,9 +346,8 @@ mod tests {
                 include_state_diff: true,
             }),
         };
-        let labels =
-            crate::formats::stream::topic_labels_for(BlockchainType::Ethereum, &full_options);
-        let storage = PulsarStorage::new(uri.clone(), prefix.clone(), &labels)
+        let topics = TopicSet::new(prefix, BlockchainType::Ethereum, &full_options);
+        let storage = PulsarStorage::new(uri.clone(), topics)
             .await
             .expect("Pulsar connect");
 

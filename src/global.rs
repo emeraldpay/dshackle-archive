@@ -89,6 +89,20 @@ pub fn get_pulsar_compression() -> pulsar::compression::Compression {
     }
 }
 
+/// Map the user-selected compression to a Kafka produce-call compression.
+///
+/// Same trade-off as [`get_pulsar_compression`]: a broker topic is a live
+/// stream, so the codec sits on the latency path of every published message.
+/// Unlike Pulsar, rskafka takes the codec per `produce()` call rather than per
+/// producer, so the target resolves this once and carries it to its writers.
+pub fn get_kafka_compression() -> rskafka::client::partition::Compression {
+    let compression = COMPRESSION.lock().unwrap();
+    match *compression {
+        Compression::Snappy => rskafka::client::partition::Compression::Snappy,
+        Compression::Zstd => rskafka::client::partition::Compression::Zstd,
+    }
+}
+
 pub fn set_compression(args: &Args) {
     let compression = args.compression.clone().unwrap_or(Compression::Zstd);
     let mut comp = COMPRESSION.lock().unwrap();
@@ -199,7 +213,7 @@ fn resolve_retry_policy(args: &Args) -> RetryPolicy {
         },
         Some(RetryMode::Forever) => RetryPolicy::Forever,
         None => {
-            if crate::storage::is_pulsar(args) {
+            if crate::storage::is_streaming(args) {
                 RetryPolicy::Forever
             } else {
                 RetryPolicy::Bounded {
@@ -256,15 +270,11 @@ fn backoff(max_delay_secs: u64) -> impl Iterator<Item = Duration> + Send {
 mod tests {
     use super::*;
 
-    fn args_with(retry: Option<RetryMode>, pulsar: bool) -> Args {
-        let stream = if pulsar {
-            Some(crate::args::Stream {
-                stream_url: Some("pulsar://localhost:6650".to_string()),
-                stream_topics: Some("persistent://public/default/x".to_string()),
-            })
-        } else {
-            None
-        };
+    fn args_with(retry: Option<RetryMode>, stream_url: Option<&str>) -> Args {
+        let stream = stream_url.map(|url| crate::args::Stream {
+            stream_url: Some(url.to_string()),
+            stream_topics: Some("archive-eth".to_string()),
+        });
         Args {
             retry,
             stream,
@@ -272,27 +282,36 @@ mod tests {
         }
     }
 
+    const PULSAR: Option<&str> = Some("pulsar://localhost:6650");
+    const KAFKA: Option<&str> = Some("kafka://localhost:9092");
+
     #[test]
-    fn explicit_bounded_wins_over_pulsar_default() {
-        let policy = resolve_retry_policy(&args_with(Some(RetryMode::Bounded), true));
+    fn explicit_bounded_wins_over_streaming_default() {
+        let policy = resolve_retry_policy(&args_with(Some(RetryMode::Bounded), PULSAR));
         assert!(matches!(policy, RetryPolicy::Bounded { .. }));
     }
 
     #[test]
     fn explicit_forever_wins_over_file_default() {
-        let policy = resolve_retry_policy(&args_with(Some(RetryMode::Forever), false));
+        let policy = resolve_retry_policy(&args_with(Some(RetryMode::Forever), None));
         assert!(matches!(policy, RetryPolicy::Forever));
     }
 
     #[test]
     fn pulsar_defaults_to_forever() {
-        let policy = resolve_retry_policy(&args_with(None, true));
+        let policy = resolve_retry_policy(&args_with(None, PULSAR));
         assert!(matches!(policy, RetryPolicy::Forever));
     }
 
     #[test]
-    fn non_pulsar_defaults_to_bounded() {
-        let policy = resolve_retry_policy(&args_with(None, false));
+    fn kafka_defaults_to_forever() {
+        let policy = resolve_retry_policy(&args_with(None, KAFKA));
+        assert!(matches!(policy, RetryPolicy::Forever));
+    }
+
+    #[test]
+    fn file_target_defaults_to_bounded() {
+        let policy = resolve_retry_policy(&args_with(None, None));
         assert!(matches!(
             policy,
             RetryPolicy::Bounded {
