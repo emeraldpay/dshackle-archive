@@ -200,11 +200,27 @@ pub async fn write_block_tx_and_traces<TS: ReadTarget>(
 #[derive(Debug)]
 pub struct BrokenDownloads {
     inner: Arc<InMemory>,
+    /// Break only the paths containing it, or every path when `None`
+    only: Option<String>,
 }
 
 impl BrokenDownloads {
     pub fn new(inner: Arc<InMemory>) -> Self {
-        Self { inner }
+        Self { inner, only: None }
+    }
+
+    ///
+    /// Break the downloads of the files with the given text in the path, and serve the others as
+    /// usual. For a test where a part of the archive is readable and a part is not.
+    pub fn only<S: ToString>(inner: Arc<InMemory>, path_part: S) -> Self {
+        Self { inner, only: Some(path_part.to_string()) }
+    }
+
+    fn breaks(&self, location: &Path) -> bool {
+        match &self.only {
+            None => true,
+            Some(part) => location.as_ref().contains(part.as_str()),
+        }
     }
 }
 
@@ -226,6 +242,9 @@ impl ObjectStore for BrokenDownloads {
 
     async fn get_opts(&self, location: &Path, options: GetOptions) -> object_store::Result<GetResult> {
         let response = self.inner.get_opts(location, options).await?;
+        if !self.breaks(location) {
+            return Ok(response);
+        }
         let meta = response.meta.clone();
         let range = response.range.clone();
         let attributes = response.attributes.clone();

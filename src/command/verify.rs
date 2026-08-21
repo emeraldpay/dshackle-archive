@@ -486,9 +486,11 @@ async fn verify_table_group<B: BlockchainTypes + , TS: ReadTarget + 'static>(
 ) -> anyhow::Result<()> {
     let shutdown = global::get_shutdown();
     let mut for_deletion: Vec<&FileReference> = vec![];
+    let mut incomplete = false;
 
-    if let Ok(files) = verify_content(archiver.clone(), &range, &groups, data_options).await {
-        for_deletion.extend(files);
+    if let Ok(verification) = verify_content(archiver.clone(), &range, &groups, data_options).await {
+        for_deletion.extend(verification.broken);
+        incomplete = verification.incomplete;
     }
 
     if shutdown.is_signalled() {
@@ -497,8 +499,15 @@ async fn verify_table_group<B: BlockchainTypes + , TS: ReadTarget + 'static>(
     }
 
     if !for_deletion.is_empty() && delete_whole_chunk {
-        tracing::info!(range = %range, "Deleting all tables in the chunk due to --fix.clean");
-        for_deletion = groups.iter().flat_map(|g| g.tables()).collect();
+        if incomplete {
+            // Cleaning the whole chunk means replacing all of it, and a table that was never read
+            // gives no reason to replace it. The tables known to be broken are still deleted, so
+            // the next run, when the storage answers again, can clean the chunk properly
+            tracing::warn!(range = %range, "Not cleaning the whole chunk: some of its tables could not be read");
+        } else {
+            tracing::info!(range = %range, "Deleting all tables in the chunk due to --fix.clean");
+            for_deletion = groups.iter().flat_map(|g| g.tables()).collect();
+        }
     }
 
     {
@@ -513,10 +522,34 @@ async fn verify_table_group<B: BlockchainTypes + , TS: ReadTarget + 'static>(
     Ok(())
 }
 
-async fn verify_content<'a, B: BlockchainTypes, TS: ReadTarget>(archiver: Arc<Archiver<B, TS>>, range: &Range, groups: &'a Vec<ArchiveGroup>, data_options: DataOptions) -> anyhow::Result<Vec<&'a FileReference>> {
+///
+/// What the verification found out about a range.
+struct RangeVerification<'a> {
+    /// Files that were read and must be archived again
+    broken: Vec<&'a FileReference>,
+    /// Some of the tables could not be read, i.e. what is wrong with the range is known only in part
+    incomplete: bool,
+}
+
+impl<'a> RangeVerification<'a> {
+    fn verified(broken: Vec<&'a FileReference>) -> Self {
+        Self { broken, incomplete: false }
+    }
+
+    fn nothing_to_do() -> Self {
+        Self { broken: vec![], incomplete: false }
+    }
+
+    fn unreadable() -> Self {
+        Self { broken: vec![], incomplete: true }
+    }
+}
+
+async fn verify_content<'a, B: BlockchainTypes, TS: ReadTarget>(archiver: Arc<Archiver<B, TS>>, range: &Range, groups: &'a Vec<ArchiveGroup>, data_options: DataOptions) -> anyhow::Result<RangeVerification<'a>> {
     tracing::trace!(range = %range, "Verify table data");
     let shutdown = global::get_shutdown();
     let mut broken_files = vec![];
+    let mut incomplete = false;
 
     let blocks: Vec<&FileReference> = groups.iter()
         .filter_map(|g| g.blocks.as_ref())
@@ -526,16 +559,16 @@ async fn verify_content<'a, B: BlockchainTypes, TS: ReadTarget>(archiver: Arc<Ar
         BlockVerify::<B, TS>::new().verify_table(data_options.block.as_ref().unwrap(), archiver.target.as_ref(), &range, &blocks, archiver.data_provider.as_ref()).await
     } else {
         tracing::error!(range = %range, "No block file. Skip verification and delete other tables in the range");
-        return Ok(groups.iter().flat_map(|g| g.tables()).collect())
+        return Ok(RangeVerification::verified(groups.iter().flat_map(|g| g.tables()).collect()))
     };
 
     if shutdown.is_signalled() {
-        return Ok(vec![]);
+        return Ok(RangeVerification::nothing_to_do());
     }
     match block_verification {
         Err(VerifyFailure::Unverifiable(e)) => {
             tracing::error!(range = %range, "Cannot verify the blocks, keeping the range as is: {}", e);
-            return Ok(vec![]);
+            return Ok(RangeVerification::unreadable());
         },
         Err(VerifyFailure::Invalid(e)) => {
             tracing::error!(range = %range, "Block data is corrupted: {}", e);
@@ -558,6 +591,7 @@ async fn verify_content<'a, B: BlockchainTypes, TS: ReadTarget>(archiver: Arc<Ar
                         Ok(_) => {},
                         Err(VerifyFailure::Unverifiable(e)) => {
                             tracing::error!(range = %range, "Cannot verify the txes, keeping the files as is: {}", e);
+                            incomplete = true;
                         },
                         Err(VerifyFailure::Invalid(e)) => {
                             tracing::error!(range = %range, "Tx data is corrupted: {}", e);
@@ -576,6 +610,7 @@ async fn verify_content<'a, B: BlockchainTypes, TS: ReadTarget>(archiver: Arc<Ar
                         Ok(_) => {},
                         Err(VerifyFailure::Unverifiable(e)) => {
                             tracing::error!(range = %range, "Cannot verify the traces, keeping the files as is: {}", e);
+                            incomplete = true;
                         },
                         Err(VerifyFailure::Invalid(e)) => {
                             tracing::error!(range = %range, "Trace data is corrupted: {}", e);
@@ -587,7 +622,7 @@ async fn verify_content<'a, B: BlockchainTypes, TS: ReadTarget>(archiver: Arc<Ar
         }
     }
 
-    Ok(broken_files)
+    Ok(RangeVerification { broken: broken_files, incomplete })
 }
 
 fn verify_field_exist(record: &Record, field: &str) -> Result<(), String> {
@@ -959,7 +994,7 @@ mod tests {
     use object_store::memory::InMemory;
     use object_store::{ObjectMeta, ObjectStore};
     use crate::args::Args;
-    use crate::blockchain::mock::{MockBlock, MockData, MockTx, MockType};
+    use crate::blockchain::mock::{MockBlock, MockData, MockTrace, MockTx, MockType};
     use crate::archiver::Archiver;
     use crate::command::CommandExecutor;
     use crate::command::verify::{merge_small, verify_field_non_null, VerifyCommand};
@@ -967,7 +1002,7 @@ mod tests {
     use crate::storage::objects::ObjectsStorage;
     use futures_util::StreamExt;
     use crate::blockchain::{BlockReference, BlockchainData};
-    use crate::archiver::datakind::{DataKind, DataTables};
+    use crate::archiver::datakind::{DataKind, DataTables, TraceOptions};
     use crate::archiver::range::Range;
     use crate::archiver::range_group::ArchiveGroup;
     use crate::avros::BLOCK_SCHEMA;
@@ -1302,6 +1337,74 @@ mod tests {
 
         let after = testing::list_mem_filenames(mem).await;
         assert_eq!(after, before);
+    }
+
+    ///
+    /// `--fix.clean` replaces the whole chunk when a part of it is broken, which is a decision
+    /// about the files it didn't check either. It must not be made while a table of the chunk
+    /// could not be read.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn keeps_unread_files_when_cleaning_the_chunk() {
+        testing::start_test();
+        let mem = Arc::new(InMemory::new());
+        let archiver = create_archiver(mem.clone());
+        let data = archiver.data_provider.clone();
+
+        let block100 = MockBlock {
+            height: 100,
+            hash: "B100".to_string(),
+            parent: "B099".to_string(),
+            transactions: vec!["TX001".to_string(), "TX002".to_string()],
+        };
+        data.add_block(block100.clone());
+        for tx in &block100.transactions {
+            data.add_tx(MockTx { hash: tx.clone() });
+            data.add_trace(MockTrace {
+                tx_hash: tx.clone(),
+                trace_json: Some(format!(r#"{{"trace":"{}"}}"#, tx).into_bytes()),
+                state_diff_json: Some(format!(r#"{{"diff":"{}"}}"#, tx).into_bytes()),
+            });
+        }
+
+        let trace_options = TraceOptions {
+            include_trace: true,
+            include_state_diff: true,
+        };
+        // only the first tx is archived, i.e. the tx table is broken and must be deleted
+        testing::write_block_tx_and_traces(&archiver, 100, Some(vec![0]), Some(trace_options)).await.unwrap();
+        let before = testing::list_mem_filenames(mem.clone()).await;
+        assert_eq!(before.len(), 3);
+
+        // the same archive, but now the traces cannot be downloaded
+        let storage = ObjectsStorage::new(
+            Arc::new(testing::BrokenDownloads::only(mem.clone(), ".traces.avro")),
+            "test".to_string(),
+            Filenames::with_dir("archive/eth".to_string()),
+        );
+        let archiver: Archiver<MockType, _> = Archiver::new_simple(Arc::new(storage), data);
+
+        let args = Args {
+            range: Some("100..110".to_string()),
+            tables: Some("blocks,txes,traces".to_string()),
+            fields_trace: Some("calls,stateDiff".to_string()),
+            fix_clean: true,
+            ..Default::default()
+        };
+        let command = VerifyCommand::new(&args, archiver).unwrap();
+        let result = command.execute().await;
+        if let Err(err) = result {
+            panic!("Failed: {:?}", err);
+        }
+
+        let after = testing::list_mem_filenames(mem).await;
+        assert!(
+            after.contains(&"archive/eth/000000000/000000000/000000100.traces.avro".to_string()),
+            "Deleted a file that was never read: {:?}", after
+        );
+        assert!(
+            !after.contains(&"archive/eth/000000000/000000000/000000100.txes.avro".to_string()),
+            "Kept the table that is known to be incomplete: {:?}", after
+        );
     }
 
     #[test]
