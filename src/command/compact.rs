@@ -82,9 +82,13 @@ impl<B: BlockchainTypes + 'static, TS: ReadTarget + 'static> CommandExecutor for
                                     break;
                                 }
 
-                                let compact = compact
-                                    .map_err(|e| anyhow!("Error compacting range {}: {}", current_chunk, e))
-                                    .unwrap_or(false);
+                                let compact = match compact {
+                                    Ok(compacted) => compacted,
+                                    Err(e) => {
+                                        tracing::error!(range = display(current_chunk), "Range is not compacted: {}", e);
+                                        false
+                                    }
+                                };
 
                                 // keep feels that are not fully copied, for the next chunk
                                 // i.e., if a file covers multiple chunks
@@ -366,7 +370,10 @@ impl<B: BlockchainTypes, TS: ReadTarget> TableCompaction<BlockOptions, B, TS> fo
                     _ = shutdown.signalled() => return Err(anyhow!("Shutdown signalled")),
                     record = source.recv() => {
                         match record {
-                            Some(record) => {
+                            // The sources are deleted once the range is copied, so a file that stopped
+                            // being readable must stop the whole compaction instead of copying a part of it
+                            Some(Err(failure)) => return Err(failure.into()),
+                            Some(Ok(record)) => {
                                 let height = avros::get_height(&record)?;
                                 if range.contains(&height.into()) {
                                     let txes = parse_block::<B>(&record)?.txes();
@@ -428,7 +435,9 @@ impl<B: BlockchainTypes, TS: ReadTarget> TableCompaction<TxOptions, B, TS> for C
                     _ = shutdown.signalled() => return Err(anyhow!("Shutdown signalled")),
                     record = source.recv() => {
                         match record {
-                            Some(record) => {
+                            // See the blocks compaction on why a failed read is not just an end of the file
+                            Some(Err(failure)) => return Err(failure.into()),
+                            Some(Ok(record)) => {
                                 let height = avros::get_height(&record)?;
                                 let txid = parse_tx_id::<B>(&record)?;
                                 if range.contains(&height.into()) {
@@ -476,7 +485,9 @@ impl<B: BlockchainTypes, TS: ReadTarget> TableCompaction<TraceOptions, B, TS> fo
                     _ = shutdown.signalled() => return Err(anyhow!("Shutdown signalled")),
                     record = source.recv() => {
                         match record {
-                            Some(record) => {
+                            // See the blocks compaction on why a failed read is not just an end of the file
+                            Some(Err(failure)) => return Err(failure.into()),
+                            Some(Ok(record)) => {
                                 let height = avros::get_height(&record)?;
                                 let txid = parse_tx_id::<B>(&record)?;
                                 if range.contains(&height.into()) {
@@ -1115,6 +1126,59 @@ mod tests {
         for height in 310..315 {
             assert!(after.contains(&format!("archive/test/000000000/000000000/{:09}.block.avro", height)));
             assert!(after.contains(&format!("archive/test/000000000/000000000/{:09}.txes.avro", height)));
+        }
+    }
+
+    ///
+    /// The source files are deleted once their content is copied into the range file, so a read
+    /// that fails in the middle must stop the compaction instead of leaving a truncated copy.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn keeps_source_files_that_cannot_be_read() {
+        testing::start_test();
+
+        let mem = Arc::new(InMemory::new());
+        let data_provider: Arc<MockData> = Arc::new(MockData::new("TEST_UNREADABLE"));
+        let storage = ObjectsStorage::new(mem.clone(), "test".to_string(), Filenames::with_dir("archive/test".to_string()));
+        let archiver: Archiver<MockType, _> = Archiver::new_simple(Arc::new(storage), data_provider.clone());
+
+        // as in `compact_command_deletes_source_files`: the chunk 300-309 is compacted only when
+        // the files of the next chunk show up in the listing
+        for i in 0..15 {
+            let block_height = 300 + i as u64;
+            let txs = vec![format!("TX{}", block_height)];
+            data_provider.add_block(MockBlock {
+                height: block_height,
+                hash: format!("B{}", block_height),
+                parent: format!("B{}", block_height - 1),
+                transactions: txs.clone(),
+            });
+            for tx in &txs {
+                data_provider.add_tx(MockTx { hash: tx.clone() });
+            }
+            testing::write_block_and_tx(&archiver, block_height, None).await.unwrap();
+        }
+
+        let before = testing::list_mem_filenames(mem.clone()).await;
+        assert_eq!(before.len(), 30);
+
+        // the same archive, but now every download from the storage breaks
+        let storage = ObjectsStorage::new(
+            Arc::new(testing::BrokenDownloads::new(mem.clone())),
+            "test".to_string(),
+            Filenames::with_dir("archive/test".to_string()),
+        );
+        let archiver: Archiver<MockType, _> = Archiver::new_simple(Arc::new(storage), data_provider);
+
+        let args = Args {
+            range: Some("300..315".to_string()),
+            range_chunk: Some(10),
+            ..Default::default()
+        };
+        CompactCommand::new(&args, archiver).unwrap().execute().await.unwrap();
+
+        let after = testing::list_mem_filenames(mem).await;
+        for file in &before {
+            assert!(after.contains(file), "Deleted a file that was never read: {}", file);
         }
     }
 }

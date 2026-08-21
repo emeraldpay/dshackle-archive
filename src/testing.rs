@@ -1,7 +1,11 @@
 use std::sync::Arc;
 use futures_util::StreamExt;
 use object_store::memory::InMemory;
-use object_store::{ObjectMeta, ObjectStore};
+use object_store::path::Path;
+use object_store::{
+    CopyOptions, GetOptions, GetResult, GetResultPayload, ListResult, MultipartUpload, ObjectMeta,
+    ObjectStore, PutMultipartOptions, PutOptions, PutPayload, PutResult,
+};
 use tracing_subscriber::filter::Targets;
 use tracing_subscriber::Layer;
 use tracing_subscriber::layer::SubscriberExt;
@@ -186,4 +190,74 @@ pub async fn write_block_tx_and_traces<TS: ReadTarget>(
     }
 
     Ok(())
+}
+
+///
+/// An object store where every download breaks after the first bytes
+///
+/// Everything else, including writing and listing, works as usual, so a test can fill the
+/// storage first and then read it through this wrapper.
+#[derive(Debug)]
+pub struct BrokenDownloads {
+    inner: Arc<InMemory>,
+}
+
+impl BrokenDownloads {
+    pub fn new(inner: Arc<InMemory>) -> Self {
+        Self { inner }
+    }
+}
+
+impl std::fmt::Display for BrokenDownloads {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "BrokenDownloads({})", self.inner)
+    }
+}
+
+#[async_trait::async_trait]
+impl ObjectStore for BrokenDownloads {
+    async fn put_opts(&self, location: &Path, payload: PutPayload, opts: PutOptions) -> object_store::Result<PutResult> {
+        self.inner.put_opts(location, payload, opts).await
+    }
+
+    async fn put_multipart_opts(&self, location: &Path, opts: PutMultipartOptions) -> object_store::Result<Box<dyn MultipartUpload>> {
+        self.inner.put_multipart_opts(location, opts).await
+    }
+
+    async fn get_opts(&self, location: &Path, options: GetOptions) -> object_store::Result<GetResult> {
+        let response = self.inner.get_opts(location, options).await?;
+        let meta = response.meta.clone();
+        let range = response.range.clone();
+        let attributes = response.attributes.clone();
+        let extensions = response.extensions.clone();
+        let broken = futures_util::stream::once(async {
+            Err(object_store::Error::Generic {
+                store: "test",
+                source: "connection reset".into(),
+            })
+        }).boxed();
+        Ok(GetResult {
+            payload: GetResultPayload::Stream(broken),
+            meta,
+            range,
+            attributes,
+            extensions,
+        })
+    }
+
+    fn delete_stream(&self, locations: futures_util::stream::BoxStream<'static, object_store::Result<Path>>) -> futures_util::stream::BoxStream<'static, object_store::Result<Path>> {
+        self.inner.delete_stream(locations)
+    }
+
+    fn list(&self, prefix: Option<&Path>) -> futures_util::stream::BoxStream<'static, object_store::Result<ObjectMeta>> {
+        self.inner.list(prefix)
+    }
+
+    async fn list_with_delimiter(&self, prefix: Option<&Path>) -> object_store::Result<ListResult> {
+        self.inner.list_with_delimiter(prefix).await
+    }
+
+    async fn copy_opts(&self, from: &Path, to: &Path, options: CopyOptions) -> object_store::Result<()> {
+        self.inner.copy_opts(from, to, options).await
+    }
 }

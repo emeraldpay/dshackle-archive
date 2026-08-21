@@ -39,6 +39,7 @@ pub mod objects;
 pub mod pulsar;
 mod avro_reader;
 mod copy;
+mod object_reader;
 mod sorted_files;
 
 pub fn is_s3(args: &Args) -> bool {
@@ -455,7 +456,29 @@ pub trait TargetFileWriter: TargetFile {
 pub trait TargetFileReader: TargetFile {
     ///
     /// Read the content from the file
-    fn read(self) -> Result<Receiver<Record<'static>>>;
+    fn read(self) -> Result<RecordStream>;
+}
+
+///
+/// Records of an archive file, as they are read from it.
+///
+/// An item is `Err` when the file stopped being readable in the middle, which the consumer
+/// must not confuse with the end of the file. See [`ReadFailure`].
+pub type RecordStream = Receiver<std::result::Result<Record<'static>, ReadFailure>>;
+
+///
+/// The archive file could not be read to the end, so nothing is known about the rest of it.
+///
+/// This is different from the file having wrong or incomplete content: the file itself may be
+/// perfectly good and just unreachable at the moment. The commands that repair the archive
+/// must keep the difference, otherwise a broken connection makes `verify` delete healthy files
+/// and `compact` replace them with a half-copied one.
+#[derive(thiserror::Error, Debug, Clone, PartialEq)]
+#[error("Failed to read {url}: {reason}")]
+pub struct ReadFailure {
+    /// URL of the file that was being read
+    pub url: String,
+    pub reason: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

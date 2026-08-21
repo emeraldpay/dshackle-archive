@@ -12,8 +12,8 @@ use crate::formats::avro;
 use crate::notify::Location;
 use crate::record::ArchiveRow;
 use crate::storage::{
-    avro_reader, copy, find_incomplete_by_listing, FileReference, ReadTarget, ScanTarget,
-    TargetFile, TargetFileReader, TargetFileWriter, WriteTarget,
+    avro_reader, copy, find_incomplete_by_listing, FileReference, ReadTarget, RecordStream,
+    ScanTarget, TargetFile, TargetFileReader, TargetFileWriter, WriteTarget,
 };
 use anyhow::{anyhow, Context, Result};
 use tokio::sync::mpsc::Receiver;
@@ -234,8 +234,9 @@ impl TargetFileWriter for FsFileWriter<'_> {
 }
 
 impl TargetFileReader for FsFileReader {
-    fn read(self) -> Result<Receiver<Record<'static>>> {
-        let rx_sync = avro_reader::consume_sync(self.kind, avro::schema_for(self.kind), self.file);
+    fn read(self) -> Result<RecordStream> {
+        let url = self.get_url();
+        let rx_sync = avro_reader::consume_sync(self.kind, avro::schema_for(self.kind), url, self.file);
         let rx = copy::copy_from_sync(rx_sync);
         Ok(rx)
     }
