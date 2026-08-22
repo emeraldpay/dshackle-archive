@@ -21,7 +21,7 @@ use crate::archiver::range_bag::RangeBag;
 use crate::archiver::range_group::RangeGroupError;
 use crate::blockchain::block_seq::BlockSequence;
 use crate::blockchain::{BlockReference, BlockchainData};
-use crate::storage::FileReference;
+use crate::storage::{FileReference, ReadFailure};
 
 ///
 /// Provides `verify` command.
@@ -486,9 +486,11 @@ async fn verify_table_group<B: BlockchainTypes + , TS: ReadTarget + 'static>(
 ) -> anyhow::Result<()> {
     let shutdown = global::get_shutdown();
     let mut for_deletion: Vec<&FileReference> = vec![];
+    let mut incomplete = false;
 
-    if let Ok(files) = verify_content(archiver.clone(), &range, &groups, data_options).await {
-        for_deletion.extend(files);
+    if let Ok(verification) = verify_content(archiver.clone(), &range, &groups, data_options).await {
+        for_deletion.extend(verification.broken);
+        incomplete = verification.incomplete;
     }
 
     if shutdown.is_signalled() {
@@ -497,8 +499,15 @@ async fn verify_table_group<B: BlockchainTypes + , TS: ReadTarget + 'static>(
     }
 
     if !for_deletion.is_empty() && delete_whole_chunk {
-        tracing::info!(range = %range, "Deleting all tables in the chunk due to --fix.clean");
-        for_deletion = groups.iter().flat_map(|g| g.tables()).collect();
+        if incomplete {
+            // Cleaning the whole chunk means replacing all of it, and a table that was never read
+            // gives no reason to replace it. The tables known to be broken are still deleted, so
+            // the next run, when the storage answers again, can clean the chunk properly
+            tracing::warn!(range = %range, "Not cleaning the whole chunk: some of its tables could not be read");
+        } else {
+            tracing::info!(range = %range, "Deleting all tables in the chunk due to --fix.clean");
+            for_deletion = groups.iter().flat_map(|g| g.tables()).collect();
+        }
     }
 
     {
@@ -513,10 +522,34 @@ async fn verify_table_group<B: BlockchainTypes + , TS: ReadTarget + 'static>(
     Ok(())
 }
 
-async fn verify_content<'a, B: BlockchainTypes, TS: ReadTarget>(archiver: Arc<Archiver<B, TS>>, range: &Range, groups: &'a Vec<ArchiveGroup>, data_options: DataOptions) -> anyhow::Result<Vec<&'a FileReference>> {
+///
+/// What the verification found out about a range.
+struct RangeVerification<'a> {
+    /// Files that were read and must be archived again
+    broken: Vec<&'a FileReference>,
+    /// Some of the tables could not be read, i.e. what is wrong with the range is known only in part
+    incomplete: bool,
+}
+
+impl<'a> RangeVerification<'a> {
+    fn verified(broken: Vec<&'a FileReference>) -> Self {
+        Self { broken, incomplete: false }
+    }
+
+    fn nothing_to_do() -> Self {
+        Self { broken: vec![], incomplete: false }
+    }
+
+    fn unreadable() -> Self {
+        Self { broken: vec![], incomplete: true }
+    }
+}
+
+async fn verify_content<'a, B: BlockchainTypes, TS: ReadTarget>(archiver: Arc<Archiver<B, TS>>, range: &Range, groups: &'a Vec<ArchiveGroup>, data_options: DataOptions) -> anyhow::Result<RangeVerification<'a>> {
     tracing::trace!(range = %range, "Verify table data");
     let shutdown = global::get_shutdown();
     let mut broken_files = vec![];
+    let mut incomplete = false;
 
     let blocks: Vec<&FileReference> = groups.iter()
         .filter_map(|g| g.blocks.as_ref())
@@ -526,15 +559,19 @@ async fn verify_content<'a, B: BlockchainTypes, TS: ReadTarget>(archiver: Arc<Ar
         BlockVerify::<B, TS>::new().verify_table(data_options.block.as_ref().unwrap(), archiver.target.as_ref(), &range, &blocks, archiver.data_provider.as_ref()).await
     } else {
         tracing::error!(range = %range, "No block file. Skip verification and delete other tables in the range");
-        return Ok(groups.iter().flat_map(|g| g.tables()).collect())
+        return Ok(RangeVerification::verified(groups.iter().flat_map(|g| g.tables()).collect()))
     };
 
     if shutdown.is_signalled() {
-        return Ok(vec![]);
+        return Ok(RangeVerification::nothing_to_do());
     }
     match block_verification {
-        Err(e) => {
-            tracing::error!(range = %range, "Block data is corrupted: {:?}", e);
+        Err(VerifyFailure::Unverifiable(e)) => {
+            tracing::error!(range = %range, "Cannot verify the blocks, keeping the range as is: {}", e);
+            return Ok(RangeVerification::unreadable());
+        },
+        Err(VerifyFailure::Invalid(e)) => {
+            tracing::error!(range = %range, "Block data is corrupted: {}", e);
             if data_options.include_block() {
                 broken_files.extend_from_slice(blocks.as_slice());
                 if data_options.include_tx() || data_options.include_trace() {
@@ -550,10 +587,16 @@ async fn verify_content<'a, B: BlockchainTypes, TS: ReadTarget>(archiver: Arc<Ar
                     .collect();
 
                 if !txes.is_empty() {
-                    let ok = TxVerify::<B, TS>::new().verify_table(tx_options, archiver.target.as_ref(), &range, &txes, &expected_txes).await;
-                    if ok.is_err() {
-                        tracing::error!(range = %range, "Tx data is corrupted: {:?}", ok.err().unwrap());
-                        broken_files.extend_from_slice(txes.as_slice());
+                    match TxVerify::<B, TS>::new().verify_table(tx_options, archiver.target.as_ref(), &range, &txes, &expected_txes).await {
+                        Ok(_) => {},
+                        Err(VerifyFailure::Unverifiable(e)) => {
+                            tracing::error!(range = %range, "Cannot verify the txes, keeping the files as is: {}", e);
+                            incomplete = true;
+                        },
+                        Err(VerifyFailure::Invalid(e)) => {
+                            tracing::error!(range = %range, "Tx data is corrupted: {}", e);
+                            broken_files.extend_from_slice(txes.as_slice());
+                        }
                     }
                 }
             }
@@ -563,17 +606,23 @@ async fn verify_content<'a, B: BlockchainTypes, TS: ReadTarget>(archiver: Arc<Ar
                     .collect();
 
                 if !traces.is_empty() {
-                    let ok = TraceVerify::<B, TS>::new().verify_table(trace_options, archiver.target.as_ref(), &range, &traces, &expected_txes).await;
-                    if ok.is_err() {
-                        tracing::error!(range = %range, "Trace data is corrupted: {:?}", ok.err().unwrap());
-                        broken_files.extend_from_slice(traces.as_slice());
+                    match TraceVerify::<B, TS>::new().verify_table(trace_options, archiver.target.as_ref(), &range, &traces, &expected_txes).await {
+                        Ok(_) => {},
+                        Err(VerifyFailure::Unverifiable(e)) => {
+                            tracing::error!(range = %range, "Cannot verify the traces, keeping the files as is: {}", e);
+                            incomplete = true;
+                        },
+                        Err(VerifyFailure::Invalid(e)) => {
+                            tracing::error!(range = %range, "Trace data is corrupted: {}", e);
+                            broken_files.extend_from_slice(traces.as_slice());
+                        }
                     }
                 }
             }
         }
     }
 
-    Ok(broken_files)
+    Ok(RangeVerification { broken: broken_files, incomplete })
 }
 
 fn verify_field_exist(record: &Record, field: &str) -> Result<(), String> {
@@ -620,12 +669,41 @@ fn verify_field_non_null(record: &Record, field: &str) -> Result<(), String> {
     }
 }
 
+///
+/// Why a table didn't pass the verification.
+///
+/// The two are handled the opposite ways, so they must never be mixed up: the archive is
+/// repaired by deleting the invalid files and downloading them again, while a file that was
+/// never read says nothing about itself and deleting it would lose healthy data every time
+/// the storage or the blockchain node has a hiccup.
+#[derive(thiserror::Error, Debug)]
+enum VerifyFailure {
+    /// The archived data is wrong, incomplete, or doesn't match the blockchain
+    #[error("{0}")]
+    Invalid(String),
+    /// The check could not be made, i.e. a file could not be read or the blockchain didn't answer
+    #[error("{0}")]
+    Unverifiable(String),
+}
+
+impl From<String> for VerifyFailure {
+    fn from(value: String) -> Self {
+        VerifyFailure::Invalid(value)
+    }
+}
+
+impl From<ReadFailure> for VerifyFailure {
+    fn from(value: ReadFailure) -> Self {
+        VerifyFailure::Unverifiable(value.to_string())
+    }
+}
+
 #[async_trait]
 trait VerifyTable<T, B: BlockchainTypes, TS: ReadTarget> {
     type Returns;
     type Params;
 
-    async fn verify_table(&self, options: &T, storage: &TS, range: &Range, files: &Vec<&FileReference>, params: &Self::Params) -> Result<Self::Returns, String>;
+    async fn verify_table(&self, options: &T, storage: &TS, range: &Range, files: &Vec<&FileReference>, params: &Self::Params) -> Result<Self::Returns, VerifyFailure>;
 }
 
 
@@ -645,7 +723,7 @@ impl<B: BlockchainTypes, TS: ReadTarget> VerifyTable<TxOptions, B, TS> for TxVer
     type Returns = ();
     type Params = Vec<B::TxId>;
 
-    async fn verify_table(&self, _options: &TxOptions, storage: &TS, range: &Range, files: &Vec<&FileReference>, params: &Self::Params) -> Result<Self::Returns, String> {
+    async fn verify_table(&self, _options: &TxOptions, storage: &TS, range: &Range, files: &Vec<&FileReference>, params: &Self::Params) -> Result<Self::Returns, VerifyFailure> {
         tracing::trace!(range = %range, "Verify txes");
         let shutdown = global::get_shutdown();
         let expected_txes = params;
@@ -654,8 +732,8 @@ impl<B: BlockchainTypes, TS: ReadTarget> VerifyTable<TxOptions, B, TS> for TxVer
         for file in files {
             tracing::debug!(range = %file.range, "Processing tx file: {}", file.path);
             let mut txes = storage.open(file)
-                .await.map_err(|e| format!("Failed to open txes storage: {}", e))?
-                .read().map_err(|e| format!("Failed to read txes storage: {}", e))?;
+                .await.map_err(|e| VerifyFailure::Unverifiable(format!("Failed to open {}: {}", file.path, e)))?
+                .read().map_err(|e| VerifyFailure::Unverifiable(format!("Failed to read {}: {}", file.path, e)))?;
             while !shutdown.is_signalled() {
                 tokio::select! {
                     _ = shutdown.signalled() => {
@@ -663,23 +741,23 @@ impl<B: BlockchainTypes, TS: ReadTarget> VerifyTable<TxOptions, B, TS> for TxVer
                         break;
                     },
                     record = txes.recv() => {
-                        if record.is_none() {
-                            break
-                        }
-                        let record = record.unwrap();
+                        let record = match record {
+                            None => break,
+                            Some(record) => record?,
+                        };
                         crate::progress::on_record();
                         let txid = record.fields.iter()
                             .find(|f| f.0 == "txid")
                             .ok_or(format!("No txid in the record"))?;
                         let txid_str = match &txid.1 {
                             Value::String(s) => s.clone(),
-                            _ => return Err(format!("Invalid txid type: {:?}", txid.1))
+                            _ => return Err(VerifyFailure::Invalid(format!("Invalid txid type: {:?}", txid.1)))
                         };
 
                         let txid = B::TxId::from_str(&txid_str)
                             .map_err(|_| format!("Invalid txid: {}", txid_str))?;
                         if !expected_txes.contains(&txid) {
-                            return Err(format!("Unexpected txid: {}", txid_str));
+                            return Err(VerifyFailure::Invalid(format!("Unexpected txid: {}", txid_str)));
                         }
 
                         verify_field_non_null(&record, "json")?;
@@ -688,7 +766,7 @@ impl<B: BlockchainTypes, TS: ReadTarget> VerifyTable<TxOptions, B, TS> for TxVer
 
                         let first = existing_txes.insert(txid);
                         if !first {
-                            return Err(format!("Duplicate txid: {}", txid_str));
+                            return Err(VerifyFailure::Invalid(format!("Duplicate txid: {}", txid_str)));
                         }
                     }
                 }
@@ -696,7 +774,7 @@ impl<B: BlockchainTypes, TS: ReadTarget> VerifyTable<TxOptions, B, TS> for TxVer
         }
 
         if existing_txes.len() != expected_txes.len() {
-            return Err(format!("Missing txes in the table"));
+            return Err(VerifyFailure::Invalid(format!("Missing txes in the table")));
         }
         Ok(())
     }
@@ -718,7 +796,7 @@ impl<B: BlockchainTypes, TS: ReadTarget> VerifyTable<TraceOptions, B, TS> for Tr
     type Returns = ();
     type Params = Vec<B::TxId>;
 
-    async fn verify_table(&self, options: &TraceOptions, storage: &TS, range: &Range, files: &Vec<&FileReference>, params: &Self::Params) -> Result<Self::Returns, String> {
+    async fn verify_table(&self, options: &TraceOptions, storage: &TS, range: &Range, files: &Vec<&FileReference>, params: &Self::Params) -> Result<Self::Returns, VerifyFailure> {
         tracing::trace!(range = %range, "Verify traces");
         let shutdown = global::get_shutdown();
         let expected_txes = params;
@@ -727,8 +805,8 @@ impl<B: BlockchainTypes, TS: ReadTarget> VerifyTable<TraceOptions, B, TS> for Tr
         for file in files {
             tracing::debug!(range = %file.range, "Processing trace file: {}", file.path);
             let mut traces = storage.open(file)
-                .await.map_err(|e| format!("Failed to open traces storage: {}", e))?
-                .read().map_err(|e| format!("Failed to read traces storage: {}", e))?;
+                .await.map_err(|e| VerifyFailure::Unverifiable(format!("Failed to open {}: {}", file.path, e)))?
+                .read().map_err(|e| VerifyFailure::Unverifiable(format!("Failed to read {}: {}", file.path, e)))?;
 
             while !shutdown.is_signalled() {
                 tokio::select! {
@@ -737,23 +815,23 @@ impl<B: BlockchainTypes, TS: ReadTarget> VerifyTable<TraceOptions, B, TS> for Tr
                         break;
                     },
                     record = traces.recv() => {
-                        if record.is_none() {
-                            break
-                        }
-                        let record = record.unwrap();
+                        let record = match record {
+                            None => break,
+                            Some(record) => record?,
+                        };
                         crate::progress::on_record();
                         let txid = record.fields.iter()
                             .find(|f| f.0 == "txid")
                             .ok_or("No txid in the record".to_string())?;
                         let txid_str = match &txid.1 {
                             Value::String(s) => s.clone(),
-                            _ => return Err(format!("Invalid txid type: {:?}", txid.1))
+                            _ => return Err(VerifyFailure::Invalid(format!("Invalid txid type: {:?}", txid.1)))
                         };
 
                         let txid = B::TxId::from_str(&txid_str)
                             .map_err(|_| format!("Invalid txid: {}", txid_str))?;
                         if !expected_txes.contains(&txid) {
-                            return Err(format!("Unexpected txid: {}", txid_str));
+                            return Err(VerifyFailure::Invalid(format!("Unexpected txid: {}", txid_str)));
                         }
 
                         if options.include_trace {
@@ -765,7 +843,7 @@ impl<B: BlockchainTypes, TS: ReadTarget> VerifyTable<TraceOptions, B, TS> for Tr
 
                         let first = existing_txes.insert(txid);
                         if !first {
-                            return Err(format!("Duplicate txid: {}", txid_str));
+                            return Err(VerifyFailure::Invalid(format!("Duplicate txid: {}", txid_str)));
                         }
                     }
                 }
@@ -773,7 +851,7 @@ impl<B: BlockchainTypes, TS: ReadTarget> VerifyTable<TraceOptions, B, TS> for Tr
         }
 
         if existing_txes.len() != expected_txes.len() {
-            return Err("Missing txes in the table".to_string());
+            return Err(VerifyFailure::Invalid("Missing txes in the table".to_string()));
         }
         Ok(())
     }
@@ -795,7 +873,7 @@ impl<B: BlockchainTypes, TS: ReadTarget> VerifyTable<BlockOptions, B, TS> for Bl
     type Returns = Vec<B::TxId>;
     type Params = B::DataProvider;
 
-    async fn verify_table(&self, _options: &BlockOptions, storage: &TS, range: &Range, files: &Vec<&FileReference>, data_provider: &Self::Params) -> Result<Self::Returns, String> {
+    async fn verify_table(&self, _options: &BlockOptions, storage: &TS, range: &Range, files: &Vec<&FileReference>, data_provider: &Self::Params) -> Result<Self::Returns, VerifyFailure> {
         tracing::trace!(range = %range, "Verify blocks");
 
         let mut block_seq: BlockSequence<B> = BlockSequence::new(range.len());
@@ -806,8 +884,8 @@ impl<B: BlockchainTypes, TS: ReadTarget> VerifyTable<BlockOptions, B, TS> for Bl
         for file in files {
             tracing::debug!(range = %file.range, "Processing block file: {}", file.path);
             let mut blocks = storage.open(file)
-                .await.map_err(|e| format!("Failed to open blocks storage: {}", e))?
-                .read().map_err(|e| format!("Failed to read blocks storage: {}", e))?;
+                .await.map_err(|e| VerifyFailure::Unverifiable(format!("Failed to open {}: {}", file.path, e)))?
+                .read().map_err(|e| VerifyFailure::Unverifiable(format!("Failed to read {}: {}", file.path, e)))?;
 
             while !shutdown.is_signalled() {
                 tokio::select! {
@@ -817,42 +895,44 @@ impl<B: BlockchainTypes, TS: ReadTarget> VerifyTable<BlockOptions, B, TS> for Bl
                     },
 
                     record = blocks.recv() => {
-                        if record.is_none() {
-                            tracing::trace!("Finished reading blocks from the file: {}", file.path);
-                            break
-                        }
-                        let record = record.unwrap();
+                        let record = match record {
+                            None => {
+                                tracing::trace!("Finished reading blocks from the file: {}", file.path);
+                                break
+                            },
+                            Some(record) => record?,
+                        };
                         progress::on_record();
 
                         let height = avros::get_height(&record).map_err(|e| format!("Failed to get height: {}", e))?;
                         if !range.contains(&Range::Single(height.into())) {
                             tracing::error!(range = %range, "Height is not in range: {}", height);
-                            return Err(format!("Height is not in range: {}", height));
+                            return Err(VerifyFailure::Invalid(format!("Height is not in range: {}", height)));
                         }
                         let first = heights.insert(height);
                         if !first {
                             tracing::error!(range = %range, "Duplicate height: {}", height);
-                            return Err(format!("Duplicate height: {}", height));
+                            return Err(VerifyFailure::Invalid(format!("Duplicate height: {}", height)));
                         }
 
                         let json = record.fields.iter()
                             .find(|f| f.0 == "json");
                         if json.is_none() {
                             tracing::error!(range = %range, "No json in the record");
-                            return Err("No json in the record".to_string());
+                            return Err(VerifyFailure::Invalid("No json in the record".to_string()));
                         }
                         let json = json.unwrap();
                         let json = match &json.1 {
                             Value::Bytes(b) => b.clone(),
                             _ => {
                                 tracing::error!(range = %range, "Invalid json type: {:?}", json.1);
-                                return Err(format!("Invalid json type: {:?}", json.1));
+                                return Err(VerifyFailure::Invalid(format!("Invalid json type: {:?}", json.1)));
                             }
                         };
                         let block = serde_json::from_slice::<B::BlockParsed>(json.as_slice());
                         if block.is_err() {
                             tracing::error!(range = %range, "Invalid json data: {:?}", block.err().unwrap());
-                            return Err("Invalid json data".to_string());
+                            return Err(VerifyFailure::Invalid("Invalid json data".to_string()));
                         }
                         let block = block.unwrap();
                         tracing::trace!(height = height, "Block {:?} is on top of {:?}", block.hash(), block.parent());
@@ -873,14 +953,14 @@ impl<B: BlockchainTypes, TS: ReadTarget> VerifyTable<BlockOptions, B, TS> for Bl
             }
             let heights_range = heights_range.compact();
             tracing::error!(range = %range, "Missing blocks in the table. actual={}", heights_range);
-            return Err("Missing blocks in the table".to_string());
+            return Err(VerifyFailure::Invalid("Missing blocks in the table".to_string()));
         }
 
         {
             let top_block = block_seq.get_head();
             if top_block.is_none() {
                 tracing::error!(range = %range, "No blocks in the table");
-                return Err("No blocks in the table".to_string());
+                return Err(VerifyFailure::Invalid("No blocks in the table".to_string()));
             }
             let top_block = top_block.unwrap();
             let chain = block_seq.up_to(top_block.0, top_block.1);
@@ -892,14 +972,14 @@ impl<B: BlockchainTypes, TS: ReadTarget> VerifyTable<BlockOptions, B, TS> for Bl
             // not using Eq because the ranges may contain hash info, or may be None
             if chain_range.start() != range.start() || chain_range.end() != range.end() {
                 tracing::error!(range = %range, "Table range is not consistent for blocks. Expected range: {}, actual range: {}", range, chain_range);
-                return Err("Table range is not consistent for blocks".to_string());
+                return Err(VerifyFailure::Invalid("Table range is not consistent for blocks".to_string()));
             }
 
             let (_, actual, _) = data_provider.fetch_block(&BlockReference::height(range.end())).await
-                .map_err(|e| format!("Failed to fetch block from blockchain: {}", e))?;
+                .map_err(|e| VerifyFailure::Unverifiable(format!("Failed to fetch block from blockchain: {}", e)))?;
             if !actual.hash().eq(&top_block.1) {
                 tracing::error!(range = %range, "Top block hash does not match blockchain: expected {:?}, in archive {:?}", actual.hash(), top_block.1);
-                return Err("Top block hash does not match blockchain".to_string());
+                return Err(VerifyFailure::Invalid("Top block hash does not match blockchain".to_string()));
             }
         }
 
@@ -914,7 +994,7 @@ mod tests {
     use object_store::memory::InMemory;
     use object_store::{ObjectMeta, ObjectStore};
     use crate::args::Args;
-    use crate::blockchain::mock::{MockBlock, MockData, MockTx, MockType};
+    use crate::blockchain::mock::{MockBlock, MockData, MockTrace, MockTx, MockType};
     use crate::archiver::Archiver;
     use crate::command::CommandExecutor;
     use crate::command::verify::{merge_small, verify_field_non_null, VerifyCommand};
@@ -922,7 +1002,7 @@ mod tests {
     use crate::storage::objects::ObjectsStorage;
     use futures_util::StreamExt;
     use crate::blockchain::{BlockReference, BlockchainData};
-    use crate::archiver::datakind::{DataKind, DataTables};
+    use crate::archiver::datakind::{DataKind, DataTables, TraceOptions};
     use crate::archiver::range::Range;
     use crate::archiver::range_group::ArchiveGroup;
     use crate::avros::BLOCK_SCHEMA;
@@ -1209,6 +1289,122 @@ mod tests {
 
         let files = testing::list_mem_filenames(mem).await;
         assert_eq!(files.len(), 0);
+    }
+
+    ///
+    /// The archive is deleted only when it's known to be wrong. A file that could not be read is
+    /// not known to be anything, and it used to look exactly like a file with missing data.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn keeps_files_that_cannot_be_read() {
+        testing::start_test();
+        let mem = Arc::new(InMemory::new());
+        let archiver = create_archiver(mem.clone());
+        let data = archiver.data_provider.clone();
+
+        let block100 = MockBlock {
+            height: 100,
+            hash: "B100".to_string(),
+            parent: "B099".to_string(),
+            transactions: vec!["TX001".to_string()],
+        };
+        data.add_block(block100.clone());
+        data.add_tx(MockTx {
+            hash: "TX001".to_string(),
+        });
+
+        testing::write_block_and_tx(&archiver, 100, None).await.unwrap();
+        let before = testing::list_mem_filenames(mem.clone()).await;
+        assert_eq!(before.len(), 2);
+
+        // the same archive, but now every download from the storage breaks
+        let storage = ObjectsStorage::new(
+            Arc::new(testing::BrokenDownloads::new(mem.clone())),
+            "test".to_string(),
+            Filenames::with_dir("archive/eth".to_string()),
+        );
+        let archiver: Archiver<MockType, _> = Archiver::new_simple(Arc::new(storage), data);
+
+        let args = Args {
+            range: Some("100..110".to_string()),
+            fix_clean: true,
+            ..Default::default()
+        };
+        let command = VerifyCommand::new(&args, archiver).unwrap();
+        let result = command.execute().await;
+        if let Err(err) = result {
+            panic!("Failed: {:?}", err);
+        }
+
+        let after = testing::list_mem_filenames(mem).await;
+        assert_eq!(after, before);
+    }
+
+    ///
+    /// `--fix.clean` replaces the whole chunk when a part of it is broken, which is a decision
+    /// about the files it didn't check either. It must not be made while a table of the chunk
+    /// could not be read.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn keeps_unread_files_when_cleaning_the_chunk() {
+        testing::start_test();
+        let mem = Arc::new(InMemory::new());
+        let archiver = create_archiver(mem.clone());
+        let data = archiver.data_provider.clone();
+
+        let block100 = MockBlock {
+            height: 100,
+            hash: "B100".to_string(),
+            parent: "B099".to_string(),
+            transactions: vec!["TX001".to_string(), "TX002".to_string()],
+        };
+        data.add_block(block100.clone());
+        for tx in &block100.transactions {
+            data.add_tx(MockTx { hash: tx.clone() });
+            data.add_trace(MockTrace {
+                tx_hash: tx.clone(),
+                trace_json: Some(format!(r#"{{"trace":"{}"}}"#, tx).into_bytes()),
+                state_diff_json: Some(format!(r#"{{"diff":"{}"}}"#, tx).into_bytes()),
+            });
+        }
+
+        let trace_options = TraceOptions {
+            include_trace: true,
+            include_state_diff: true,
+        };
+        // only the first tx is archived, i.e. the tx table is broken and must be deleted
+        testing::write_block_tx_and_traces(&archiver, 100, Some(vec![0]), Some(trace_options)).await.unwrap();
+        let before = testing::list_mem_filenames(mem.clone()).await;
+        assert_eq!(before.len(), 3);
+
+        // the same archive, but now the traces cannot be downloaded
+        let storage = ObjectsStorage::new(
+            Arc::new(testing::BrokenDownloads::only(mem.clone(), ".traces.avro")),
+            "test".to_string(),
+            Filenames::with_dir("archive/eth".to_string()),
+        );
+        let archiver: Archiver<MockType, _> = Archiver::new_simple(Arc::new(storage), data);
+
+        let args = Args {
+            range: Some("100..110".to_string()),
+            tables: Some("blocks,txes,traces".to_string()),
+            fields_trace: Some("calls,stateDiff".to_string()),
+            fix_clean: true,
+            ..Default::default()
+        };
+        let command = VerifyCommand::new(&args, archiver).unwrap();
+        let result = command.execute().await;
+        if let Err(err) = result {
+            panic!("Failed: {:?}", err);
+        }
+
+        let after = testing::list_mem_filenames(mem).await;
+        assert!(
+            after.contains(&"archive/eth/000000000/000000000/000000100.traces.avro".to_string()),
+            "Deleted a file that was never read: {:?}", after
+        );
+        assert!(
+            !after.contains(&"archive/eth/000000000/000000000/000000100.txes.avro".to_string()),
+            "Kept the table that is known to be incomplete: {:?}", after
+        );
     }
 
     #[test]

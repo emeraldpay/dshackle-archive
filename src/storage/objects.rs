@@ -18,7 +18,6 @@ use tokio::{
 };
 use tokio::sync::mpsc::Sender;
 use tokio::sync::Mutex;
-use tokio_util::io::{StreamReader, SyncIoBridge};
 use crate::archiver::datakind::{DataKind, DataOptions};
 use crate::archiver::filenames::{Filenames, Level, LevelDouble, LevelSingle};
 use crate::archiver::range::Range;
@@ -27,8 +26,9 @@ use crate::global;
 use crate::notify::Location;
 use crate::record::ArchiveRow;
 use crate::storage::{
-    avro_reader, copy, find_incomplete_by_listing, sorted_files, FileReference, ReadTarget,
-    ScanTarget, TargetFile, TargetFileReader, TargetFileWriter, WriteTarget,
+    avro_reader, copy, find_incomplete_by_listing, object_reader::ResumableObjectRead,
+    sorted_files, FileReference, ReadTarget, RecordStream, ScanTarget, TargetFile,
+    TargetFileReader, TargetFileWriter, WriteTarget,
 };
 
 pub struct ObjectsStorage<S: ObjectStore> {
@@ -89,10 +89,10 @@ impl<S: ObjectStore> ReadTarget for ObjectsStorage<S> {
         let object_path = Path::from(path.path.clone());
         let get_result = self.os.get(&object_path).await?;
         let file = ExisingObjectsFile {
+            os: self.os.clone(),
             bucket: self.bucket.clone(),
             path: object_path.clone(),
             kind: path.kind.clone(),
-            // stream: get_result,
             stream: Mutex::new(get_result),
         };
         Ok(file)
@@ -261,6 +261,8 @@ impl TargetFileWriter for NewObjectsFile<'_> {
 
 #[derive(Debug)]
 pub struct ExisingObjectsFile {
+    /// Kept to re-open the object when its body breaks in the middle of the download
+    os: Arc<dyn ObjectStore>,
     bucket: String,
     path: Path,
     kind: DataKind,
@@ -274,15 +276,15 @@ impl TargetFile for ExisingObjectsFile {
 }
 
 impl TargetFileReader for ExisingObjectsFile {
-    fn read(self) -> anyhow::Result<Receiver<Record<'static>>> {
+    fn read(self) -> anyhow::Result<RecordStream> {
         let path = self.path.clone();
         let kind = self.kind.clone();
+        let url = self.get_url();
         tracing::trace!(path = path.to_string(), "Start reading avro file");
 
-        let stream = self.stream.into_inner().into_stream();
-        let std_reader = SyncIoBridge::new(StreamReader::new(stream));
+        let std_reader = ResumableObjectRead::new(self.os, path, self.stream.into_inner());
 
-        let rx_sync = avro_reader::consume_sync(kind, avro::schema_for(kind), std_reader);
+        let rx_sync = avro_reader::consume_sync(kind, avro::schema_for(kind), url, std_reader);
         let rx = copy::copy_from_sync(rx_sync);
 
         Ok(rx)
@@ -648,6 +650,7 @@ mod tests {
         Box::new(file).close().await.unwrap();
 
         let file = ExisingObjectsFile {
+            os: mem.clone(),
             bucket,
             path: path.clone(),
             kind: DataKind::Blocks,
