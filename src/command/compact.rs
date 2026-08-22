@@ -198,12 +198,11 @@ impl<B: BlockchainTypes+ 'static, TS: ReadTarget + 'static> CompactCommand<B, TS
 
         let mut files = vec![];
         while let Some(next) = compactions.join_next().await {
-            let result = next.unwrap();
-            match result {
-                Ok(file) => files.push(file),
-                Err(e) => {
-                    return Err(e);
-                }
+            match next {
+                Ok(Ok(file)) => files.push(file),
+                Ok(Err(e)) => return Err(e),
+                // a panicked compaction must not kill the whole run, the caller just skips this range
+                Err(e) => return Err(anyhow!("Compaction of the range failed: {}", e)),
             }
         }
 
@@ -230,6 +229,20 @@ impl<B: BlockchainTypes+ 'static, TS: ReadTarget + 'static> CompactCommand<B, TS
         for file in files {
             complete.append(file)?;
         }
+        // a group missing a table cannot be used as a source, even when the other groups already
+        // cover the whole range (ex., leftovers of an interrupted compaction of the same range)
+        let incomplete = complete.list_incomplete();
+        if !incomplete.is_empty() {
+            let sample = incomplete.iter()
+                .take(5)
+                .map(|g| format!("{} (no {})", g.range, g.get_incomplete_kinds().iter().map(|k| k.to_string()).collect::<Vec<String>>().join("+")))
+                .collect::<Vec<String>>()
+                .join(", ");
+            // Fix alone would only fill the missing table and leave the range covered twice, which the
+            // copy validation then rejects as a broken range
+            return Err(anyhow!("Range has {} incomplete archives (ex., {}). Please run Verify with --fix.clean before Compaction. Skipping this range.", incomplete.len(), sample));
+        }
+
         let mut bag = RangeBag::new();
         for group in complete.iter() {
             if group.is_complete() {
@@ -524,6 +537,8 @@ mod tests {
     use crate::testing;
     use crate::archiver::datakind::{DataOptions, TraceOptions};
     use crate::archiver::range::Range;
+    use crate::storage::FileReference;
+    use anyhow::Result;
     use super::CopiedStatus;
 
     // ============================================================================
@@ -1019,6 +1034,113 @@ mod tests {
         assert!(result.contains(&"archive/eth/000000000/range-000000200_000000209.blocks.avro".to_string()));
         assert!(result.contains(&"archive/eth/000000000/range-000000200_000000209.txes.avro".to_string()));
         assert!(result.contains(&"archive/eth/000000000/range-000000200_000000209.traces.avro".to_string()));
+    }
+
+    fn archive_files(range: Range, kinds: &[crate::archiver::datakind::DataKind]) -> Vec<FileReference> {
+        kinds.iter()
+            .map(|kind| FileReference {
+                range: range.clone(),
+                kind: *kind,
+                path: format!("{}-{}", range, kind),
+            })
+            .collect()
+    }
+
+    fn verify_all_tables(files: Vec<FileReference>) -> Result<()> {
+        let mut options = DataOptions::default();
+        options.trace = Some(TraceOptions::default());
+        CompactCommand::<MockType, ObjectsStorage<InMemory>>::verify_files(&Range::new(100, 104), files, &options)
+            .map(|_| ())
+    }
+
+    #[test]
+    fn verify_files_accepts_complete_blocks() {
+        use crate::archiver::datakind::DataKind::*;
+
+        let files = (100..105)
+            .flat_map(|h| archive_files(Range::single(h), &[Blocks, Transactions, TransactionTraces]))
+            .collect();
+
+        assert!(verify_all_tables(files).is_ok());
+    }
+
+    #[test]
+    fn verify_files_rejects_group_missing_a_table() {
+        use crate::archiver::datakind::DataKind::*;
+
+        let mut files: Vec<FileReference> = (100..105)
+            .flat_map(|h| archive_files(Range::single(h), &[Blocks, Transactions, TransactionTraces]))
+            .collect();
+        // the whole range is covered by the blocks above, but this one cannot be used as a source
+        files.extend(archive_files(Range::new(100, 104), &[Blocks, Transactions]));
+
+        let err = verify_all_tables(files).unwrap_err().to_string();
+        assert!(err.contains("incomplete archives"), "{}", err);
+    }
+
+    /// Leftovers of an interrupted compaction (a range file for some of the tables) used to make the
+    /// compaction unwrap a missing source file and panic
+    #[tokio::test(flavor = "multi_thread")]
+    async fn compact_command_skips_range_with_incomplete_leftovers() {
+        use crate::storage::{TargetFileWriter, WriteTarget};
+
+        testing::start_test();
+
+        let mem = Arc::new(InMemory::new());
+        let data = MockData::new("TEST_LEFTOVER");
+        let data_provider: Arc<MockData> = Arc::new(data);
+        let storage = ObjectsStorage::new(mem.clone(), "test".to_string(), Filenames::with_dir("archive/test".to_string()));
+        let archiver = Archiver::new_simple(Arc::new(storage), data_provider.clone());
+
+        let trace_options = TraceOptions {
+            include_trace: true,
+            include_state_diff: false,
+        };
+
+        // a chunk is compacted only once the listing moves on to the next one, so there are blocks after it
+        for i in 0..15 {
+            let block_height = 100 + i as u64;
+            let txs = vec![format!("TX{}-1", block_height)];
+            data_provider.add_block(MockBlock {
+                height: block_height,
+                hash: format!("B{}", block_height),
+                parent: format!("B{}", block_height-1),
+                transactions: txs.clone(),
+            });
+            for tx in &txs {
+                data_provider.add_tx(MockTx { hash: tx.clone() });
+                data_provider.add_trace(MockTrace {
+                    tx_hash: tx.clone(),
+                    trace_json: Some(format!(r#"{{"calls":["call1"]}}"#).into_bytes()),
+                    state_diff_json: None,
+                });
+            }
+            testing::write_block_tx_and_traces(&archiver, block_height, None, Some(trace_options.clone())).await.unwrap();
+        }
+
+        // as if a previous compaction wrote the range files for a part of the tables and then died
+        let chunk = Range::new(100, 109);
+        for kind in [crate::archiver::datakind::DataKind::Blocks, crate::archiver::datakind::DataKind::Transactions] {
+            let file = archiver.target.create(kind, &chunk, true).await.unwrap().unwrap();
+            file.close().await.unwrap();
+        }
+
+        let args = Args {
+            range: Some("100..115".to_string()),
+            range_chunk: Some(10),
+            tables: Some("blocks,txes,traces".to_string()),
+            fields_trace: Some("calls".to_string()),
+            ..Default::default()
+        };
+        let compact_cmd = CompactCommand::new(&args, archiver).unwrap();
+
+        compact_cmd.execute().await.unwrap();
+
+        // the range is skipped, so nothing is deleted
+        let result = testing::list_mem_filenames(mem).await;
+        assert_eq!(result.len(), 15 * 3 + 2);
+        assert!(result.contains(&"archive/test/000000000/000000000/000000100.traces.avro".to_string()));
+        assert!(result.contains(&"archive/test/000000000/000000000/000000109.traces.avro".to_string()));
     }
 
     #[tokio::test(flavor = "multi_thread")]
