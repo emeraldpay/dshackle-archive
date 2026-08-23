@@ -194,7 +194,8 @@ impl<S: ObjectStore> ObjectsStorage<S> {
 pub struct NewObjectsFile<'a> {
     pipe: ObjectWriterPipe,
     writer: Mutex<Writer<'a, ObjectWriterPipe>>,
-    closed: oneshot::Receiver<usize>,
+    /// The result of the background writer: the written size, or why the object was not written
+    closed: oneshot::Receiver<Result<usize, String>>,
 
     bucket: String,
     path: Path,
@@ -253,7 +254,9 @@ impl TargetFileWriter for NewObjectsFile<'_> {
         }
 
         let url = self.get_url();
-        let total_size = self.closed.await?;
+        let total_size = self.closed.await
+            .map_err(|_| anyhow!("Writer of {} stopped without a result", url))?
+            .map_err(|e| anyhow!("Object {} is not written: {}", url, e))?;
         tracing::trace!("Close object: {} ({} bytes written)", url, total_size);
         Ok(())
     }
@@ -311,7 +314,7 @@ impl NewObjectsFile<'_> {
 
     ///
     /// Starts a pipe from a Synchronized writer to Async writer
-    fn pipe_start(mut buf: BufWriter, on_close: oneshot::Sender<usize>) -> ObjectWriterPipe {
+    fn pipe_start(mut buf: BufWriter, on_close: oneshot::Sender<Result<usize, String>>) -> ObjectWriterPipe {
         let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
         let in_flight = Arc::new(AtomicI64::new(0));
         let in_flight_inner = in_flight.clone();
@@ -322,8 +325,9 @@ impl NewObjectsFile<'_> {
                     WriteOp::Data(data) => {
                         match buf.write_all(data.as_slice()).await {
                             Err(e) => {
-                                tracing::error!("Error writing to object: {:?}", e);
-                                let _ = on_close.send(total_size);
+                                // nothing can be written after a broken write, and the caller must learn
+                                // about it on close instead of getting an incomplete object
+                                let _ = on_close.send(Err(format!("Failed to write: {}", e)));
                                 return;
                             }
                             Ok(_) => {
@@ -334,14 +338,16 @@ impl NewObjectsFile<'_> {
                     }
                     WriteOp::Flush => {
                         if let Err(e) = buf.flush().await {
-                            tracing::error!("Error flushing object: {:?}", e);
+                            let _ = on_close.send(Err(format!("Failed to flush: {}", e)));
+                            return;
                         }
                     }
                     WriteOp::Close => {
-                        if let Err(e) = buf.shutdown().await {
-                            tracing::error!("Error flushing object: {:?}", e);
-                        }
-                        let _ = on_close.send(total_size);
+                        // the upload is finished only by the shutdown, i.e., a failure here means no object at all
+                        let result = buf.shutdown().await
+                            .map(|_| total_size)
+                            .map_err(|e| format!("Failed to finish the upload: {}", e));
+                        let _ = on_close.send(result);
                         return;
                     }
                     WriteOp::Await(tx) => {

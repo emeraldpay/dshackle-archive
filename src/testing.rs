@@ -193,6 +193,81 @@ pub async fn write_block_tx_and_traces<TS: ReadTarget>(
 }
 
 ///
+/// An object store where the upload of the selected objects fails at the very end, when the data is
+/// sent to the storage
+///
+/// Everything else works as usual, so a test can fill the storage first and then write into it
+/// through this wrapper.
+#[derive(Debug)]
+pub struct BrokenUploads {
+    inner: Arc<InMemory>,
+    /// Break only the paths containing it
+    only: String,
+}
+
+impl BrokenUploads {
+    ///
+    /// Break the uploads of the files with the given text in the path, and accept the others as usual
+    pub fn only<S: ToString>(inner: Arc<InMemory>, path_part: S) -> Self {
+        Self { inner, only: path_part.to_string() }
+    }
+
+    fn breaks(&self, location: &Path) -> bool {
+        location.as_ref().contains(self.only.as_str())
+    }
+
+    fn failure() -> object_store::Error {
+        object_store::Error::Generic {
+            store: "test",
+            source: "upload rejected".into(),
+        }
+    }
+}
+
+impl std::fmt::Display for BrokenUploads {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "BrokenUploads({})", self.inner)
+    }
+}
+
+#[async_trait::async_trait]
+impl ObjectStore for BrokenUploads {
+    async fn put_opts(&self, location: &Path, payload: PutPayload, opts: PutOptions) -> object_store::Result<PutResult> {
+        if self.breaks(location) {
+            return Err(Self::failure());
+        }
+        self.inner.put_opts(location, payload, opts).await
+    }
+
+    async fn put_multipart_opts(&self, location: &Path, opts: PutMultipartOptions) -> object_store::Result<Box<dyn MultipartUpload>> {
+        if self.breaks(location) {
+            return Err(Self::failure());
+        }
+        self.inner.put_multipart_opts(location, opts).await
+    }
+
+    async fn get_opts(&self, location: &Path, options: GetOptions) -> object_store::Result<GetResult> {
+        self.inner.get_opts(location, options).await
+    }
+
+    fn delete_stream(&self, locations: futures_util::stream::BoxStream<'static, object_store::Result<Path>>) -> futures_util::stream::BoxStream<'static, object_store::Result<Path>> {
+        self.inner.delete_stream(locations)
+    }
+
+    fn list(&self, prefix: Option<&Path>) -> futures_util::stream::BoxStream<'static, object_store::Result<ObjectMeta>> {
+        self.inner.list(prefix)
+    }
+
+    async fn list_with_delimiter(&self, prefix: Option<&Path>) -> object_store::Result<ListResult> {
+        self.inner.list_with_delimiter(prefix).await
+    }
+
+    async fn copy_opts(&self, from: &Path, to: &Path, options: CopyOptions) -> object_store::Result<()> {
+        self.inner.copy_opts(from, to, options).await
+    }
+}
+
+///
 /// An object store where every download breaks after the first bytes
 ///
 /// Everything else, including writing and listing, works as usual, so a test can fill the

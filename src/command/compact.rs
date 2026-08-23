@@ -213,7 +213,9 @@ impl<B: BlockchainTypes+ 'static, TS: ReadTarget + 'static> CompactCommand<B, TS
 
         if all_copied {
             for file in files.into_iter() {
-                let _ = file.close().await;
+                // an unclosed file is incomplete (and dropped from the archive), so the caller must not
+                // treat the range as compacted and delete its sources
+                file.close().await?;
             }
             tracing::debug!(range = display(range), "Range compacted");
         }
@@ -390,7 +392,9 @@ impl<B: BlockchainTypes, TS: ReadTarget> TableCompaction<BlockOptions, B, TS> fo
                                 let height = avros::get_height(&record)?;
                                 if range.contains(&height.into()) {
                                     let txes = parse_block::<B>(&record)?.txes();
-                                    let _ = target_file.append_avro_record(record).await;
+                                    // the sources are deleted once the copied status covers the range, so a
+                                    // record that failed to be written must never be counted as copied
+                                    target_file.append_avro_record(record).await?;
                                     {
                                         let mut status = status.lock().unwrap();
                                         status.on_copied_block(height, txes);
@@ -454,7 +458,7 @@ impl<B: BlockchainTypes, TS: ReadTarget> TableCompaction<TxOptions, B, TS> for C
                                 let height = avros::get_height(&record)?;
                                 let txid = parse_tx_id::<B>(&record)?;
                                 if range.contains(&height.into()) {
-                                    let _ = target_file.append_avro_record(record).await;
+                                    target_file.append_avro_record(record).await?;
                                     {
                                         let mut status = status.lock().unwrap();
                                         status.on_copied_tx(txid);
@@ -504,7 +508,7 @@ impl<B: BlockchainTypes, TS: ReadTarget> TableCompaction<TraceOptions, B, TS> fo
                                 let height = avros::get_height(&record)?;
                                 let txid = parse_tx_id::<B>(&record)?;
                                 if range.contains(&height.into()) {
-                                    let _ = target_file.append_avro_record(record).await;
+                                    target_file.append_avro_record(record).await?;
                                     {
                                         let mut status = status.lock().unwrap();
                                         status.on_copied_trace(txid);
@@ -1301,6 +1305,57 @@ mod tests {
         let after = testing::list_mem_filenames(mem).await;
         for file in &before {
             assert!(after.contains(file), "Deleted a file that was never read: {}", file);
+        }
+    }
+
+    /// A write that fails only when the data goes to the storage (i.e., not on the append) used to be
+    /// reported as a successfully compacted range, and the sources were deleted
+    #[tokio::test(flavor = "multi_thread")]
+    async fn keeps_source_files_when_the_target_is_not_written() {
+        testing::start_test();
+
+        let mem = Arc::new(InMemory::new());
+        let data_provider: Arc<MockData> = Arc::new(MockData::new("TEST_UNWRITABLE"));
+        let storage = ObjectsStorage::new(mem.clone(), "test".to_string(), Filenames::with_dir("archive/test".to_string()));
+        let archiver: Archiver<MockType, _> = Archiver::new_simple(Arc::new(storage), data_provider.clone());
+
+        // the chunk 300-309 is compacted only when the files of the next chunk show up in the listing
+        for i in 0..15 {
+            let block_height = 300 + i as u64;
+            let txs = vec![format!("TX{}", block_height)];
+            data_provider.add_block(MockBlock {
+                height: block_height,
+                hash: format!("B{}", block_height),
+                parent: format!("B{}", block_height - 1),
+                transactions: txs.clone(),
+            });
+            for tx in &txs {
+                data_provider.add_tx(MockTx { hash: tx.clone() });
+            }
+            testing::write_block_and_tx(&archiver, block_height, None).await.unwrap();
+        }
+
+        let before = testing::list_mem_filenames(mem.clone()).await;
+        assert_eq!(before.len(), 30);
+
+        // the same archive, but now the compacted range files cannot be uploaded
+        let storage = ObjectsStorage::new(
+            Arc::new(testing::BrokenUploads::only(mem.clone(), "range-")),
+            "test".to_string(),
+            Filenames::with_dir("archive/test".to_string()),
+        );
+        let archiver: Archiver<MockType, _> = Archiver::new_simple(Arc::new(storage), data_provider);
+
+        let args = Args {
+            range: Some("300..315".to_string()),
+            range_chunk: Some(10),
+            ..Default::default()
+        };
+        CompactCommand::new(&args, archiver).unwrap().execute().await.unwrap();
+
+        let after = testing::list_mem_filenames(mem).await;
+        for file in &before {
+            assert!(after.contains(file), "Deleted a source of a range that was not written: {}", file);
         }
     }
 }
