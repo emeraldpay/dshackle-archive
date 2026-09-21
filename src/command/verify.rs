@@ -625,10 +625,21 @@ async fn verify_content<'a, B: BlockchainTypes, TS: ReadTarget>(archiver: Arc<Ar
     Ok(RangeVerification { broken: broken_files, incomplete })
 }
 
-fn verify_field_exist(record: &Record, field: &str) -> Result<(), String> {
+///
+/// An optional field is a `["null", ...]` union in the schema, and the reader gives it back
+/// wrapped into the union, not as the value itself
+fn get_field<'a>(record: &'a Record, field: &str) -> Result<&'a Value, String> {
     let value = record.get(field)
         .ok_or(format!("No {} in the record", field))?;
-    match &value {
+    match value {
+        Value::Union(_, inner) => Ok(inner.as_ref()),
+        v => Ok(v),
+    }
+}
+
+fn verify_field_exist(record: &Record, field: &str) -> Result<(), String> {
+    let value = get_field(record, field)?;
+    match value {
         Value::Null => Err(format!("Null {} in the record", field)),
         Value::Bytes(v) => if v.is_empty() {
             Err(format!("Empty {} in the record", field))
@@ -647,9 +658,8 @@ fn verify_field_exist(record: &Record, field: &str) -> Result<(), String> {
 fn verify_field_non_null(record: &Record, field: &str) -> Result<(), String> {
     use strum::IntoDiscriminant;
 
-    let value = record.get(field)
-        .ok_or(format!("No {} in the record", field))?;
-    match &value {
+    let value = get_field(record, field)?;
+    match value {
         Value::Null => Err(format!("Null {} in the record", field)),
         Value::Bytes(v) => if v.is_empty() {
             Err(format!("Empty {} in the record", field))
@@ -1005,7 +1015,7 @@ mod tests {
     use crate::archiver::datakind::{DataKind, DataTables, TraceOptions};
     use crate::archiver::range::Range;
     use crate::archiver::range_group::ArchiveGroup;
-    use crate::avros::BLOCK_SCHEMA;
+    use crate::avros::{BLOCK_SCHEMA, TX_TRACE_SCHEMA};
     use crate::storage::{FileReference, TargetFileWriter, WriteTarget};
     use crate::testing;
 
@@ -1407,6 +1417,54 @@ mod tests {
         );
     }
 
+    #[tokio::test(flavor = "multi_thread")]
+    async fn keeps_valid_traces() {
+        testing::start_test();
+        let mem = Arc::new(InMemory::new());
+        let archiver = create_archiver(mem.clone());
+        let data = archiver.data_provider.clone();
+
+        let block100 = MockBlock {
+            height: 100,
+            hash: "B100".to_string(),
+            parent: "B099".to_string(),
+            transactions: vec!["TX001".to_string(), "TX002".to_string()],
+        };
+        data.add_block(block100.clone());
+        for tx in &block100.transactions {
+            data.add_tx(MockTx { hash: tx.clone() });
+            data.add_trace(MockTrace {
+                tx_hash: tx.clone(),
+                trace_json: Some(format!(r#"{{"trace":"{}"}}"#, tx).into_bytes()),
+                state_diff_json: Some(format!(r#"{{"diff":"{}"}}"#, tx).into_bytes()),
+            });
+        }
+
+        let trace_options = TraceOptions {
+            include_trace: true,
+            include_state_diff: true,
+        };
+        testing::write_block_tx_and_traces(&archiver, 100, None, Some(trace_options)).await.unwrap();
+        let before = testing::list_mem_filenames(mem.clone()).await;
+        assert_eq!(before.len(), 3);
+
+        let args = Args {
+            range: Some("100..110".to_string()),
+            tables: Some("blocks,txes,traces".to_string()),
+            fields_trace: Some("calls,stateDiff".to_string()),
+            fix_clean: true,
+            ..Default::default()
+        };
+        let command = VerifyCommand::new(&args, archiver).unwrap();
+        let result = command.execute().await;
+        if let Err(err) = result {
+            panic!("Failed: {:?}", err);
+        }
+
+        let after = testing::list_mem_filenames(mem).await;
+        assert_eq!(after, before);
+    }
+
     #[test]
     fn test_merge_small_empty() {
         let groups = vec![];
@@ -1531,5 +1589,21 @@ mod tests {
         record.put("blockId", Value::Null);
         assert!(verify_field_non_null(&record, "json").is_err());
         assert!(verify_field_non_null(&record, "blockId").is_err());
+    }
+
+    #[test]
+    fn test_verify_non_null_accept_optional_data() {
+        let mut record = Record::new(&TX_TRACE_SCHEMA).unwrap();
+        record.put("traceJson", Value::Union(1, Box::new(Value::Bytes(b"{}".to_vec()))));
+        assert!(verify_field_non_null(&record, "traceJson").is_ok());
+    }
+
+    #[test]
+    fn test_verify_non_null_reject_optional_null() {
+        let mut record = Record::new(&TX_TRACE_SCHEMA).unwrap();
+        record.put("traceJson", Value::Union(0, Box::new(Value::Null)));
+        record.put("stateDiffJson", Value::Union(1, Box::new(Value::Bytes(b"null".to_vec()))));
+        assert!(verify_field_non_null(&record, "traceJson").is_err());
+        assert!(verify_field_non_null(&record, "stateDiffJson").is_err());
     }
 }
