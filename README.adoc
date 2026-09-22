@@ -108,6 +108,11 @@ Options:
       --stream.topics <STREAM_TOPICS>
           Prefix used to build the per-field topic names. Each field is published to `<prefix>-<field>` (e.g. `<prefix>-blocks`, `<prefix>-tx-json`). For Pulsar, include the full topic path up to the prefix, e.g. `persistent://public/default/archive-eth`; for Kafka it's a plain topic name, e.g. `archive-eth`
 
+      --stream.topics-separator <STREAM_TOPICS_SEPARATOR>
+          Separator placed between the `--stream.topics` prefix and the field label when building a topic name. The field labels themselves are fixed and keep their own `-` (e.g. `tx-json`), so with `.` the topics are `<prefix>.blocks`, `<prefix>.tx-json`, etc.
+
+          [default: -]
+
   -d, --dir <DIR>
           Target directory
 
@@ -235,6 +240,10 @@ The URL scheme selects the broker:
 `--stream.topics` specifies the prefix used to build the per-field topic names.
 Each field is published to `<prefix>-<field>` (e.g. `<prefix>-blocks`, `<prefix>-tx-json`).
 For Pulsar the prefix includes the full topic path (e.g. `persistent://public/default/ethereum`); for Kafka it's a plain topic name.
+
+`--stream.topics-separator` changes the `-` placed between the prefix and the field (default `-`).
+E.g. with `--stream.topics-separator .` the topics become `<prefix>.blocks`, `<prefix>.tx-json`, etc., which fits the dotted naming common for Kafka.
+The field labels themselves (`tx-json`, `blocks-uncles`, ...) are fixed and keep their `-`.
 
 Every message of one block goes to the same partition, selected by block height, so a consumer sees the records of a block, and of any re-org replacement for it, in publish order.
 

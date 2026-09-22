@@ -85,7 +85,12 @@ impl StreamConfig {
             .stream_topics
             .clone()
             .ok_or_else(|| anyhow!("--stream.topics is required for a streaming target"))?;
-        let topics = TopicSet::new(prefix, B::BLOCKCHAIN_TYPE, &DataOptions::from(value));
+        let topics = TopicSet::new(
+            prefix,
+            stream.stream_topics_separator.clone(),
+            B::BLOCKCHAIN_TYPE,
+            &DataOptions::from(value),
+        );
         Ok(Self { url, topics })
     }
 }

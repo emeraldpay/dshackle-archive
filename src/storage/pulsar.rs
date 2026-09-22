@@ -346,7 +346,12 @@ mod tests {
                 include_state_diff: true,
             }),
         };
-        let topics = TopicSet::new(prefix, BlockchainType::Ethereum, &full_options);
+        let topics = TopicSet::new(
+            prefix,
+            "-".to_string(),
+            BlockchainType::Ethereum,
+            &full_options,
+        );
         let storage = PulsarStorage::new(uri.clone(), topics)
             .await
             .expect("Pulsar connect");

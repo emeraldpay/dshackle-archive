@@ -324,6 +324,18 @@ pub struct Stream {
     /// name, e.g. `archive-eth`.
     #[arg(long = "stream.topics", required = false, alias = "stream-topics")]
     pub stream_topics: Option<String>,
+
+    /// Separator placed between the `--stream.topics` prefix and the field
+    /// label when building a topic name. The field labels themselves are fixed
+    /// and keep their own `-` (e.g. `tx-json`), so with `.` the topics are
+    /// `<prefix>.blocks`, `<prefix>.tx-json`, etc.
+    #[arg(
+        long = "stream.topics-separator",
+        required = false,
+        default_value = "-",
+        alias = "stream-topics-separator"
+    )]
+    pub stream_topics_separator: String,
 }
 
 impl Default for Stream {
@@ -331,6 +343,7 @@ impl Default for Stream {
         Self {
             stream_url: None,
             stream_topics: None,
+            stream_topics_separator: "-".to_string(),
         }
     }
 }

@@ -6,8 +6,9 @@
 //! Topic naming for the streaming targets.
 //!
 //! Every broker uses the same layout — one topic per field, named
-//! `<prefix>-<field>`, where the prefix is what the user passed in
-//! `--stream.topics` and the field labels depend on the blockchain and the
+//! `<prefix><separator><field>`, where the prefix and the separator are what
+//! the user passed in `--stream.topics` and `--stream.topics-separator`
+//! (`-` by default), and the field labels depend on the blockchain and the
 //! table selection. [`TopicSet`] owns that naming so a producer opened at
 //! startup and a message routed at append time cannot disagree about which
 //! topic a field belongs to.
@@ -20,6 +21,7 @@ use crate::record::BlockchainType;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TopicSet {
     prefix: String,
+    separator: String,
     labels: Vec<&'static str>,
 }
 
@@ -32,9 +34,15 @@ impl TopicSet {
     /// their broker needs up to and including the blockchain segment (e.g.
     /// `persistent://public/default/archive-eth` for Pulsar, a plain
     /// `archive-eth` for Kafka).
-    pub fn new(prefix: String, blockchain: BlockchainType, options: &DataOptions) -> Self {
+    pub fn new(
+        prefix: String,
+        separator: String,
+        blockchain: BlockchainType,
+        options: &DataOptions,
+    ) -> Self {
         Self {
             prefix,
+            separator,
             labels: topic_labels_for(blockchain, options),
         }
     }
@@ -42,7 +50,7 @@ impl TopicSet {
     ///
     /// Full topic name of one field label.
     pub fn name_for(&self, label: &str) -> String {
-        format!("{}-{}", self.prefix, label)
+        format!("{}{}{}", self.prefix, self.separator, label)
     }
 
     ///
@@ -143,6 +151,7 @@ mod tests {
     fn names_topics_under_the_prefix() {
         let topics = TopicSet::new(
             "persistent://public/default/archive-eth".to_string(),
+            "-".to_string(),
             BlockchainType::Ethereum,
             &all_tables(),
         );
@@ -158,6 +167,7 @@ mod tests {
     fn iterates_labels_paired_with_their_names() {
         let topics = TopicSet::new(
             "archive-btc".to_string(),
+            "-".to_string(),
             BlockchainType::Bitcoin,
             &all_tables(),
         );
@@ -170,6 +180,18 @@ mod tests {
                 ("tx-raw", "archive-btc-tx-raw".to_string()),
             ]
         );
+    }
+
+    #[test]
+    fn joins_prefix_and_label_with_the_configured_separator() {
+        let topics = TopicSet::new(
+            "archive.eth".to_string(),
+            ".".to_string(),
+            BlockchainType::Ethereum,
+            &all_tables(),
+        );
+        assert_eq!(topics.name_for("blocks"), "archive.eth.blocks");
+        assert_eq!(topics.name_for("tx-json"), "archive.eth.tx-json");
     }
 
     /// `topic_labels_for` filters by blockchain shape: Bitcoin gets no

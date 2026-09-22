@@ -274,6 +274,7 @@ mod tests {
         let stream = stream_url.map(|url| crate::args::Stream {
             stream_url: Some(url.to_string()),
             stream_topics: Some("archive-eth".to_string()),
+            ..crate::args::Stream::default()
         });
         Args {
             retry,

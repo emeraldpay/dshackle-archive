@@ -581,6 +581,7 @@ mod tests {
         };
         let topics = TopicSet::new(
             "dshackle-archive-test".to_string(),
+            "-".to_string(),
             BlockchainType::Ethereum,
             &full_options,
         );

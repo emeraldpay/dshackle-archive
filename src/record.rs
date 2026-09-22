@@ -150,7 +150,7 @@ impl Field {
 
     /// Streaming topic suffix for this variant. Used by
     /// [`crate::formats::stream`] as the per-field topic label
-    /// (`<prefix>-<topic_label>`), where topics share a flat namespace and
+    /// (`<prefix><separator><topic_label>`), where topics share a flat namespace and
     /// the table context isn't otherwise carried. Keep the values stable
     /// — they're consumer-visible.
     pub fn topic_label(&self) -> &'static str {
