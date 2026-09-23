@@ -20,8 +20,11 @@ use crate::args;
 use crate::errors::{BlockchainError};
 use futures_util::stream::StreamExt;
 use tonic::codec::CompressionEncoding;
+use tonic::metadata::MetadataValue;
 use tonic::transport::Channel;
 use crate::archiver::range::Height;
+
+const USER_AGENT: &str = concat!("EmeraldDshackleArchive/", env!("CARGO_PKG_VERSION"));
 
 pub struct Blockchain {
     parallel: Semaphore,
@@ -71,7 +74,7 @@ impl Blockchain {
     async fn native_call_inner(dshackle: DshackleConn, chain: i32, method: &str, params: Vec<u8>) -> Result<Vec<u8>, BlockchainError> {
         let mut client = dshackle.client();
         let mut response = client
-            .native_call(
+            .native_call(DshackleConn::request(
                 NativeCallRequest {
                     chain,
                     items: vec![
@@ -84,7 +87,7 @@ impl Blockchain {
                     ],
                     ..NativeCallRequest::default()
                 }
-            )
+            ))
             .await?
             .into_inner();
 
@@ -118,7 +121,7 @@ impl Blockchain {
 
         tokio::spawn(async move {
             let response =  client
-                .subscribe_head(Chain {r#type: chain })
+                .subscribe_head(DshackleConn::request(Chain {r#type: chain }))
                 .await
                 .map_err(|e| {
                     tracing::error!("Cannot subscribe to head: {:?}", e);
@@ -177,6 +180,14 @@ impl DshackleConn {
         let parts = url.split_once(":").ok_or(BlockchainError::InvalidConnection(url.to_string()))?;
         let port = u16::from_str(parts.1).map_err(|_| BlockchainError::InvalidConnection(url.to_string()))?;
         Ok((parts.0.to_string(), port))
+    }
+
+    /// Ginepro builds the tonic endpoints itself, without a way to set their user agent, so it goes with each request instead.
+    /// Tonic keeps it and appends its own `tonic/x.y` after it.
+    fn request<T>(message: T) -> tonic::Request<T> {
+        let mut request = tonic::Request::new(message);
+        request.metadata_mut().insert("user-agent", MetadataValue::from_static(USER_AGENT));
+        request
     }
 
     fn client(&self) -> BlockchainClient<AuthService<Channel>> {
