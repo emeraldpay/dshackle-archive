@@ -171,10 +171,10 @@ impl DataOptions {
             None
         };
         Self {
+            overwrite: self.overwrite,
             block,
             tx,
             trace,
-            ..Default::default()
         }
     }
 
@@ -432,5 +432,17 @@ mod tests {
         assert!(opts.include_block());
         assert!(opts.include_tx());
         assert!(!opts.include_trace());
+    }
+
+    #[test]
+    fn test_dataoptions_only_include_keeps_overwrite() {
+        let opts = DataOptions {
+            overwrite: false,
+            ..Default::default()
+        };
+        let opts = opts.only_include(&[DataKind::Transactions]);
+        assert!(!opts.overwrite);
+        assert!(!opts.include_block());
+        assert!(opts.include_tx());
     }
 }

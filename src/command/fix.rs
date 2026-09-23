@@ -70,7 +70,7 @@ impl<B: BlockchainTypes, TS: ScanTarget> CommandExecutor for FixCommand<B, TS> {
             }
             tracing::info!(range = %range, "Found missing data: {:?}", kinds);
             let chunks = range.split_chunks(self.chunk_size, false);
-            let options = self.tx_options.clone().only_include(&kinds);
+            let options = options.clone().only_include(&kinds);
             for chunk in chunks {
                 if shutdown.is_signalled() {
                     break;
