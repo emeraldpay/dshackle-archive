@@ -151,6 +151,15 @@ impl<B: BlockchainTypes+ 'static, TS: ReadTarget + 'static> CompactCommand<B, TS
             },
             Ok(c) => c,
         };
+        // Such a chunk would be written to the path of its own source, and the source is deleted after a compaction
+        let already_compacted = {
+            let mut groups = complete.iter();
+            matches!((groups.next(), groups.next()), (Some(single), None) if single.range.eq(range))
+        };
+        if already_compacted {
+            tracing::debug!(range = display(range), "Range is already compacted");
+            return Ok(false);
+        }
         let complete = Arc::new(complete);
 
         let data_options = self.data_options.clone();
@@ -1253,6 +1262,51 @@ mod tests {
             assert!(after.contains(&format!("archive/test/000000000/000000000/{:09}.block.avro", height)));
             assert!(after.contains(&format!("archive/test/000000000/000000000/{:09}.txes.avro", height)));
         }
+    }
+
+    ///
+    /// A repeated run (ex. a scheduled `--tail`) sees the already compacted chunk as its only source,
+    /// and the source has the same path as the range file it produces.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn compact_command_keeps_already_compacted_chunk() {
+        testing::start_test();
+
+        let mem = Arc::new(InMemory::new());
+        let data_provider: Arc<MockData> = Arc::new(MockData::new("TEST_RECOMPACT"));
+        let storage = ObjectsStorage::new(mem.clone(), "test".to_string(), Filenames::with_dir("archive/test".to_string()));
+        let archiver = Archiver::new_simple(Arc::new(storage), data_provider.clone());
+
+        // the chunk 300-309 is compacted only when the files of the next chunk show up in the listing
+        for i in 0..15 {
+            let block_height = 300 + i as u64;
+            let txs = vec![format!("TX{}", block_height)];
+            data_provider.add_block(MockBlock {
+                height: block_height,
+                hash: format!("B{}", block_height),
+                parent: format!("B{}", block_height - 1),
+                transactions: txs.clone(),
+            });
+            for tx in &txs {
+                data_provider.add_tx(MockTx { hash: tx.clone() });
+            }
+            testing::write_block_and_tx(&archiver, block_height, None).await.unwrap();
+        }
+
+        let args = Args {
+            range: Some("300..315".to_string()),
+            range_chunk: Some(10),
+            ..Default::default()
+        };
+        let compact_cmd = CompactCommand::new(&args, archiver).unwrap();
+
+        compact_cmd.execute().await.unwrap();
+        let after_first = testing::list_mem_filenames(mem.clone()).await;
+        assert!(after_first.contains(&"archive/test/000000000/range-000000300_000000309.blocks.avro".to_string()));
+        assert!(after_first.contains(&"archive/test/000000000/range-000000300_000000309.txes.avro".to_string()));
+
+        compact_cmd.execute().await.unwrap();
+        let after_second = testing::list_mem_filenames(mem).await;
+        assert_eq!(after_second, after_first);
     }
 
     ///
