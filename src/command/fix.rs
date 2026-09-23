@@ -40,6 +40,19 @@ impl<B: BlockchainTypes, TS: ScanTarget> CommandExecutor for FixCommand<B, TS> {
     async fn execute(&self) -> anyhow::Result<()> {
         let shutdown = global::get_shutdown();
         let range = self.blocks.to_range(self.archiver.data_provider.as_ref()).await?;
+        // A tail starts at an arbitrary height that moves with every run. If it's left mid-chunk, the existing chunk file
+        // is not found for it, and the partial head of that chunk would be re-archived on each run.
+        let range = if self.blocks.is_tail() {
+            match range.trim_to_chunk_start(self.chunk_size) {
+                Some(range) => range,
+                None => {
+                    tracing::info!("Tail {} doesn't reach a chunk boundary. Nothing to fix", range);
+                    return Ok(());
+                }
+            }
+        } else {
+            range
+        };
         let dry_run = global::is_dry_run();
         tracing::info!("Fixing range: {}", range);
 

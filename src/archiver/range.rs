@@ -260,6 +260,19 @@ impl Range {
 
     }
 
+    ///
+    /// Moves the start forward to the next chunk boundary, keeping the end.
+    /// Chunk files are named by their start, so a range starting mid-chunk cannot be matched with the existing chunk file
+    /// covering that start (see `ObjectsStorage::list`). Returns `None` if no block remains after the boundary.
+    pub fn trim_to_chunk_start(&self, chunk_size: usize) -> Option<Self> {
+        let chunk_size = chunk_size as u64;
+        let start = self.start().div_ceil(chunk_size) * chunk_size;
+        if start > self.end() {
+            return None;
+        }
+        Some(Range::new(start, self.end()))
+    }
+
     pub fn first(&self) -> Self {
         match self {
             Range::Single(h) => Range::Single(h.clone()),
@@ -541,6 +554,26 @@ mod tests {
         assert_eq!(
             Range::new(150, 250).split_chunks(1000, true),
             vec![]
+        );
+    }
+
+    #[test]
+    fn test_trim_to_chunk_start() {
+        assert_eq!(
+            Range::new(25994793, 26039793).trim_to_chunk_start(1000),
+            Some(Range::new(25995000, 26039793))
+        );
+        assert_eq!(
+            Range::new(2000, 2999).trim_to_chunk_start(1000),
+            Some(Range::new(2000, 2999))
+        );
+        assert_eq!(
+            Range::new(1999, 2000).trim_to_chunk_start(1000),
+            Some(Range::single(2000))
+        );
+        assert_eq!(
+            Range::new(150, 250).trim_to_chunk_start(1000),
+            None
         );
     }
 
