@@ -43,6 +43,8 @@ jobs:
       - name: Build and push
         uses: docker/build-push-action@v6
         with:
+          # the checked out dir, since a Git context (the default) comes without .git, and the build needs it for the commit hash
+          context: .
           push: true
           tags: |
             emeraldpay/dshackle-archive:nightly
