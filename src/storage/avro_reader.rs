@@ -5,6 +5,7 @@ use tokio::sync::mpsc;
 use crate::{avros, global, metrics};
 use crate::archiver::datakind::DataKind;
 use crate::storage::{ReadFailure, RecordStream};
+use crate::storage::read_budget::{ReadBudget, READ_AHEAD_BYTES};
 
 /// How many deserialized records the reader may buffer before it blocks waiting
 /// for the consumer to catch up. Keeps memory bounded while still allowing the
@@ -83,6 +84,7 @@ pub(super) fn consume_sync<R: Read + Send + 'static>(kind: DataKind, schema: &'s
             }
         };
 
+        let budget = ReadBudget::new(READ_AHEAD_BYTES);
         let mut avro_reader = match apache_avro::Reader::with_schema(&schema, reader) {
             Ok(reader) => reader,
             Err(err) => {
@@ -113,6 +115,7 @@ pub(super) fn consume_sync<R: Read + Send + 'static>(kind: DataKind, schema: &'s
                     continue
                 }
             };
+            let record = budget.reserve_blocking(record);
             // blocking_send applies backpressure — the reader thread pauses when
             // the channel is full, preventing unbounded memory growth
             if tx.blocking_send(Ok(record)).is_err() {
@@ -162,7 +165,7 @@ mod tests {
         }
     }
 
-    async fn read_half_of_txes(fails: bool) -> Vec<Result<apache_avro::types::Record<'static>, ReadFailure>> {
+    async fn read_half_of_txes(fails: bool) -> Vec<Result<crate::storage::ReadRecord, ReadFailure>> {
         let source = "testdata/fullAvroFiles/000723743.txes.avro";
         let content = std::fs::read(source).unwrap();
         let reader = PartialRead {

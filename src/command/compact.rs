@@ -403,6 +403,7 @@ impl<B: BlockchainTypes, TS: ReadTarget> TableCompaction<BlockOptions, B, TS> fo
                                     let txes = parse_block::<B>(&record)?.txes();
                                     // the sources are deleted once the copied status covers the range, so a
                                     // record that failed to be written must never be counted as copied
+                                    let (record, _reservation) = record.into_parts();
                                     target_file.append_avro_record(record).await?;
                                     {
                                         let mut status = status.lock().unwrap();
@@ -467,6 +468,7 @@ impl<B: BlockchainTypes, TS: ReadTarget> TableCompaction<TxOptions, B, TS> for C
                                 let height = avros::get_height(&record)?;
                                 let txid = parse_tx_id::<B>(&record)?;
                                 if range.contains(&height.into()) {
+                                    let (record, _reservation) = record.into_parts();
                                     target_file.append_avro_record(record).await?;
                                     {
                                         let mut status = status.lock().unwrap();
@@ -517,6 +519,7 @@ impl<B: BlockchainTypes, TS: ReadTarget> TableCompaction<TraceOptions, B, TS> fo
                                 let height = avros::get_height(&record)?;
                                 let txid = parse_tx_id::<B>(&record)?;
                                 if range.contains(&height.into()) {
+                                    let (record, _reservation) = record.into_parts();
                                     target_file.append_avro_record(record).await?;
                                     {
                                         let mut status = status.lock().unwrap();

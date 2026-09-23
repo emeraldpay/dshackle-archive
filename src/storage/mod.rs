@@ -28,6 +28,7 @@ use object_store::{
     ClientOptions
 };
 use tokio::sync::mpsc::Receiver;
+pub use read_budget::{ReadRecord, ReadReservation};
 use url::Url;
 use itertools::Itertools;
 
@@ -40,6 +41,7 @@ pub mod pulsar;
 mod avro_reader;
 mod copy;
 mod object_reader;
+mod read_budget;
 mod sorted_files;
 
 pub fn is_s3(args: &Args) -> bool {
@@ -469,7 +471,7 @@ pub trait TargetFileReader: TargetFile {
 ///
 /// An item is `Err` when the file stopped being readable in the middle, which the consumer
 /// must not confuse with the end of the file. See [`ReadFailure`].
-pub type RecordStream = Receiver<std::result::Result<Record<'static>, ReadFailure>>;
+pub type RecordStream = Receiver<std::result::Result<ReadRecord, ReadFailure>>;
 
 ///
 /// The archive file could not be read to the end, so nothing is known about the rest of it.
