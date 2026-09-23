@@ -211,7 +211,7 @@ impl TargetFile for FsFileReader {
 impl TargetFileWriter for FsFileWriter<'_> {
 
     async fn append(&self, row: ArchiveRow) -> Result<()> {
-        let record = avro::encode_row(&row)?;
+        let record = avro::encode_row(row)?;
         self.append_record(record)
     }
 

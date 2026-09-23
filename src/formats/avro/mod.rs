@@ -35,10 +35,13 @@ pub fn schema_for(kind: DataKind) -> &'static apache_avro::Schema {
 /// come from the row's top-level fields; per-kind columns are matched against the row's
 /// [`Field`] variants. Nullable columns default to `Value::Union(0, Null)` when the row
 /// omits them.
-pub fn encode_row(row: &ArchiveRow) -> Result<Record<'static>> {
+///
+/// Takes the row by value, so a trace payload (can be gigabytes for a single tx) is moved into
+/// the record instead of being copied.
+pub fn encode_row(row: ArchiveRow) -> Result<Record<'static>> {
     match row.kind {
-        DataKind::Blocks => encode_block(row),
-        DataKind::Transactions => encode_tx(row),
+        DataKind::Blocks => encode_block(&row),
+        DataKind::Transactions => encode_tx(&row),
         DataKind::TransactionTraces => encode_trace(row),
     }
 }
@@ -144,10 +147,10 @@ fn encode_tx(row: &ArchiveRow) -> Result<Record<'static>> {
     Ok(record)
 }
 
-fn encode_trace(row: &ArchiveRow) -> Result<Record<'static>> {
+fn encode_trace(row: ArchiveRow) -> Result<Record<'static>> {
     let mut record = Record::new(&TX_TRACE_SCHEMA)
         .ok_or_else(|| anyhow!("Failed to allocate Avro record for TransactionTraces"))?;
-    set_common(&mut record, row);
+    set_common(&mut record, &row);
     let tx_index = row
         .tx_index
         .ok_or_else(|| anyhow!("Trace row missing tx_index"))?;
@@ -159,16 +162,16 @@ fn encode_trace(row: &ArchiveRow) -> Result<Record<'static>> {
     record.put("index", tx_index as i64);
     record.put("txid", txid);
 
-    let trace = row.fields.iter().find_map(|f| match f {
-        Field::Trace(b) => Some(b.clone()),
-        _ => None,
-    });
+    let mut trace = None;
+    let mut state_diff = None;
+    for field in row.fields {
+        match field {
+            Field::Trace(b) if trace.is_none() => trace = Some(b),
+            Field::StateDiff(b) if state_diff.is_none() => state_diff = Some(b),
+            _ => {}
+        }
+    }
     record.put("traceJson", optional_bytes(trace));
-
-    let state_diff = row.fields.iter().find_map(|f| match f {
-        Field::StateDiff(b) => Some(b.clone()),
-        _ => None,
-    });
     record.put("stateDiffJson", optional_bytes(state_diff));
 
     Ok(record)
@@ -225,7 +228,7 @@ mod tests {
     #[test]
     fn block_encodes_with_common_fields() {
         let row = sample_block();
-        let record = encode_row(&row).unwrap();
+        let record = encode_row(row).unwrap();
         let fields: std::collections::HashMap<_, _> =
             record.fields.iter().map(|(n, v)| (n.clone(), v.clone())).collect();
         assert_eq!(fields["blockchainId"], Value::String("ETH".to_string()));
@@ -241,7 +244,7 @@ mod tests {
         let mut row = sample_block();
         row.fields.push(Field::Uncle { index: 0, json: b"u0".to_vec() });
         row.fields.push(Field::Uncle { index: 1, json: b"u1".to_vec() });
-        let record = encode_row(&row).unwrap();
+        let record = encode_row(row).unwrap();
         let fields: std::collections::HashMap<_, _> =
             record.fields.iter().map(|(n, v)| (n.clone(), v.clone())).collect();
         assert_eq!(fields["unclesCount"], Value::Int(2));
@@ -275,7 +278,7 @@ mod tests {
                 Field::From("0xfrom".to_string()),
             ],
         };
-        let record = encode_row(&row).unwrap();
+        let record = encode_row(row).unwrap();
         let fields: std::collections::HashMap<_, _> =
             record.fields.iter().map(|(n, v)| (n.clone(), v.clone())).collect();
         assert_eq!(fields["index"], Value::Long(3));

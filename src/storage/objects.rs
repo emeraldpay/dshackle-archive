@@ -230,7 +230,7 @@ impl NewObjectsFile<'_> {
 impl TargetFileWriter for NewObjectsFile<'_> {
 
     async fn append(&self, row: ArchiveRow) -> anyhow::Result<()> {
-        let record = avro::encode_row(&row)?;
+        let record = avro::encode_row(row)?;
         self.append_record(record).await
     }
 
