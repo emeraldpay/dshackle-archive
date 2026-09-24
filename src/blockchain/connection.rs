@@ -116,6 +116,16 @@ impl Blockchain {
             tracing::warn!("No response from blockchain. {}()", method);
             Err(BlockchainError::IO)
         };
+
+        // Read the stream up to its end, even though the request has only one item. Dropping it before the trailers
+        // arrive makes h2 cancel the stream with RST_STREAM, and the trailers that come later for the forgotten stream
+        // count as protocol errors. After 1024 of them h2 closes the whole connection with GOAWAY (too_many_internal_resets),
+        // failing all requests in flight on it.
+        while let Some(extra) = response.next().await {
+            if let Err(e) = extra {
+                tracing::debug!("Error at the end of the response. {}(). Status: {}", method, e);
+            }
+        }
         result
     }
 
