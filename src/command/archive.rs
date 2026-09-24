@@ -40,11 +40,26 @@ impl<B: BlockchainTypes, TS: WriteTarget> CommandExecutor for ArchiveCommand<B, 
         // ever fires here, so a never-cancelled token covers the trait
         // surface without any moving parts.
         let cancel = CancellationToken::new();
+        // A failed table is never committed, so for files the subrange stays incomplete and the `fix` command finds it later.
+        // An ordered stream cannot be fixed that way: the following subranges would be published after a gap.
+        let skip_failed = !self.archiver.target.needs_ordering();
+        let mut failed: Vec<Range> = vec![];
         for subrange in ranges {
             if shutdown.is_signalled() {
                 break;
             }
-            self.archiver.archive(subrange, RunMode::Archive, None, &self.data_options, &cancel).await?;
+            let result = self.archiver.archive(subrange.clone(), RunMode::Archive, None, &self.data_options, &cancel).await;
+            if let Err(e) = result {
+                if !skip_failed {
+                    return Err(e);
+                }
+                tracing::error!(range = %subrange, "Failed to archive range: {:?}", e);
+                failed.push(subrange);
+            }
+        }
+        if !failed.is_empty() {
+            let ranges = failed.iter().map(|r| r.to_string()).collect::<Vec<_>>().join(", ");
+            return Err(anyhow!("Failed to archive {} range(s): {}. Use the `fix` command to complete them", failed.len(), ranges));
         }
 
         Ok(())

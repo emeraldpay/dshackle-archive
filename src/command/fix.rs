@@ -1,9 +1,11 @@
 use std::marker::PhantomData;
+use anyhow::anyhow;
 use async_trait::async_trait;
 use tokio_util::sync::CancellationToken;
 use crate::{archiver::{ArchiveAll, Archiver}, args::Args, blockchain::BlockchainTypes, command::CommandExecutor, global, notify::RunMode, storage::ScanTarget};
 use crate::archiver::blocks_config::Blocks;
 use crate::archiver::datakind::DataOptions;
+use crate::archiver::range::Range;
 
 ///
 /// Provides `fix` command.
@@ -64,6 +66,7 @@ impl<B: BlockchainTypes, TS: ScanTarget> CommandExecutor for FixCommand<B, TS> {
         let missing = self.archiver.target.find_incomplete_tables(range, &options).await?;
         // `fix` runs against settled archive state — no re-org signal applies.
         let cancel = CancellationToken::new();
+        let mut failed: Vec<Range> = vec![];
         for (range, kinds) in missing {
             if shutdown.is_signalled() {
                 break;
@@ -77,9 +80,18 @@ impl<B: BlockchainTypes, TS: ScanTarget> CommandExecutor for FixCommand<B, TS> {
                 }
                 tracing::info!(range = %chunk, "Fixing chunk");
                 if !dry_run {
-                    self.archiver.archive(chunk, RunMode::Fix, None, &options, &cancel).await?;
+                    // A failed table is never committed, so the chunk stays incomplete and the next run finds it again.
+                    // It's safe to move on instead of leaving the rest of the range unfixed because of one failed block.
+                    if let Err(e) = self.archiver.archive(chunk.clone(), RunMode::Fix, None, &options, &cancel).await {
+                        tracing::error!(range = %chunk, "Failed to fix chunk: {:?}", e);
+                        failed.push(chunk);
+                    }
                 }
             }
+        }
+        if !failed.is_empty() {
+            let ranges = failed.iter().map(|r| r.to_string()).collect::<Vec<_>>().join(", ");
+            return Err(anyhow!("Failed to fix {} chunk(s): {}", failed.len(), ranges));
         }
         Ok(())
     }
