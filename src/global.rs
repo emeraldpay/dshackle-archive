@@ -4,6 +4,7 @@
 
 use std::sync::Mutex;
 use std::time::Duration;
+use anyhow::anyhow;
 use apache_avro::{Codec, ZstandardSettings};
 use lazy_static::lazy_static;
 use tokio_retry2::strategy::{jitter, ExponentialFactorBackoff};
@@ -31,6 +32,10 @@ lazy_static! {
     static ref COMPRESSION: Mutex<Compression> = Mutex::new(Compression::Zstd);
     static ref DRY_RUN: Mutex<bool> = Mutex::new(false);
     static ref THREADS: Mutex<ThreadsConfig> = Mutex::new(ThreadsConfig { api: 16, tx: 8, trace: 4, blocks: 8 });
+    static ref TIMEOUTS: Mutex<TimeoutsConfig> = Mutex::new(TimeoutsConfig {
+        api: Duration::from_secs(DEFAULT_TIMEOUT_SECS),
+        trace: Duration::from_secs(DEFAULT_TIMEOUT_SECS),
+    });
     // Default to the bounded policy (matching pre-flag behaviour) until
     // `set_retry_policy` resolves the real value at startup.
     static ref RETRY_POLICY: Mutex<RetryPolicy> = Mutex::new(RetryPolicy::Bounded {
@@ -169,6 +174,64 @@ fn read_env(name: &str) -> Option<usize> {
     std::env::var(name).ok().and_then(|v| v.parse().ok())
 }
 
+const DEFAULT_TIMEOUT_SECS: u64 = 15;
+
+/// Timeouts of a single blockchain API request.
+///
+/// A timed out request is retried according to the [`RetryPolicy`], so a fetch that keeps timing out
+/// holds its worker for a multiple of the timeout before it fails.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TimeoutsConfig {
+    /// Timeout of any request (set via `--timeout` or `EMERALD_DSHACKLE_TIMEOUT`, default: 15 seconds)
+    pub api: Duration,
+    /// Timeout of a trace request, which may take much longer to execute on the node (set via `EMERALD_DSHACKLE_TIMEOUT_TRACE`, default: api)
+    pub trace: Duration,
+}
+
+/// Initialize the request timeouts from CLI args and environment variables.
+///
+/// Resolution order for the API timeout:
+/// 1. `--timeout` CLI arg
+/// 2. `EMERALD_DSHACKLE_TIMEOUT` env var
+/// 3. Default value (15 seconds)
+///
+/// The trace timeout is taken from `EMERALD_DSHACKLE_TIMEOUT_TRACE` env var, otherwise it's the same as the API timeout.
+pub fn set_timeouts(args: &Args) -> anyhow::Result<()> {
+    let config = resolve_timeouts(args.connection.timeout, |name| std::env::var(name).ok())?;
+    tracing::info!(api = ?config.api, trace = ?config.trace, "Timeouts configuration");
+    *TIMEOUTS.lock().unwrap() = config;
+    Ok(())
+}
+
+/// Returns the current request timeouts.
+pub fn get_timeouts() -> TimeoutsConfig {
+    *TIMEOUTS.lock().unwrap()
+}
+
+fn resolve_timeouts(cli: Option<u64>, env: impl Fn(&str) -> Option<String>) -> anyhow::Result<TimeoutsConfig> {
+    let api = match cli {
+        Some(secs) => secs,
+        None => read_timeout_env("EMERALD_DSHACKLE_TIMEOUT", &env)?.unwrap_or(DEFAULT_TIMEOUT_SECS),
+    };
+    let trace = read_timeout_env("EMERALD_DSHACKLE_TIMEOUT_TRACE", &env)?.unwrap_or(api);
+    Ok(TimeoutsConfig {
+        api: Duration::from_secs(api),
+        trace: Duration::from_secs(trace),
+    })
+}
+
+/// Unlike the threads limits, an invalid timeout is rejected instead of falling back to the default,
+/// because a typo would go unnoticed until the requests start to fail.
+fn read_timeout_env(name: &str, env: &impl Fn(&str) -> Option<String>) -> anyhow::Result<Option<u64>> {
+    let Some(value) = env(name) else {
+        return Ok(None);
+    };
+    match value.trim().parse::<u64>() {
+        Ok(secs) if secs > 0 => Ok(Some(secs)),
+        _ => Err(anyhow!("Invalid {}={:?}, expected a positive number of seconds", name, value)),
+    }
+}
+
 /// Number of attempts the `Bounded` retry policy uses. Matches the
 /// hardcoded `.take(10)` the per-RPC helpers used to carry inline before this
 /// became a global. Not exposed as a CLI knob yet — most callers either
@@ -281,6 +344,50 @@ mod tests {
             stream,
             ..Args::default()
         }
+    }
+
+    fn env_of(vars: &[(&str, &str)]) -> impl Fn(&str) -> Option<String> {
+        let vars: Vec<(String, String)> = vars.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect();
+        move |name| vars.iter().find(|(k, _)| k == name).map(|(_, v)| v.clone())
+    }
+
+    #[test]
+    fn timeouts_default_to_15_seconds() {
+        let timeouts = resolve_timeouts(None, env_of(&[])).unwrap();
+        assert_eq!(timeouts.api, Duration::from_secs(15));
+        assert_eq!(timeouts.trace, Duration::from_secs(15));
+    }
+
+    #[test]
+    fn timeout_from_env() {
+        let timeouts = resolve_timeouts(None, env_of(&[("EMERALD_DSHACKLE_TIMEOUT", "30")])).unwrap();
+        assert_eq!(timeouts.api, Duration::from_secs(30));
+    }
+
+    #[test]
+    fn timeout_cli_wins_over_env() {
+        let timeouts = resolve_timeouts(Some(20), env_of(&[("EMERALD_DSHACKLE_TIMEOUT", "30")])).unwrap();
+        assert_eq!(timeouts.api, Duration::from_secs(20));
+    }
+
+    #[test]
+    fn trace_timeout_follows_api_timeout() {
+        let timeouts = resolve_timeouts(Some(20), env_of(&[])).unwrap();
+        assert_eq!(timeouts.trace, Duration::from_secs(20));
+    }
+
+    #[test]
+    fn trace_timeout_from_env() {
+        let timeouts = resolve_timeouts(Some(20), env_of(&[("EMERALD_DSHACKLE_TIMEOUT_TRACE", "120")])).unwrap();
+        assert_eq!(timeouts.api, Duration::from_secs(20));
+        assert_eq!(timeouts.trace, Duration::from_secs(120));
+    }
+
+    #[test]
+    fn invalid_timeout_env_is_rejected() {
+        assert!(resolve_timeouts(None, env_of(&[("EMERALD_DSHACKLE_TIMEOUT", "1m")])).is_err());
+        assert!(resolve_timeouts(None, env_of(&[("EMERALD_DSHACKLE_TIMEOUT", "0")])).is_err());
+        assert!(resolve_timeouts(None, env_of(&[("EMERALD_DSHACKLE_TIMEOUT_TRACE", "-5")])).is_err());
     }
 
     const PULSAR: Option<&str> = Some("pulsar://localhost:6650");

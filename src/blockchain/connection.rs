@@ -51,14 +51,20 @@ impl Blockchain {
     }
 
     ///
-    /// Execute nativeCall.
-    /// Applies a 10 seconds timeout, as we think this is a few times longer than any realistic time for JSON RPC and if it takes longer there is an IO problem
+    /// Execute nativeCall with the configured API timeout (see [`crate::global::TimeoutsConfig`]).
     pub async fn native_call(&self, method: &str, params: Vec<u8>) -> Result<Vec<u8>, BlockchainError> {
+        self.native_call_with_timeout(method, params, crate::global::get_timeouts().api).await
+    }
+
+    ///
+    /// Execute nativeCall, failing with [`BlockchainError::Timeout`] if the response doesn't come within `limit`.
+    /// The time spent waiting for a free parallel slot doesn't count towards the limit.
+    pub async fn native_call_with_timeout(&self, method: &str, params: Vec<u8>, limit: Duration) -> Result<Vec<u8>, BlockchainError> {
         let _permit = self.parallel.acquire().await.unwrap();
         let chain = self.dshackle_chain;
         let start = std::time::Instant::now();
 
-        let result = timeout(Duration::from_secs(10),
+        let result = timeout(limit,
                              Self::native_call_inner(self.dshackle.clone(), chain, method, params)
         ).await
             .map_err(|_| BlockchainError::Timeout(method.to_string()))?

@@ -63,6 +63,9 @@ Options:
       --parallel <PARALLEL>
           How many API requests to make in parallel. Range: 1..512. Default: 16
 
+      --timeout <SECONDS>
+          Timeout for a single API request, in seconds. Default: 15. Can also be set with `EMERALD_DSHACKLE_TIMEOUT` env; trace requests can have a separate timeout set with `EMERALD_DSHACKLE_TIMEOUT_TRACE` env
+
       --notify.dir <NOTIFY_DIR>
           Write notifications as JSON line to the specified dir in a file <dshackle-archive-%STARTTIME.jsonl>
 

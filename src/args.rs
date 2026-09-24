@@ -215,6 +215,11 @@ pub struct Connection {
     /// How many API requests to make in parallel. Range: 1..512. Default: 16
     #[arg(long = "parallel")]
     pub parallel: Option<usize>,
+
+    /// Timeout for a single API request, in seconds. Default: 15.
+    /// Can also be set with `EMERALD_DSHACKLE_TIMEOUT` env; trace requests can have a separate timeout set with `EMERALD_DSHACKLE_TIMEOUT_TRACE` env
+    #[arg(long = "timeout", value_name = "SECONDS", value_parser = clap::value_parser!(u64).range(1..))]
+    pub timeout: Option<u64>,
 }
 
 impl Default for Connection {
@@ -223,6 +228,7 @@ impl Default for Connection {
             connection: "localhost:2448".to_string(),
             connection_no_tls: true,
             parallel: None,
+            timeout: None,
         }
     }
 }

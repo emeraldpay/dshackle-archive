@@ -211,7 +211,7 @@ impl EthereumData {
             crate::global::retry_strategy(RETRY_MAX_DELAY_TRACE_SECS),
             || format!("Trace of transaction 0x{:x}", hash),
             || async {
-                Ok(self.blockchain.native_call("debug_traceTransaction", params.clone()).await?)
+                Ok(self.blockchain.native_call_with_timeout("debug_traceTransaction", params.clone(), crate::global::get_timeouts().trace).await?)
             },
         ).await
     }
@@ -230,7 +230,7 @@ impl EthereumData {
             crate::global::retry_strategy(RETRY_MAX_DELAY_TRACE_SECS),
             || format!("State diff of transaction 0x{:x}", hash),
             || async {
-                Ok(self.blockchain.native_call("debug_traceTransaction", params.clone()).await?)
+                Ok(self.blockchain.native_call_with_timeout("debug_traceTransaction", params.clone(), crate::global::get_timeouts().trace).await?)
             },
         ).await
     }
