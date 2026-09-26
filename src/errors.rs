@@ -1,5 +1,3 @@
-use tonic;
-
 #[derive(thiserror::Error, Debug, Clone, PartialEq)]
 pub enum Error {
     #[error("Blockchain Error: {0}")]
@@ -30,8 +28,11 @@ pub enum BlockchainError {
     InvalidResponse,
     #[error("Blockchain Error: {0} -> {1}")]
     FailResponse(String, String),
-    #[error("IO Error")]
-    IO,
+    /// The call itself failed (connection, gRPC status, missing reply), as
+    /// opposed to the upstream answering with an error. Carries the method
+    /// and the cause, since this is what gets reported once retries give up.
+    #[error("IO Error calling {0}: {1}")]
+    IO(String, String),
 }
 
 #[derive(thiserror::Error, Debug, Clone, PartialEq)]
@@ -51,12 +52,6 @@ impl From<BlockchainError> for Error {
 impl From<ConfigError> for Error {
     fn from(e: ConfigError) -> Self {
         Error::Config(e)
-    }
-}
-
-impl From<tonic::Status> for BlockchainError {
-    fn from(_e: tonic::Status) -> Self {
-        BlockchainError::IO
     }
 }
 

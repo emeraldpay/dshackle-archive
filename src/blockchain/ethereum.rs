@@ -16,7 +16,7 @@ use alloy::{
 use alloy::network::TransactionResponse;
 use crate::blockchain::{parse_json_response, BlockDetails, BlockHeaderInfo, BlockReference, BlockchainData, BlockchainTypes, EthereumType, JsonString};
 use anyhow::{Result, anyhow};
-use tokio_retry2::{Retry, RetryError};
+use crate::blockchain::retry::retry_fetch;
 use crate::archiver::datakind::{DataKind, TraceOptions};
 use crate::blockchain::next_block::{NextBlock, NextFinalizedBlock};
 use crate::global::RETRY_MAX_DELAY_FAST_SECS;
@@ -50,14 +50,13 @@ where
     F: Fn() -> Fut,
     Fut: Future<Output = Result<Vec<u8>>>,
 {
-    Retry::spawn(strategy, async || {
+    retry_fetch(strategy, &describe, async || {
         fetch().await
             .and_then(|value| if value == b"null" {
                 Err(anyhow!("{} not found", describe()))
             } else {
                 Ok(value)
             })
-            .map_err(|e| RetryError::transient(e))
     }).await
 }
 
@@ -188,16 +187,18 @@ impl EthereumData {
     }
 
     async fn get_tx_raw_expected(&self, hash: &TxHash) -> Result<Vec<u8>> {
-        let retry_strategy = crate::global::retry_strategy(RETRY_MAX_DELAY_FAST_SECS);
-        Retry::spawn(retry_strategy, async || {
-            self.get_tx_raw(hash).await
-                .and_then(|value| if value.is_empty() {
-                    Err(anyhow!("Transaction Raw not found: 0x{:x}", hash))
-                } else {
-                    Ok(value)
-                })
-                .map_err(|e| RetryError::transient(e))
-        }).await
+        retry_fetch(
+            crate::global::retry_strategy(RETRY_MAX_DELAY_FAST_SECS),
+            || format!("Raw transaction 0x{:x}", hash),
+            async || {
+                self.get_tx_raw(hash).await
+                    .and_then(|value| if value.is_empty() {
+                        Err(anyhow!("Transaction Raw not found: 0x{:x}", hash))
+                    } else {
+                        Ok(value)
+                    })
+            },
+        ).await
     }
 
     async fn get_tx_trace_expected(&self, hash: &TxHash) -> Result<Vec<u8>> {

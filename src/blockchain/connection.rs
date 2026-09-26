@@ -69,7 +69,8 @@ impl Blockchain {
         ).await
             .map_err(|_| BlockchainError::Timeout(method.to_string()))?
             .map_err(|e| {
-                tracing::error!("Error calling blockchain method {}: {:?}", method, e);
+                // Only this attempt; the retrying caller reports the fetch if it doesn't recover.
+                tracing::debug!("Error calling blockchain method {}: {}", method, e);
                 e
             });
 
@@ -94,7 +95,8 @@ impl Blockchain {
                     ..NativeCallRequest::default()
                 }
             ))
-            .await?
+            .await
+            .map_err(|e| BlockchainError::IO(method.to_string(), e.to_string()))?
             .into_inner();
 
         let result = if let Some(resp) = response.next().await {
@@ -103,18 +105,13 @@ impl Blockchain {
                     if value.succeed {
                         Ok(value.payload)
                     } else {
-                        tracing::error!("Blockchain call failed. {}() -> {}", method, value.error_message);
                         Err(BlockchainError::FailResponse(method.to_string(), value.error_message))
                     }
                 }
-                Err(e) => {
-                    tracing::warn!("Error response from blockchain. {}(). Status: {}", method, e);
-                    Err(BlockchainError::IO)
-                }
+                Err(e) => Err(BlockchainError::IO(method.to_string(), e.to_string())),
             }
         } else {
-            tracing::warn!("No response from blockchain. {}()", method);
-            Err(BlockchainError::IO)
+            Err(BlockchainError::IO(method.to_string(), "no response".to_string()))
         };
 
         // Read the stream up to its end, even though the request has only one item. Dropping it before the trailers
@@ -141,7 +138,7 @@ impl Blockchain {
                 .await
                 .map_err(|e| {
                     tracing::error!("Cannot subscribe to head: {:?}", e);
-                    BlockchainError::IO
+                    BlockchainError::IO("subscribeHead".to_string(), e.to_string())
                 });
 
             if let Err(e) = response {

@@ -9,6 +9,7 @@ pub mod bitcoin;
 pub mod mock;
 pub mod next_block;
 pub mod block_seq;
+pub mod retry;
 
 use std::fmt::Debug;
 use std::hash::Hash;

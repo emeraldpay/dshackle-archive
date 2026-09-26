@@ -11,7 +11,7 @@ use anyhow::{Result, Error};
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Deserializer};
-use tokio_retry2::{Retry, RetryError};
+use crate::blockchain::retry::retry_fetch;
 use crate::blockchain::{parse_json_response, BitcoinType, BlockDetails, BlockHeaderInfo, BlockReference, BlockchainData, BlockchainTypes, JsonString};
 use crate::archiver::datakind::{DataKind, TraceOptions};
 use crate::blockchain::next_block::NextBlock;
@@ -102,22 +102,22 @@ impl BitcoinData {
     /// Bitcoin nodes report an unknown block as an error response, so any
     /// failure here is retried as transient rather than crashing the run.
     async fn get_block_expected(&self, hash: &BlockHash) -> Result<Vec<u8>> {
-        let retry_strategy = crate::global::retry_strategy(RETRY_MAX_DELAY_FAST_SECS);
-        Retry::spawn(retry_strategy, async || {
-            self.get_block(hash).await
-                .map_err(|e| RetryError::transient(e))
-        }).await
+        retry_fetch(
+            crate::global::retry_strategy(RETRY_MAX_DELAY_FAST_SECS),
+            || format!("Block {:x}", hash),
+            async || self.get_block(hash).await,
+        ).await
     }
 
     /// Same as [`Self::get_block_expected`] but for a height-based lookup —
     /// covers both the `getblockhash` and `getblock` calls, since either can
     /// land on a node that is still behind that height.
     async fn get_block_at_expected(&self, height: u64) -> Result<Vec<u8>> {
-        let retry_strategy = crate::global::retry_strategy(RETRY_MAX_DELAY_FAST_SECS);
-        Retry::spawn(retry_strategy, async || {
-            self.get_block_at(height).await
-                .map_err(|e| RetryError::transient(e))
-        }).await
+        retry_fetch(
+            crate::global::retry_strategy(RETRY_MAX_DELAY_FAST_SECS),
+            || format!("Block at height {}", height),
+            async || self.get_block_at(height).await,
+        ).await
     }
 
     async fn get_tx(&self, hash: &TxHash) -> Result<Vec<u8>> {
@@ -223,14 +223,17 @@ impl BlockchainData<BitcoinType> for BitcoinData {
         &self,
         reference: &BlockReference<BlockHash>,
     ) -> Result<BlockHeaderInfo> {
-        let retry_strategy = crate::global::retry_strategy_bounded(RETRY_MAX_DELAY_FAST_SECS);
-        let raw = Retry::spawn(retry_strategy, async || {
-            let result = match reference {
+        let raw = retry_fetch(
+            crate::global::retry_strategy_bounded(RETRY_MAX_DELAY_FAST_SECS),
+            || match reference {
+                BlockReference::Hash(hash) => format!("Block {:x}", hash),
+                BlockReference::Height(h) => format!("Block at height {}", h.height),
+            },
+            async || match reference {
                 BlockReference::Hash(hash) => self.get_block(hash).await,
                 BlockReference::Height(h) => self.get_block_at(h.height).await,
-            };
-            result.map_err(|e| RetryError::transient(e))
-        }).await?;
+            },
+        ).await?;
         let parsed = parse_block(&raw)?;
         Ok(BlockHeaderInfo {
             height: parsed.height,
