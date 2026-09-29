@@ -74,7 +74,11 @@ impl Blockchain {
                 e
             });
 
-        crate::metrics::observe_request(method, &self.blockchain_id, start.elapsed().as_secs_f64());
+        // A failed attempt is mostly a node answering at once that it doesn't have the data yet. Counting those makes
+        // the heaviest methods, which fail the most right after a block, look like the fastest.
+        if result.is_ok() {
+            crate::metrics::observe_request(method, &self.blockchain_id, start.elapsed().as_secs_f64());
+        }
         result
     }
 

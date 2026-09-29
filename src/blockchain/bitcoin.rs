@@ -17,6 +17,7 @@ use crate::archiver::datakind::{DataKind, TraceOptions};
 use crate::blockchain::next_block::NextBlock;
 use crate::errors::BlockchainError;
 use crate::global::RETRY_MAX_DELAY_FAST_SECS;
+use crate::metrics::FetchedData;
 use crate::record::{ArchiveRow, BlockchainType as ArchiveBlockchainType, Field};
 
 #[derive(Clone)]
@@ -104,6 +105,8 @@ impl BitcoinData {
     async fn get_block_expected(&self, hash: &BlockHash) -> Result<Vec<u8>> {
         retry_fetch(
             crate::global::retry_strategy(RETRY_MAX_DELAY_FAST_SECS),
+            FetchedData::Block,
+            &self.blockchain_id,
             || format!("Block {:x}", hash),
             async || self.get_block(hash).await,
         ).await
@@ -115,6 +118,8 @@ impl BitcoinData {
     async fn get_block_at_expected(&self, height: u64) -> Result<Vec<u8>> {
         retry_fetch(
             crate::global::retry_strategy(RETRY_MAX_DELAY_FAST_SECS),
+            FetchedData::BlockAtHeight,
+            &self.blockchain_id,
             || format!("Block at height {}", height),
             async || self.get_block_at(height).await,
         ).await
@@ -133,6 +138,29 @@ impl BitcoinData {
         let data = self.blockchain.native_call("getrawtransaction", params).await?;
         let raw = JsonString::try_from(data)?;
         hex::decode(raw.0).map_err(|e| anyhow!("Invalid hex for a raw transaction: {}", e))
+    }
+
+    /// Fetch a transaction of an already fetched block, retrying transient failures —
+    /// the load balancer can route the call to a node that has not seen that block yet.
+    async fn get_tx_expected(&self, hash: &TxHash) -> Result<Vec<u8>> {
+        retry_fetch(
+            crate::global::retry_strategy(RETRY_MAX_DELAY_FAST_SECS),
+            FetchedData::Transaction,
+            &self.blockchain_id,
+            || format!("Transaction {:x}", hash),
+            async || self.get_tx(hash).await,
+        ).await
+    }
+
+    /// Same as [`Self::get_tx_expected`] but for the raw transaction bytes.
+    async fn get_tx_raw_expected(&self, hash: &TxHash) -> Result<Vec<u8>> {
+        retry_fetch(
+            crate::global::retry_strategy(RETRY_MAX_DELAY_FAST_SECS),
+            FetchedData::RawTransaction,
+            &self.blockchain_id,
+            || format!("Raw transaction {:x}", hash),
+            async || self.get_tx_raw(hash).await,
+        ).await
     }
 
 }
@@ -225,6 +253,8 @@ impl BlockchainData<BitcoinType> for BitcoinData {
     ) -> Result<BlockHeaderInfo> {
         let raw = retry_fetch(
             crate::global::retry_strategy_bounded(RETRY_MAX_DELAY_FAST_SECS),
+            FetchedData::BlockLink,
+            &self.blockchain_id,
             || match reference {
                 BlockReference::Hash(hash) => format!("Block {:x}", hash),
                 BlockReference::Height(h) => format!("Block at height {}", h.height),
@@ -246,8 +276,8 @@ impl BlockchainData<BitcoinType> for BitcoinData {
         let tx_hash = block.transactions.get(index).ok_or_else(|| anyhow!("Transaction not found"))?;
 
         let (tx, tx_raw) = tokio::join!(
-            self.get_tx(tx_hash),
-            self.get_tx_raw(tx_hash)
+            self.get_tx_expected(tx_hash),
+            self.get_tx_raw_expected(tx_hash)
         );
 
         Ok(ArchiveRow {

@@ -20,6 +20,7 @@ use crate::blockchain::retry::retry_fetch;
 use crate::archiver::datakind::{DataKind, TraceOptions};
 use crate::blockchain::next_block::{NextBlock, NextFinalizedBlock};
 use crate::global::RETRY_MAX_DELAY_FAST_SECS;
+use crate::metrics::FetchedData;
 use crate::record::{ArchiveRow, BlockchainType as ArchiveBlockchainType, Field};
 
 #[derive(Clone)]
@@ -43,6 +44,8 @@ const RETRY_MAX_DELAY_TRACE_SECS: u64 = 5;
 /// missing entity for the give-up error.
 async fn retry_not_null<F, Fut>(
     strategy: Box<dyn Iterator<Item = Duration> + Send>,
+    data: FetchedData,
+    blockchain: &str,
     describe: impl Fn() -> String,
     fetch: F,
 ) -> Result<Vec<u8>>
@@ -50,7 +53,7 @@ where
     F: Fn() -> Fut,
     Fut: Future<Output = Result<Vec<u8>>>,
 {
-    retry_fetch(strategy, &describe, async || {
+    retry_fetch(strategy, data, blockchain, &describe, async || {
         fetch().await
             .and_then(|value| if value == b"null" {
                 Err(anyhow!("{} not found", describe()))
@@ -96,6 +99,8 @@ impl EthereumData {
         // so it goes through the same retry.
         let raw_block = retry_not_null(
             crate::global::retry_strategy(RETRY_MAX_DELAY_FAST_SECS),
+            FetchedData::FinalizedBlock,
+            &self.blockchain_id,
             || "Finalized block".to_string(),
             || async {
                 let params = "[\"finalized\", false]".as_bytes().to_vec();
@@ -118,6 +123,8 @@ impl EthereumData {
     async fn get_block_expected(&self, hash: &BlockHash) -> Result<Vec<u8>> {
         retry_not_null(
             crate::global::retry_strategy(RETRY_MAX_DELAY_FAST_SECS),
+            FetchedData::Block,
+            &self.blockchain_id,
             || format!("Block 0x{:x}", hash),
             || self.get_block(hash),
         ).await
@@ -128,6 +135,8 @@ impl EthereumData {
     async fn get_block_at_expected(&self, height: u64) -> Result<Vec<u8>> {
         retry_not_null(
             crate::global::retry_strategy(RETRY_MAX_DELAY_FAST_SECS),
+            FetchedData::BlockAtHeight,
+            &self.blockchain_id,
             || format!("Block at height {}", height),
             || self.get_block_at(height),
         ).await
@@ -139,6 +148,8 @@ impl EthereumData {
     async fn get_uncle_expected(&self, hash: &BlockHash, i: usize) -> Result<Vec<u8>> {
         retry_not_null(
             crate::global::retry_strategy(RETRY_MAX_DELAY_FAST_SECS),
+            FetchedData::Uncle,
+            &self.blockchain_id,
             || format!("Uncle {} of block 0x{:x}", i, hash),
             || self.get_uncle(hash, i),
         ).await
@@ -148,6 +159,8 @@ impl EthereumData {
         tracing::debug!(block_hash = %format!("0x{:x}", block), tx_index = %i, "Get transaction");
         retry_not_null(
             crate::global::retry_strategy(RETRY_MAX_DELAY_FAST_SECS),
+            FetchedData::Transaction,
+            &self.blockchain_id,
             || format!("Transaction at block 0x{:x} index {}", block, i),
             || async {
                 let params = format!("[\"0x{:x}\", \"{:#01x}\"]", block, i).as_bytes().to_vec();
@@ -181,6 +194,8 @@ impl EthereumData {
     async fn get_tx_receipt_expected(&self, hash: &TxHash) -> Result<Vec<u8>> {
         retry_not_null(
             crate::global::retry_strategy(RETRY_MAX_DELAY_FAST_SECS),
+            FetchedData::Receipt,
+            &self.blockchain_id,
             || format!("Receipt of transaction 0x{:x}", hash),
             || self.get_tx_receipt(hash),
         ).await
@@ -189,6 +204,8 @@ impl EthereumData {
     async fn get_tx_raw_expected(&self, hash: &TxHash) -> Result<Vec<u8>> {
         retry_fetch(
             crate::global::retry_strategy(RETRY_MAX_DELAY_FAST_SECS),
+            FetchedData::RawTransaction,
+            &self.blockchain_id,
             || format!("Raw transaction 0x{:x}", hash),
             async || {
                 self.get_tx_raw(hash).await
@@ -210,6 +227,8 @@ impl EthereumData {
         let params = format!("[\"0x{:x}\", {}]", hash, tracer).as_bytes().to_vec();
         retry_not_null(
             crate::global::retry_strategy(RETRY_MAX_DELAY_TRACE_SECS),
+            FetchedData::Trace,
+            &self.blockchain_id,
             || format!("Trace of transaction 0x{:x}", hash),
             || async {
                 Ok(self.blockchain.native_call_with_timeout("debug_traceTransaction", params.clone(), crate::global::get_timeouts().trace).await?)
@@ -229,6 +248,8 @@ impl EthereumData {
         let params = format!("[\"0x{:x}\", {}]", hash, tracer).as_bytes().to_vec();
         retry_not_null(
             crate::global::retry_strategy(RETRY_MAX_DELAY_TRACE_SECS),
+            FetchedData::StateDiff,
+            &self.blockchain_id,
             || format!("State diff of transaction 0x{:x}", hash),
             || async {
                 Ok(self.blockchain.native_call_with_timeout("debug_traceTransaction", params.clone(), crate::global::get_timeouts().trace).await?)
@@ -329,6 +350,8 @@ impl BlockchainData<EthereumType> for EthereumData {
     ) -> Result<BlockHeaderInfo> {
         let raw = retry_not_null(
             crate::global::retry_strategy_bounded(RETRY_MAX_DELAY_FAST_SECS),
+            FetchedData::BlockLink,
+            &self.blockchain_id,
             || match reference {
                 BlockReference::Hash(hash) => format!("Block 0x{:x}", hash),
                 BlockReference::Height(h) => format!("Block at height {}", h.height),

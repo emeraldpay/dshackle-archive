@@ -12,8 +12,9 @@
 
 use std::future::Future;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use tokio_retry2::{Retry, RetryError};
+use crate::metrics::FetchedData;
 
 /// With a strategy that retries forever there's no final attempt to report,
 /// so a fetch that keeps failing is reported every this many attempts instead
@@ -25,6 +26,8 @@ const STILL_FAILING_EVERY: usize = crate::global::DEFAULT_RETRY_MAX_ATTEMPTS;
 /// `describe` names what's being fetched, for that log line.
 pub async fn retry_fetch<T, F, Fut>(
     strategy: Box<dyn Iterator<Item = Duration> + Send>,
+    data: FetchedData,
+    blockchain: &str,
     describe: impl Fn() -> String,
     fetch: F,
 ) -> anyhow::Result<T>
@@ -35,6 +38,7 @@ where
     // A bounded strategy is a `take(n)` of the backoff, which always reports
     // an upper bound; the unbounded backoff doesn't.
     let forever = strategy.size_hint().1.is_none();
+    let start = Instant::now();
     let attempts = AtomicUsize::new(0);
     let result = Retry::spawn(strategy, async || {
         let attempt = attempts.fetch_add(1, Ordering::Relaxed) + 1;
@@ -45,8 +49,9 @@ where
             RetryError::transient(e)
         })
     }).await;
-    if let Err(e) = &result {
-        tracing::error!("{} failed after {} attempts: {:#}", describe(), attempts.load(Ordering::Relaxed), e);
+    match &result {
+        Ok(_) => crate::metrics::observe_fetch(data, blockchain, start.elapsed().as_secs_f64()),
+        Err(e) => tracing::error!("{} failed after {} attempts: {:#}", describe(), attempts.load(Ordering::Relaxed), e),
     }
     result
 }

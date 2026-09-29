@@ -24,7 +24,7 @@ use prometheus::Registry;
 use crate::archiver::datakind::DataKind;
 
 pub use archive::ArchiveMetrics;
-pub use blockchain::BlockchainMetrics;
+pub use blockchain::{BlockchainMetrics, FetchedData};
 
 /// Whether data is being read from or written to storage.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -112,10 +112,18 @@ pub fn observe_block_archive(duration_secs: f64) {
     METRICS.archive.observe_block_archive(duration_secs);
 }
 
-/// Observe the duration of a blockchain RPC request.
+/// Observe the duration of a successful blockchain RPC request.
 pub fn observe_request(method: &str, blockchain: &str, duration_secs: f64) {
     if !ENABLED.load(Ordering::Relaxed) {
         return;
     }
     METRICS.blockchain.observe_request(method, blockchain, duration_secs);
+}
+
+/// Observe the duration of a successful blockchain fetch, from its first attempt to the one that succeeded.
+pub fn observe_fetch(data: FetchedData, blockchain: &str, duration_secs: f64) {
+    if !ENABLED.load(Ordering::Relaxed) {
+        return;
+    }
+    METRICS.blockchain.observe_fetch(data, blockchain, duration_secs);
 }
