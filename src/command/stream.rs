@@ -1,5 +1,10 @@
+// Copyright 2026 EmeraldPay Ltd
+//
+// Licensed under the Apache License, Version 2.0
+
 use std::marker::PhantomData;
 use std::sync::Arc;
+use std::time::Duration;
 use async_trait::async_trait;
 use crate::{
     archiver::{ArchiveAll, Archiver, ScanResume, StreamResume},
@@ -17,7 +22,8 @@ use anyhow::{anyhow, Result};
 use crate::archiver::datakind::DataOptions;
 use crate::args::Follow;
 use crate::blockchain::BlockchainData;
-use crate::blockchain::next_block::ReorgAwareFollower;
+use crate::blockchain::delayed_block::DelayedNextBlock;
+use crate::blockchain::next_block::{NextBlock, ReorgAwareFollower};
 use crate::notify::Maturity;
 
 ///
@@ -35,6 +41,7 @@ pub struct StreamCommand<B: BlockchainTypes, TS: WriteTarget> {
     archiver: Archiver<B, TS>,
     data_options: DataOptions,
     follow: Follow,
+    archive_delay: Duration,
     /// `Some` when the user passed `--continue` *and* the target supports
     /// resume. Streaming targets always carry `None`; for those, `--continue`
     /// is rejected at construction time.
@@ -94,6 +101,7 @@ impl<B: BlockchainTypes, TS: WriteTarget> StreamCommand<B, TS> {
             archiver,
             data_options,
             follow,
+            archive_delay: config.archive_delay,
             resume,
         })
     }
@@ -136,17 +144,27 @@ impl<B: BlockchainTypes + 'static, TS: WriteTarget> CommandExecutor for StreamCo
             Follow::Finalized => Maturity::Finalized,
         };
 
-        let heights: Box<dyn crate::blockchain::next_block::NextBlock> = match self.follow {
+        let heights: Box<dyn NextBlock> = match self.follow {
             Follow::Latest => {
                 // Wrap the raw head subscription in the re-org aware follower
                 // so live re-orgs (same-height and deep) get re-emitted with
                 // proper chain order. See `ReorgAwareFollower` for details.
-                Box::new(ReorgAwareFollower::<B>::new(
+                let follower = Box::new(ReorgAwareFollower::<B>::new(
                     self.blockchain.clone(),
                     self.archiver.data_provider.clone(),
-                ))
+                ));
+                if self.archive_delay.is_zero() {
+                    follower
+                } else {
+                    tracing::info!("Archive blocks {:?} after they are announced", self.archive_delay);
+                    Box::new(DelayedNextBlock::new(follower, self.archive_delay))
+                }
             }
             Follow::Finalized => {
+                // A finalized block is minutes old, the nodes are long done with it.
+                if !self.archive_delay.is_zero() {
+                    tracing::warn!("--archive-delay is ignored with --follow=finalized");
+                }
                 self.archiver.data_provider.next_finalized_blocks()?
             }
         };

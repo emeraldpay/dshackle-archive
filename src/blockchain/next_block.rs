@@ -9,6 +9,7 @@ use std::sync::Arc;
 use std::time::Duration;
 use async_trait::async_trait;
 use tokio::sync::mpsc::Receiver;
+use tokio::time::Instant;
 use tokio_util::sync::CancellationToken;
 use crate::archiver::range::Height;
 use crate::blockchain::block_seq::BlockSequence;
@@ -30,6 +31,10 @@ use crate::errors::BlockchainError;
 pub struct BlockJob {
     pub height: Height,
     pub cancel: CancellationToken,
+    /// When the pump learned about the block. A wait for the block to settle (see
+    /// [`crate::blockchain::delayed_block::DelayedNextBlock`]) counts from here, so the time
+    /// the job spent queued behind a slow archiver counts towards it.
+    pub announced_at: Instant,
 }
 
 impl BlockJob {
@@ -39,6 +44,7 @@ impl BlockJob {
         Self {
             height,
             cancel: CancellationToken::new(),
+            announced_at: Instant::now(),
         }
     }
 }
@@ -200,6 +206,8 @@ async fn handle_head_event<B: BlockchainTypes>(
     head_evt: Height,
     tx: &tokio::sync::mpsc::Sender<BlockJob>,
 ) -> anyhow::Result<()> {
+    // Blocks re-emitted by a re-org walk-back are announced by this head event too.
+    let announced_at = Instant::now();
     // First fetch the head's linkage to learn its parent hash. The head
     // subscription only gives us `(height, hash)`; the parent_hash comes from
     // the block header itself.
@@ -315,6 +323,7 @@ async fn handle_head_event<B: BlockchainTypes>(
                 hash: Some(link.hash),
             },
             cancel: token,
+            announced_at,
         };
         if tx.send(job).await.is_err() {
             return Err(anyhow::anyhow!("Receiver dropped; follower exiting"));

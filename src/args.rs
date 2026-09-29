@@ -1,7 +1,12 @@
+// Copyright 2026 EmeraldPay Ltd
+//
+// Licensed under the Apache License, Version 2.0
+
 use anyhow::{anyhow, Result};
 use clap::Parser;
 use std::fmt::Display;
 use std::str::FromStr;
+use std::time::Duration;
 use emerald_api::proto::common::ChainRef;
 use serde::Deserialize;
 use crate::errors::ConfigError;
@@ -32,6 +37,18 @@ const BANNER: &str = r#"
 
   Emerald Dshackle Archive - Archiving tool for the blockchain data
   https://github.com/emeraldpay/dshackle-archive"#;
+
+/// Upper bound for `--archive-delay`. Anything close to it would already stall the stream, and an unbounded value
+/// overflows when added to the announcement time.
+const MAX_ARCHIVE_DELAY_SECS: u64 = 3600;
+
+fn parse_archive_delay(value: &str) -> Result<Duration, String> {
+    let secs = value.parse::<u64>().map_err(|e| format!("not a number of seconds: {}", e))?;
+    if secs > MAX_ARCHIVE_DELAY_SECS {
+        return Err(format!("must be at most {} seconds", MAX_ARCHIVE_DELAY_SECS));
+    }
+    Ok(Duration::from_secs(secs))
+}
 
 pub fn print_banner() {
     println!("{}", BANNER);
@@ -127,6 +144,12 @@ pub struct Args {
     #[arg(long = "follow", default_value = "latest")]
     pub follow: Follow,
 
+    /// [Stream Command] Seconds to wait after a new block is announced before archiving it.
+    /// Right after a block the nodes are still processing it, so some requests fail and others are slow.
+    /// Applies only to `--follow=latest`
+    #[arg(long = "archive-delay", value_name = "SECONDS", default_value = "0", value_parser = parse_archive_delay)]
+    pub archive_delay: Duration,
+
     /// Output format. `avro` (default) writes one row-batched Avro file per
     /// (kind, range) under the historical layout. `json` writes one JSON file
     /// per field (block.json, tx-<HASH>.json, receipt-<HASH>.json,
@@ -168,6 +191,7 @@ impl Default for Args {
             compression: None,
             retry: None,
             follow: Follow::Latest,
+            archive_delay: Duration::ZERO,
             format: Format::Avro,
             metrics: None,
             metrics_await: false,

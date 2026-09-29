@@ -1,3 +1,7 @@
+// Copyright 2026 EmeraldPay Ltd
+//
+// Licensed under the Apache License, Version 2.0
+
 use std::str::FromStr;
 use std::time::Duration;
 use emerald_api::{

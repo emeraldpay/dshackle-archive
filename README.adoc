@@ -162,6 +162,11 @@ Options:
           [default: latest]
           [possible values: latest, finalized]
 
+      --archive-delay <SECONDS>
+          [Stream Command] Seconds to wait after a new block is announced before archiving it. Right after a block the nodes are still processing it, so some requests fail and others are slow. Applies only to `--follow=latest`
+
+          [default: 0]
+
       --format <FORMAT>
           Output format. `avro` (default) writes one row-batched Avro file per (kind, range) under the historical layout. `json` writes one JSON file per field (block.json, tx-<HASH>.json, receipt-<HASH>.json, raw-<HASH>.hex, …) inside a directory per height. `compact` and `verify` are not supported with `json`
 
@@ -205,6 +210,10 @@ See <<archive-format>>.
 
 Continuously append fresh blocks one by one to the archive.
 In addition to the copying, Dshackle archive can be configured to notify an external system about new blocks in the archive.
+
+Right after a new block the nodes are still processing it, so some of the requests fail (e.g., Erigon isn't ready with the traces) and others are slow.
+Use `--archive-delay` to start archiving a block a few seconds after it's announced.
+The delay applies only to `--follow=latest`; finalized blocks are old enough already.
 
 Note that when it's in streaming mode the archives are writen in a per-block basis.
 I.e., each block comes with in a separate group of files.

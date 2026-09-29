@@ -8,6 +8,7 @@ pub mod bitcoin;
 #[cfg(test)]
 pub mod mock;
 pub mod next_block;
+pub mod delayed_block;
 pub mod block_seq;
 pub mod retry;
 

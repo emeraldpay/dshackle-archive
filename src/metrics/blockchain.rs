@@ -22,16 +22,25 @@ pub struct BlockchainMetrics {
 /// `debug_traceTransaction`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FetchedData {
+    /// A block by its hash.
     Block,
+    /// A block by its height.
     BlockAtHeight,
+    /// The latest finalized block (Ethereum).
     FinalizedBlock,
     /// A block header checked by the re-org follower.
     BlockLink,
+    /// An uncle of a block (Ethereum).
     Uncle,
+    /// The JSON of a transaction.
     Transaction,
+    /// The raw bytes of a transaction.
     RawTransaction,
+    /// The receipt of a transaction (Ethereum).
     Receipt,
+    /// The `callTracer` trace of a transaction (Ethereum).
     Trace,
+    /// The `prestateTracer` diff of a transaction (Ethereum).
     StateDiff,
 }
 

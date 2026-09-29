@@ -9,7 +9,7 @@ description = "Extract blockchain data in JSON format and archive it as Avro fil
 clap = { version = "4.6", features = ["derive", "string"] }
 serde = { version = "1.0" , features = ["derive"] }
 serde_json = { version = "1.0", features = ["raw_value"] }
-tokio = { version = "1.53", features = ["fs", "rt-multi-thread", "macros"] }
+tokio = { version = "1.53", features = ["fs", "rt-multi-thread", "macros", "time"] }
 tokio-retry2 = { version = "0.9", features = ["jitter"] }
 tokio-util = { version = "0.7" , features = ["io", "io-util", "rt"] }
 tonic = { version = "0.14", features = ["tls-ring", "tls-native-roots", "gzip"] }
@@ -47,6 +47,7 @@ warp = { version = "0.4", features = ["server"] }
 shadow-rs = "2.0"
 
 [dev-dependencies]
+tokio = { version = "1.53", features = ["test-util"] }
 testcontainers = "0.28"
 rand = "0.10"
 tempfile = "3"
