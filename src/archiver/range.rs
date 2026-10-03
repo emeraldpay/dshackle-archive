@@ -152,10 +152,9 @@ impl Range {
                     Range::Multiple(other_start, other_end) => {
                         if start.height < other_start.height {
                             end.height >= other_start.height
-                        } else if start.height < other_end.height {
-                            true
                         } else {
-                            false
+                            // the end is a part of the range, so it's `<=`
+                            start.height <= other_end.height
                         }
                     }
                 }
@@ -412,6 +411,18 @@ mod tests {
         assert!(base.is_intersected_with(&Range::new(20_500, 21_500)));
         assert!(base.is_intersected_with(&Range::new(20_999, 21_099)));
         assert!(base.is_intersected_with(&Range::new(20_999, 21_000)));
+    }
+
+    #[test]
+    fn test_intersection_by_one_block() {
+        let base = Range::new(20_000, 21_000);
+        let before = Range::new(10_000, 20_000);
+        let after = Range::new(21_000, 30_000);
+
+        assert!(base.is_intersected_with(&before));
+        assert!(before.is_intersected_with(&base));
+        assert!(base.is_intersected_with(&after));
+        assert!(after.is_intersected_with(&base));
     }
 
     #[test]

@@ -112,6 +112,22 @@ impl ArchiveGroup {
     }
 
     ///
+    /// Leave only the files accepted by the filter. Returns `None` when no file is left in the group
+    pub fn retain_tables<F: Fn(&FileReference) -> bool>(self, keep: F) -> Option<Self> {
+        let group = Self {
+            blocks: self.blocks.filter(|f| keep(f)),
+            txes: self.txes.filter(|f| keep(f)),
+            traces: self.traces.filter(|f| keep(f)),
+            ..self
+        };
+        if group.tables().is_empty() {
+            None
+        } else {
+            Some(group)
+        }
+    }
+
+    ///
     /// List all files in the group
     pub fn tables(&self) -> Vec<&FileReference> {
         let mut files = Vec::new();

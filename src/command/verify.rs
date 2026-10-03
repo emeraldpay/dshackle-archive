@@ -10,7 +10,7 @@ use crate::{archiver::{
     datakind::DataOptions,
     blocks_config::Blocks,
     Archiver,
-    range::Range,
+    range::{Height, Range},
     range_group::{ArchiveGroup, ArchivesList}
 }, avros, blockchain::{BlockDetails, BlockchainTypes}, command::{CommandExecutor}, global, progress, storage::{
     TargetFileReader,
@@ -23,6 +23,7 @@ use crate::blockchain::block_seq::BlockSequence;
 use crate::blockchain::{BlockReference, BlockchainData};
 use crate::storage::{FileReference, ReadFailure};
 
+mod overlap;
 mod quick;
 
 ///
@@ -53,8 +54,9 @@ impl From<&crate::args::Args> for VerifyMode {
 /// How it works:
 /// - gets the list of all the files and groups them by range (ArchiveGroup)
 /// - if the group is incomplete (missing some tables), deletes all files in the group if --fix.clean is set, otherwise skips the group
+/// - if there are groups that overlap, i.e. have the same blocks, keeps only one of them and deletes the others.
+///   It keeps a complete group, then the largest one (by number of blocks covered), then the one that starts earlier
 /// - for each large group:
-///   - if there are multiple groups in the same range, keeps only the largest one (by number of blocks covered), deletes the others
 ///   - verifies the blocks are in sequence and all blocks are present
 ///     - "in sequence" means each block reference the parent block
 ///   - verifies that the final block in the range is actually present on the blockchain
@@ -125,13 +127,17 @@ impl VerificationStat {
 /// Data for the verification based on the filenames only
 struct Preprocess {
     input: Vec<ArchiveGroup>,
+    /// A group kept by the previous chunks that covers blocks after them. It's verified already, but the files that
+    /// overlap with it are listed only now, with the current chunk
+    reaching_in: Option<ArchiveGroup>,
     for_deletion: Vec<FileReference>,
 }
 
 impl Preprocess {
-    fn new(archive: ArchivesList) -> Self {
+    fn new(archive: ArchivesList, reaching_in: Option<ArchiveGroup>) -> Self {
         Self {
             input: archive.all(),
+            reaching_in,
             for_deletion: vec![],
         }
     }
@@ -169,7 +175,12 @@ impl<B: BlockchainTypes + 'static, TS: ReadTarget + 'static> VerifyCommand<B, TS
         })
     }
 
-    async fn verify_chunk(&self, archived: ArchivesList, stat: Arc<Mutex<VerificationStat>>) -> anyhow::Result<()> {
+    ///
+    /// Verify the files listed for the chunk.
+    ///
+    /// A group may cover blocks after the end of the chunk, where it can overlap with the files that are listed only with
+    /// the following chunks. Such group is passed from one chunk to another, as `reaching_in`, until the chunks pass its end.
+    async fn verify_chunk(&self, chunk: &Range, archived: ArchivesList, reaching_in: Option<ArchiveGroup>, stat: Arc<Mutex<VerificationStat>>) -> anyhow::Result<Option<ArchiveGroup>> {
         progress::pause();
         let mut jobs = JoinSet::new();
 
@@ -183,14 +194,20 @@ impl<B: BlockchainTypes + 'static, TS: ReadTarget + 'static> VerifyCommand<B, TS
         // 1. Apply verification that can be done on the filename level
         // ----
 
-        let mut preprocess = Preprocess::new(archived);
+        let mut preprocess = Preprocess::new(archived, reaching_in);
         // first we need to leave only uniq files
         if self.delete_whole_groups {
             // we know that incomplete groups of files are always invalid
             let _ = select_complete(&mut preprocess)?;
         }
         let _ = remove_forks::<B>(&mut preprocess, self.archiver.data_provider.clone()).await?;
-        let _ = deduplicate(&mut preprocess)?;
+        preprocess.deduplicate();
+
+        // the groups don't overlap now, so only one of them can go over the end of the chunk
+        let reaching_out = preprocess.reaching_in.iter()
+            .chain(preprocess.input.iter())
+            .find(|g| g.range.end() > chunk.end())
+            .cloned();
 
         // ----
         // 2. now we can execute on that data.
@@ -205,7 +222,8 @@ impl<B: BlockchainTypes + 'static, TS: ReadTarget + 'static> VerifyCommand<B, TS
         }
         let target = self.archiver.target.clone();
         jobs.spawn(async move {
-            delete(preprocess.for_deletion, target).await
+            delete(preprocess.for_deletion, target).await?;
+            Ok(vec![])
         });
 
         progress::resume();
@@ -216,6 +234,7 @@ impl<B: BlockchainTypes + 'static, TS: ReadTarget + 'static> VerifyCommand<B, TS
             stat
         );
 
+        let mut deleted: Vec<FileReference> = vec![];
         let shutdown = global::get_shutdown();
         while !shutdown.is_signalled() {
             tokio::select! {
@@ -223,14 +242,16 @@ impl<B: BlockchainTypes + 'static, TS: ReadTarget + 'static> VerifyCommand<B, TS
                     tracing::info!("Shutting down...");
                     jobs.shutdown().await
                 },
-                next = jobs.join_next() => {
-                    if next.is_none() {
-                        break;
-                    }
+                next = jobs.join_next() => match next {
+                    None => break,
+                    Some(Ok(Ok(files))) => deleted.extend(files),
+                    Some(_) => {},
                 }
             }
         }
-        Ok(())
+
+        // what the verification has deleted is not in the archive anymore, i.e. cannot have a duplicate
+        Ok(reaching_out.and_then(|g| g.retain_tables(|table| !deleted.contains(table))))
     }
 
 }
@@ -243,7 +264,7 @@ fn process_data<B: BlockchainTypes + 'static, TS: ReadTarget + 'static>(
     data_options: DataOptions,
     delete_whole_chunk: bool,
     mode: VerifyMode,
-    jobs: &mut JoinSet<anyhow::Result<()>>,
+    jobs: &mut JoinSet<anyhow::Result<Vec<FileReference>>>,
     stat: Arc<Mutex<VerificationStat>>,
 ) {
     let parallel = Arc::new(Semaphore::new(4));
@@ -356,19 +377,22 @@ fn select_complete(data: &mut Preprocess) -> anyhow::Result<()> {
 /// Cleans up individual heights (as made by Stream command) when a height contains multiple blocks (i.e., a fork happened at that height)
 /// In those cases, it uses the block hash from the filename, and checks the blockchain to see which block is
 /// the actual one and removes other files from the archive
+///
+/// It's only about the single block files. A range that covers the same height is not a fork but a duplicate, see [`Preprocess::deduplicate`]
 async fn remove_forks<B: BlockchainTypes + 'static>(data: &mut Preprocess, data_provider: Arc<B::DataProvider>) -> anyhow::Result<()> {
     let mut result = vec![];
     let mut left = data.inputs();
 
     while !left.is_empty() {
         let group = left.remove(0);
-        if group.range.len() > 1 {
+        if !matches!(group.range, Range::Single(_)) {
             tracing::trace!(ranage = %group.range, "Large range, no fork checks");
             result.push(group);
             continue;
         }
         let height = group.range.start();
-        let mut forks: Vec<ArchiveGroup> = left.extract_if(.., |g| g.range.start() == group.range.start())
+        let mut forks: Vec<ArchiveGroup> = left
+            .extract_if(.., |g| matches!(g.range, Range::Single(_)) && g.range.start() == height)
             .collect();
         if forks.is_empty() {
             tracing::trace!("Only one block at height {}, no forks", height);
@@ -379,55 +403,18 @@ async fn remove_forks<B: BlockchainTypes + 'static>(data: &mut Preprocess, data_
         let (_, actual, _) = data_provider.fetch_block(&BlockReference::height(height)).await?;
         let expected_hash = actual.hash();
         for fork in forks {
-            if let Range::Single(h) = &fork.range {
-                if let Some(fork_hash) = h.hash.as_ref() {
-                    if let Ok(fork_hash) = B::BlockHash::from_str(fork_hash.as_str()) {
-                        if fork_hash.eq(&expected_hash) {
-                            result.push(fork.clone());
-                            continue
-                        }
-                    }
-                }
-
+            let is_on_chain = match &fork.range {
+                Range::Single(Height { hash: Some(hash), .. }) => B::BlockHash::from_str(hash.as_str())
+                    .is_ok_and(|hash| hash.eq(&expected_hash)),
+                _ => false,
+            };
+            if is_on_chain {
+                result.push(fork);
+            } else {
                 tracing::info!(range = %fork.range, "Delete forked blocks");
                 data.delete_all(fork);
             }
         }
-    }
-    data.input = result;
-
-    Ok(())
-}
-
-///
-/// Remove all intersected ranges, by keeping only the groups that covers the largest range
-fn deduplicate(data: &mut Preprocess) -> anyhow::Result<()> {
-    let mut result = vec![];
-
-    let mut left = data.inputs();
-
-    while !left.is_empty() {
-        let group = left.remove(0);
-        let all_groups_in_range: Vec<ArchiveGroup> = left.extract_if(.., |g| g.range.is_intersected_with(&group.range))
-            .collect();
-        let group = if all_groups_in_range.len() > 1 {
-            // we got few files in the range
-            // select ib that it the largest
-            let best = all_groups_in_range.iter()
-                .max_by_key(|g| g.range.len())
-                .ok_or_else(|| anyhow::anyhow!("Empty group"))?;
-            // delete the other files
-            for other in &all_groups_in_range {
-                if best.ne(other) {
-                    tracing::info!(range = %other.range, "Delete duplicate group");
-                    data.delete_all(other.clone());
-                }
-            }
-            best.clone()
-        } else {
-            group
-        };
-        result.push(group);
     }
     data.input = result;
 
@@ -452,10 +439,11 @@ impl<B: BlockchainTypes + 'static, FR: ReadTarget + 'static> CommandExecutor for
         let ranges = full_range.split_chunks(self.chunk, false);
         let shutdown = global::get_shutdown();
         let stat = Arc::new(Mutex::new(VerificationStat::new()));
+        let mut reaching_in = None;
 
         for range in ranges {
             tracing::info!(range = %range, "Verifying chunk");
-            let mut existing = self.archiver.target.list(range)?;
+            let mut existing = self.archiver.target.list(range.clone())?;
             let mut archived = ArchivesList::new(self.data_options.files());
 
             while !shutdown.is_signalled() {
@@ -501,7 +489,7 @@ impl<B: BlockchainTypes + 'static, FR: ReadTarget + 'static> CommandExecutor for
                 }
             }
 
-            self.verify_chunk(archived, stat.clone()).await?;
+            reaching_in = self.verify_chunk(&range, archived, reaching_in, stat.clone()).await?;
         }
 
         {
@@ -526,7 +514,7 @@ async fn verify_table_group<B: BlockchainTypes + , TS: ReadTarget + 'static>(
     groups: Vec<ArchiveGroup>,
     data_options: DataOptions,
     stat: Arc<Mutex<VerificationStat>>
-) -> anyhow::Result<()> {
+) -> anyhow::Result<Vec<FileReference>> {
     let shutdown = global::get_shutdown();
     let mut for_deletion: Vec<&FileReference> = vec![];
     let mut incomplete = false;
@@ -542,7 +530,7 @@ async fn verify_table_group<B: BlockchainTypes + , TS: ReadTarget + 'static>(
 
     if shutdown.is_signalled() {
         // when it's shutting down there (1) is not time for deletion and (2) most likely it got some invalid data as other threads are stopping
-        return Ok(());
+        return Ok(vec![]);
     }
 
     if !for_deletion.is_empty() && delete_whole_chunk {
@@ -564,9 +552,10 @@ async fn verify_table_group<B: BlockchainTypes + , TS: ReadTarget + 'static>(
         }
     }
 
-    delete(for_deletion.into_iter().cloned().collect(), archiver.target.clone()).await?;
+    let for_deletion: Vec<FileReference> = for_deletion.into_iter().cloned().collect();
+    delete(for_deletion.clone(), archiver.target.clone()).await?;
 
-    Ok(())
+    Ok(for_deletion)
 }
 
 ///
@@ -1061,13 +1050,13 @@ mod tests {
     use crate::blockchain::mock::{MockBlock, MockData, MockTrace, MockTx, MockType};
     use crate::archiver::Archiver;
     use crate::command::CommandExecutor;
-    use crate::command::verify::{merge_small, verify_field_non_null, VerifyCommand};
+    use crate::command::verify::{merge_small, remove_forks, verify_field_non_null, Preprocess, VerifyCommand};
     use crate::archiver::filenames::Filenames;
     use crate::storage::objects::ObjectsStorage;
     use futures_util::StreamExt;
     use crate::blockchain::{BlockReference, BlockchainData};
     use crate::archiver::datakind::{DataKind, DataTables, TraceOptions};
-    use crate::archiver::range::Range;
+    use crate::archiver::range::{Height, Range};
     use crate::archiver::range_group::ArchiveGroup;
     use crate::avros::{BLOCK_SCHEMA, TX_TRACE_SCHEMA};
     use crate::storage::{FileReference, TargetFileWriter, WriteTarget};
@@ -1517,6 +1506,60 @@ mod tests {
 
         let after = testing::list_mem_filenames(mem).await;
         assert_eq!(after, before);
+    }
+
+    fn blocks_group(range: Range) -> ArchiveGroup {
+        let file = FileReference::new(format!("{}-block", range), DataKind::Blocks, range.clone());
+        ArchiveGroup::new(range, DataTables::default())
+            .with_file(file).unwrap()
+    }
+
+    #[tokio::test]
+    async fn fork_check_keeps_range_starting_at_single_block() {
+        let single = blocks_group(Range::single(100));
+        let range = blocks_group(Range::new(100, 109));
+
+        // the order is not defined, so try both
+        for input in [vec![single.clone(), range.clone()], vec![range.clone(), single.clone()]] {
+            let mut data = Preprocess { input, reaching_in: None, for_deletion: vec![] };
+
+            remove_forks::<MockType>(&mut data, Arc::new(MockData::new("TEST"))).await.unwrap();
+
+            assert_eq!(data.input.len(), 2);
+            assert!(data.input.contains(&single));
+            assert!(data.input.contains(&range));
+            assert!(data.for_deletion.is_empty());
+        }
+    }
+
+    #[tokio::test]
+    async fn fork_check_keeps_only_block_on_chain() {
+        let provider = Arc::new(MockData::new("TEST"));
+        provider.add_block(MockBlock {
+            height: 101,
+            hash: "B101".to_string(),
+            parent: "B100".to_string(),
+            transactions: vec![],
+        });
+        let on_chain = blocks_group(Range::Single(Height::new(101, Some("B101"))));
+        let forked = blocks_group(Range::Single(Height::new(101, Some("X101"))));
+        let unknown = blocks_group(Range::single(101));
+        let another_height = blocks_group(Range::single(102));
+
+        let mut data = Preprocess {
+            input: vec![forked.clone(), on_chain.clone(), another_height.clone(), unknown.clone()],
+            reaching_in: None,
+            for_deletion: vec![],
+        };
+
+        remove_forks::<MockType>(&mut data, provider).await.unwrap();
+
+        assert_eq!(data.input.len(), 2);
+        assert!(data.input.contains(&on_chain));
+        assert!(data.input.contains(&another_height));
+        assert_eq!(data.for_deletion.len(), 2);
+        assert!(data.for_deletion.contains(forked.blocks.as_ref().unwrap()));
+        assert!(data.for_deletion.contains(unknown.blocks.as_ref().unwrap()));
     }
 
     #[test]
