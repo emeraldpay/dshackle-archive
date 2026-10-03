@@ -53,6 +53,7 @@ impl From<&crate::args::Args> for VerifyMode {
 ///
 /// How it works:
 /// - gets the list of all the files and groups them by range (ArchiveGroup)
+/// - if a table of a range is found twice, i.e. as files with different names, keeps the one named as the archive writes it now and deletes the other
 /// - if the group is incomplete (missing some tables), deletes all files in the group if --fix.clean is set, otherwise skips the group
 /// - if there are groups that overlap, i.e. have the same blocks, keeps only one of them and deletes the others.
 ///   It keeps a complete group, then the largest one (by number of blocks covered), then the one that starts earlier
@@ -445,6 +446,8 @@ impl<B: BlockchainTypes + 'static, FR: ReadTarget + 'static> CommandExecutor for
             tracing::info!(range = %range, "Verifying chunk");
             let mut existing = self.archiver.target.list(range.clone())?;
             let mut archived = ArchivesList::new(self.data_options.files());
+            // paths of the duplicate tables that are already dropped from this chunk
+            let mut dropped: HashSet<String> = HashSet::new();
 
             while !shutdown.is_signalled() {
                 tokio::select! {
@@ -461,22 +464,36 @@ impl<B: BlockchainTypes + 'static, FR: ReadTarget + 'static> CommandExecutor for
                             Err(e) => {
                                 // error means there is something wrong with the file. ex. a duplicate table
                                 match e {
-                                    RangeGroupError::Duplicate(f1, f2) => {
-                                        if dry_run {
-                                            tracing::info!(range = %f1.range, "Dry run, keeping the duplicate tables that would be deleted: {} and {}", f1.path, f2.path);
+                                    RangeGroupError::Duplicate(existing, another) => {
+                                        if existing.path == another.path || dropped.contains(&another.path) {
+                                            // not a new duplicate but a file that came twice from the listing
+                                            continue;
+                                        }
+                                        // The same table of the same range under two names. Other commands look for a table only at the path
+                                        // the archive writes it to, so that is the copy to keep. If no copy is there, the first one stays.
+                                        // But an empty file is broken for sure, and it should not take the place of a copy that may be valid.
+                                        let existing_is_empty = existing.size == Some(0);
+                                        let another_is_empty = another.size == Some(0);
+                                        let take_another = if existing_is_empty != another_is_empty {
+                                            existing_is_empty
                                         } else {
-                                            tracing::info!(range = %f1.range, "Deleting duplicate tables: {} and {}", f1.path, f2.path);
-                                        }
-                                        {
-                                            let mut stat = stat.lock().unwrap();
-                                            stat.on_delete(&f1.kind, &f1.range);
-                                            stat.on_delete(&f2.kind, &f2.range);
-                                        }
-                                        if !dry_run {
-                                            let _ = tokio::join!(
-                                                self.archiver.target.delete(&f1),
-                                                self.archiver.target.delete(&f2)
-                                            );
+                                            another.path == self.archiver.target.table_path(another.kind, &another.range)
+                                        };
+                                        let (kept, extra) = if take_another {
+                                            archived.replace(another.clone());
+                                            (another, existing)
+                                        } else {
+                                            (existing, another)
+                                        };
+                                        dropped.insert(extra.path.clone());
+                                        stat.lock().unwrap().on_delete(&extra.kind, &extra.range);
+                                        if dry_run {
+                                            tracing::info!(range = %extra.range, "Dry run, keeping the duplicate table that would be deleted: {} (a copy of {})", extra.path, kept.path);
+                                        } else {
+                                            tracing::info!(range = %extra.range, "Deleting duplicate table: {} (a copy of {})", extra.path, kept.path);
+                                            if let Err(e) = self.archiver.target.delete(&extra).await {
+                                                tracing::warn!(range = %extra.range, "Failed to delete file {}: {}", extra.path, e);
+                                            }
                                         }
                                     },
                                     _ => {

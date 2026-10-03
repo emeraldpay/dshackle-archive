@@ -112,6 +112,16 @@ impl ArchiveGroup {
     }
 
     ///
+    /// The file of the group with the given kind of data
+    pub fn table(&self, kind: DataKind) -> Option<&FileReference> {
+        match kind {
+            DataKind::Blocks => self.blocks.as_ref(),
+            DataKind::Transactions => self.txes.as_ref(),
+            DataKind::TransactionTraces => self.traces.as_ref(),
+        }
+    }
+
+    ///
     /// Leave only the files accepted by the filter. Returns `None` when no file is left in the group
     pub fn retain_tables<F: Fn(&FileReference) -> bool>(self, keep: F) -> Option<Self> {
         let group = Self {
@@ -164,9 +174,18 @@ impl ArchivesList {
     }
 
     ///
-    /// Append to the current list or update the current group. Returns `true` if the group is complete
+    /// Append to the current list or update the current group. Returns `true` if the group is complete.
+    ///
+    /// When the group already has a table of this kind it's a [`RangeGroupError::Duplicate`], and the group stays as it was,
+    /// i.e. with the table it got first. Use [`ArchivesList::replace`] to take the new file instead.
     pub fn append(&mut self, file: FileReference) -> Result<bool, RangeGroupError> {
         let range = file.range.clone();
+
+        let existing = self.current.get(&range)
+            .and_then(|group| group.table(file.kind));
+        if let Some(existing) = existing {
+            return Err(RangeGroupError::Duplicate(existing.clone(), file));
+        }
 
         let current = self.current.remove(&range)
             .unwrap_or(ArchiveGroup::new(range.clone(), self.expect_tables.clone()));
@@ -175,6 +194,19 @@ impl ArchivesList {
         let is_complete = updated.is_complete();
         self.current.insert(range, updated);
         Ok(is_complete)
+    }
+
+    ///
+    /// Use the file as the table of its range, instead of the file the list has for that table now.
+    /// Does nothing if the list has no files for the range.
+    pub fn replace(&mut self, file: FileReference) {
+        if let Some(group) = self.current.get_mut(&file.range) {
+            match file.kind {
+                DataKind::Blocks => group.blocks = Some(file),
+                DataKind::Transactions => group.txes = Some(file),
+                DataKind::TransactionTraces => group.traces = Some(file),
+            }
+        }
     }
 
     pub fn remove_all(&mut self, range: &Range) -> Option<ArchiveGroup> {
@@ -282,6 +314,49 @@ mod tests {
         let is_complete = archives_list.append(file_traces).unwrap();
         assert!(is_complete);
         assert_eq!(archives_list.current.len(), 1);
+    }
+
+    #[test]
+    fn test_append_duplicate_keeps_group() {
+        let mut archives_list = ArchivesList::default();
+        let range = Range::new(0, 10);
+        let blocks = FileReference::new("file1", DataKind::Blocks, range.clone());
+        let txes = FileReference::new("file2", DataKind::Transactions, range.clone());
+        let blocks_again = FileReference::new("file3", DataKind::Blocks, range.clone());
+
+        archives_list.append(blocks.clone()).unwrap();
+        archives_list.append(txes.clone()).unwrap();
+        let result = archives_list.append(blocks_again.clone());
+
+        match result {
+            Err(RangeGroupError::Duplicate(existing, new)) => {
+                assert_eq!(existing, blocks);
+                assert_eq!(new, blocks_again);
+            },
+            other => panic!("Expected a duplicate, got {:?}", other),
+        }
+        let group = archives_list.iter().next().unwrap();
+        assert_eq!(group.blocks, Some(blocks));
+        assert_eq!(group.txes, Some(txes));
+        assert!(group.is_complete());
+    }
+
+    #[test]
+    fn test_replace_table() {
+        let mut archives_list = ArchivesList::default();
+        let range = Range::new(0, 10);
+        let blocks = FileReference::new("file1", DataKind::Blocks, range.clone());
+        let txes = FileReference::new("file2", DataKind::Transactions, range.clone());
+        let blocks_again = FileReference::new("file3", DataKind::Blocks, range.clone());
+
+        archives_list.append(blocks).unwrap();
+        archives_list.append(txes.clone()).unwrap();
+        archives_list.replace(blocks_again.clone());
+
+        assert_eq!(archives_list.current.len(), 1);
+        let group = archives_list.iter().next().unwrap();
+        assert_eq!(group.blocks, Some(blocks_again));
+        assert_eq!(group.txes, Some(txes));
     }
 
     #[test]

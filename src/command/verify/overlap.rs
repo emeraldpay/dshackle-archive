@@ -340,6 +340,65 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread")]
+    async fn keeps_one_of_tables_with_different_names() {
+        // `block` is how the blocks of a range were named before, and it's still read as the same table
+        let left = verify_quick(&[
+            ("archive/eth/000000000/range-000000100_000000109.block.avro", b"data"),
+            ("archive/eth/000000000/range-000000100_000000109.blocks.avro", b"data"),
+            ("archive/eth/000000000/range-000000100_000000109.traces.avro", b"data"),
+            ("archive/eth/000000000/range-000000100_000000109.txes.avro", b"data"),
+        ], "100..109").await;
+
+        assert_eq!(left, vec![
+            "archive/eth/000000000/range-000000100_000000109.blocks.avro",
+            "archive/eth/000000000/range-000000100_000000109.traces.avro",
+            "archive/eth/000000000/range-000000100_000000109.txes.avro",
+        ]);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn keeps_non_empty_table_over_empty_with_current_name() {
+        let left = verify_quick(&[
+            ("archive/eth/000000000/range-000000100_000000109.block.avro", b"data"),
+            ("archive/eth/000000000/range-000000100_000000109.blocks.avro", b""),
+            ("archive/eth/000000000/range-000000100_000000109.txes.avro", b"data"),
+        ], "100..109").await;
+
+        assert_eq!(left, vec![
+            "archive/eth/000000000/range-000000100_000000109.block.avro",
+            "archive/eth/000000000/range-000000100_000000109.txes.avro",
+        ]);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn keeps_first_of_tables_when_none_has_current_name() {
+        let left = verify_quick(&[
+            ("archive/eth/000000000/range-000000100_000000109.blocks.avro", b"data"),
+            ("archive/eth/000000000/range-000000100_000000109.transactions.avro", b"data"),
+            ("archive/eth/000000000/range-000000100_000000109.tx.avro", b"data"),
+        ], "100..109").await;
+
+        assert_eq!(left, vec![
+            "archive/eth/000000000/range-000000100_000000109.blocks.avro",
+            "archive/eth/000000000/range-000000100_000000109.transactions.avro",
+        ]);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn keeps_single_block_files_listed_twice_by_single_block_chunk() {
+        // the last chunk is the block 110 alone, and listing for a single block gives its files twice
+        let left = verify_quick(&[
+            ("archive/eth/000000000/000000000/000000110.block.avro", b"data"),
+            ("archive/eth/000000000/000000000/000000110.txes.avro", b"data"),
+        ], "100..110").await;
+
+        assert_eq!(left, vec![
+            "archive/eth/000000000/000000000/000000110.block.avro",
+            "archive/eth/000000000/000000000/000000110.txes.avro",
+        ]);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
     async fn keeps_valid_range_when_one_from_previous_chunk_is_broken() {
         // the empty blocks are deleted by the verification, and the txes left without them should not replace a valid range
         let left = verify_quick(&[

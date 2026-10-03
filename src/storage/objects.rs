@@ -118,6 +118,10 @@ impl<S: ObjectStore> ReadTarget for ObjectsStorage<S> {
 
         Ok(sorted)
     }
+
+    fn table_path(&self, kind: DataKind, range: &Range) -> String {
+        Path::from(self.filenames.path(&kind, range)).to_string()
+    }
 }
 
 impl<S: ObjectStore> ObjectsStorage<S> {

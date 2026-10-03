@@ -104,6 +104,11 @@ impl ReadTarget for FsStorage {
 
         Ok(sorted_files::merge_sort(rx_single, rx_range))
     }
+
+    fn table_path(&self, kind: DataKind, range: &Range) -> String {
+        self.parent_dir.join(self.filenames.path(&kind, range))
+            .to_string_lossy().to_string()
+    }
 }
 
 impl FsStorage {

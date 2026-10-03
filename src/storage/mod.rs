@@ -334,6 +334,12 @@ pub trait ReadTarget: ScanTarget {
     ///
     /// List all files in the range
     fn list(&self, range: Range) -> Result<Receiver<FileReference>>;
+
+    ///
+    /// Path at which the target itself keeps the table of the range, i.e. where it writes it and where it looks for it.
+    ///
+    /// The same table may be found by [`Self::list`] under another name too, ex. as it was named by an older version of the archive.
+    fn table_path(&self, kind: DataKind, range: &Range) -> String;
 }
 
 ///
