@@ -36,6 +36,20 @@ pub struct CompactCommand<B: BlockchainTypes, TS: ReadTarget> {
     blocks: Blocks,
     chunk_size: usize,
     data_options: DataOptions,
+    /// When set, the command only reports what it would compact, and neither writes nor deletes any file
+    dry_run: bool,
+}
+
+///
+/// What a compaction did with a chunk
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Compaction {
+    /// All the sources are copied into the range files, so the sources are not needed anymore
+    Done,
+    /// The sources are fine to make the range files of, but nothing is written because of the dry-run mode
+    DryRun,
+    /// The chunk stays as it is
+    Skipped,
 }
 
 #[async_trait]
@@ -70,44 +84,11 @@ impl<B: BlockchainTypes + 'static, TS: ReadTarget + 'static> CommandExecutor for
                             let current_chunk = current.as_ref().unwrap();
 
                             if !current_chunk.eq(relevant_chunk) {
-                                // -----
-                                // Process the current chunk as we got the new files
-                                // -----
-
-                                let compact = self.compact_range(current_chunk, current_files.clone())
-                                    .await;
-
-                                // no need to check the result if shutting down
+                                // the files of another chunk mean that all files of the current one are listed
+                                current_files = self.compact_chunk(current_chunk, current_files).await;
                                 if shutdown.is_signalled() {
                                     break;
                                 }
-
-                                let compact = match compact {
-                                    Ok(compacted) => compacted,
-                                    Err(e) => {
-                                        tracing::error!(range = display(current_chunk), "Range is not compacted: {}", e);
-                                        false
-                                    }
-                                };
-
-                                // keep feels that are not fully copied, for the next chunk
-                                // i.e., if a file covers multiple chunks
-                                let mut next_files = vec![];
-                                let mut deleting = JoinSet::new();
-                                for c in current_files.into_iter() {
-                                    let is_fully_read = current_chunk.contains(&c.range) || c.range.end() < current_chunk.end();
-                                    if !is_fully_read {
-                                        next_files.push(c);
-                                    } else if compact { // delete only if the file is fully copied
-                                        let c = c.clone();
-                                        let target = self.archiver.target.clone();
-                                        deleting.spawn(async move {
-                                            let _ = target.delete(&c).await;
-                                        });
-                                    }
-                                }
-                                let _ = deleting.join_all().await;
-                                current_files = next_files;
                             }
 
                             // If it was just processed, it will be overwritten with the new.
@@ -118,6 +99,15 @@ impl<B: BlockchainTypes + 'static, TS: ReadTarget + 'static> CommandExecutor for
                         None => break,
                     }
                 }
+            }
+        }
+
+        // no file comes after the last chunk to tell that it's listed in full, only the end of the listing does
+        if !shutdown.is_signalled() {
+            // A range that ends in the middle of a chunk gives a short last chunk. Compacting it would make a short
+            // range file, which is only to be read and written again once the rest of the chunk is archived
+            if let Some(last_chunk) = current.filter(|chunk| chunk.len() == self.chunk_size) {
+                let _ = self.compact_chunk(&last_chunk, current_files).await;
             }
         }
 
@@ -135,19 +125,66 @@ impl<B: BlockchainTypes+ 'static, TS: ReadTarget + 'static> CompactCommand<B, TS
             blocks: Blocks::try_from(config)?,
             chunk_size: config.range_chunk.unwrap_or(1000),
             data_options: DataOptions::from(config),
+            dry_run: config.dry_run,
         })
+    }
+
+    ///
+    /// Compact the chunk, and delete the files that are copied into its range files.
+    ///
+    /// Returns the files that are still needed after that, i.e. the files that cover blocks after the chunk
+    /// and are the sources of the next one.
+    async fn compact_chunk(&self, chunk: &Range, files: Vec<FileReference>) -> Vec<FileReference> {
+        let compaction = match self.compact_range(chunk, files.clone()).await {
+            Ok(compaction) => compaction,
+            Err(e) => {
+                tracing::error!(range = display(chunk), "Range is not compacted: {}", e);
+                Compaction::Skipped
+            }
+        };
+
+        // a compaction interrupted by a shutdown says nothing about the files, so keep all of them
+        if global::get_shutdown().is_signalled() {
+            return files;
+        }
+
+        let (copied, next_files): (Vec<FileReference>, Vec<FileReference>) = files.into_iter()
+            .partition(|f| chunk.contains(&f.range) || f.range.end() < chunk.end());
+
+        match compaction {
+            Compaction::Done => {
+                let mut deleting = JoinSet::new();
+                for file in copied {
+                    let target = self.archiver.target.clone();
+                    deleting.spawn(async move {
+                        let _ = target.delete(&file).await;
+                    });
+                }
+                let _ = deleting.join_all().await;
+            },
+            Compaction::DryRun => {
+                tracing::info!(range = display(chunk), "Dry run, keeping {} source files that would be deleted", copied.len());
+                for file in copied {
+                    tracing::debug!(range = display(chunk), "Dry run, keeping the file that would be deleted: {}", file.path);
+                }
+            },
+            Compaction::Skipped => {},
+        }
+
+        next_files
     }
 
     ///
     /// Compact data from the given tables into a single range table (per data kind). It only selects data that is in the given range.
     /// @range Range to compact
     /// @files List of files that can be used for compaction
-    async fn compact_range(&self, range: &Range, files: Vec<FileReference>) -> Result<bool> {
+    async fn compact_range(&self, range: &Range, files: Vec<FileReference>) -> Result<Compaction> {
         tracing::info!(range = display(range), "Compacting range chunk");
+        let sources = files.len();
         let complete = match Self::verify_files(range, files, &self.data_options) {
             Err(e) => {
                 tracing::warn!(range = display(range), "{}", e);
-                return Ok(false);
+                return Ok(Compaction::Skipped);
             },
             Ok(c) => c,
         };
@@ -158,7 +195,12 @@ impl<B: BlockchainTypes+ 'static, TS: ReadTarget + 'static> CompactCommand<B, TS
         };
         if already_compacted {
             tracing::debug!(range = display(range), "Range is already compacted");
-            return Ok(false);
+            return Ok(Compaction::Skipped);
+        }
+        if self.dry_run {
+            // the sources are not read here, as copying them is what writes the range files
+            tracing::info!(range = display(range), "Dry run, not writing the range files that would be made of {} source files", sources);
+            return Ok(Compaction::DryRun);
         }
         let complete = Arc::new(complete);
 
@@ -227,9 +269,10 @@ impl<B: BlockchainTypes+ 'static, TS: ReadTarget + 'static> CompactCommand<B, TS
                 file.close().await?;
             }
             tracing::debug!(range = display(range), "Range compacted");
+            Ok(Compaction::Done)
+        } else {
+            Ok(Compaction::Skipped)
         }
-
-        Ok(all_copied)
     }
 
     fn verify_files(range: &Range, files: Vec<FileReference>, tx_options: &DataOptions) -> Result<ArchivesList> {
@@ -1311,6 +1354,136 @@ mod tests {
         compact_cmd.execute().await.unwrap();
         let after_second = testing::list_mem_filenames(mem).await;
         assert_eq!(after_second, after_first);
+    }
+
+    async fn archive_single_blocks(archiver: &Archiver<MockType, ObjectsStorage<InMemory>>, data_provider: &MockData, heights: std::ops::Range<u64>) {
+        for block_height in heights {
+            let txs = vec![format!("TX{}", block_height)];
+            data_provider.add_block(MockBlock {
+                height: block_height,
+                hash: format!("B{}", block_height),
+                parent: format!("B{}", block_height - 1),
+                transactions: txs.clone(),
+            });
+            for tx in &txs {
+                data_provider.add_tx(MockTx { hash: tx.clone() });
+            }
+            testing::write_block_and_tx(archiver, block_height, None).await.unwrap();
+        }
+    }
+
+    ///
+    /// Nothing is listed after the last chunk, so it's the end of the listing that starts its compaction
+    #[tokio::test(flavor = "multi_thread")]
+    async fn compact_command_compacts_last_chunk() {
+        testing::start_test();
+
+        let mem = Arc::new(InMemory::new());
+        let data_provider: Arc<MockData> = Arc::new(MockData::new("TEST_LAST_CHUNK"));
+        let storage = ObjectsStorage::new(mem.clone(), "test".to_string(), Filenames::with_dir("archive/test".to_string()));
+        let archiver = Archiver::new_simple(Arc::new(storage), data_provider.clone());
+        archive_single_blocks(&archiver, &data_provider, 300..320).await;
+
+        let args = Args {
+            range: Some("300..319".to_string()),
+            range_chunk: Some(10),
+            ..Default::default()
+        };
+        CompactCommand::new(&args, archiver).unwrap()
+            .execute().await.unwrap();
+
+        let after = testing::list_mem_filenames(mem).await;
+        assert_eq!(
+            after,
+            vec![
+                "archive/test/000000000/range-000000300_000000309.blocks.avro",
+                "archive/test/000000000/range-000000300_000000309.txes.avro",
+                "archive/test/000000000/range-000000310_000000319.blocks.avro",
+                "archive/test/000000000/range-000000310_000000319.txes.avro",
+            ]
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn compact_command_keeps_short_last_chunk() {
+        testing::start_test();
+
+        let mem = Arc::new(InMemory::new());
+        let data_provider: Arc<MockData> = Arc::new(MockData::new("TEST_SHORT_CHUNK"));
+        let storage = ObjectsStorage::new(mem.clone(), "test".to_string(), Filenames::with_dir("archive/test".to_string()));
+        let archiver = Archiver::new_simple(Arc::new(storage), data_provider.clone());
+        // all the blocks of the range are archived, i.e. the last chunk is not missing any data, it's just short
+        archive_single_blocks(&archiver, &data_provider, 300..316).await;
+
+        let args = Args {
+            range: Some("300..315".to_string()),
+            range_chunk: Some(10),
+            ..Default::default()
+        };
+        CompactCommand::new(&args, archiver).unwrap()
+            .execute().await.unwrap();
+
+        let after = testing::list_mem_filenames(mem).await;
+        assert_eq!(after.len(), 2 + 6 * 2);
+        assert!(after.contains(&"archive/test/000000000/range-000000300_000000309.blocks.avro".to_string()));
+        assert!(after.contains(&"archive/test/000000000/range-000000300_000000309.txes.avro".to_string()));
+        for height in 310..316 {
+            assert!(after.contains(&format!("archive/test/000000000/000000000/{:09}.block.avro", height)));
+            assert!(after.contains(&format!("archive/test/000000000/000000000/{:09}.txes.avro", height)));
+        }
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn compact_command_compacts_the_only_chunk() {
+        testing::start_test();
+
+        let mem = Arc::new(InMemory::new());
+        let data_provider: Arc<MockData> = Arc::new(MockData::new("TEST_ONLY_CHUNK"));
+        let storage = ObjectsStorage::new(mem.clone(), "test".to_string(), Filenames::with_dir("archive/test".to_string()));
+        let archiver = Archiver::new_simple(Arc::new(storage), data_provider.clone());
+        archive_single_blocks(&archiver, &data_provider, 300..310).await;
+
+        let args = Args {
+            range: Some("300..309".to_string()),
+            range_chunk: Some(10),
+            ..Default::default()
+        };
+        CompactCommand::new(&args, archiver).unwrap()
+            .execute().await.unwrap();
+
+        let after = testing::list_mem_filenames(mem).await;
+        assert_eq!(
+            after,
+            vec![
+                "archive/test/000000000/range-000000300_000000309.blocks.avro",
+                "archive/test/000000000/range-000000300_000000309.txes.avro",
+            ]
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn compact_command_changes_nothing_in_dry_run() {
+        testing::start_test();
+
+        let mem = Arc::new(InMemory::new());
+        let data_provider: Arc<MockData> = Arc::new(MockData::new("TEST_DRY_RUN"));
+        let storage = ObjectsStorage::new(mem.clone(), "test".to_string(), Filenames::with_dir("archive/test".to_string()));
+        let archiver = Archiver::new_simple(Arc::new(storage), data_provider.clone());
+        archive_single_blocks(&archiver, &data_provider, 300..320).await;
+        let before = testing::list_mem_filenames(mem.clone()).await;
+        assert_eq!(before.len(), 40);
+
+        let args = Args {
+            range: Some("300..319".to_string()),
+            range_chunk: Some(10),
+            dry_run: true,
+            ..Default::default()
+        };
+        CompactCommand::new(&args, archiver).unwrap()
+            .execute().await.unwrap();
+
+        let after = testing::list_mem_filenames(mem).await;
+        assert_eq!(after, before);
     }
 
     ///
