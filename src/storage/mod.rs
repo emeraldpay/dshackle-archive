@@ -14,7 +14,7 @@ use crate::{
         range::Range,
         filenames::Filenames,
         datakind::{DataKind, DataOptions},
-        range_group::ArchivesList
+        range_group::{ArchivesList, RangeGroupError}
     },
     args::Args,
     formats::topics::TopicSet,
@@ -365,14 +365,33 @@ where
     missing_ranges.append(blocks.clone());
 
     let shutdown = global::get_shutdown();
+    let mut duplicates: Vec<String> = vec![];
     while let Some(file) = existing.recv().await {
         // Remove this file's range from the missing ranges
         missing_ranges.remove(&file.range);
-        archived.append(file)?;
+        match archived.append(file) {
+            Ok(_) => {},
+            // The table is archived, so there is nothing to add to the archive. That it's archived twice,
+            // i.e. as files with different names, is for Verify to clean
+            Err(RangeGroupError::Duplicate(first, another)) => {
+                // the same path is not a copy but a file listed twice
+                if first.path != another.path {
+                    duplicates.push(another.path);
+                }
+            },
+            Err(e) => return Err(e.into()),
+        }
         if shutdown.is_signalled() {
             tracing::info!("Shutdown signal received");
             return Ok(vec![]);
         }
+    }
+
+    if !duplicates.is_empty() {
+        tracing::warn!("Found {} tables that are archived twice (sample: {},...). Run Verify to delete the extra copies",
+            duplicates.len(),
+            duplicates.iter().take(5).join(",")
+        );
     }
 
     let incomplete = archived.list_incomplete();
@@ -625,6 +644,40 @@ mod tests {
         let incomplete = storage.find_incomplete_tables(range, &tx_options).await.unwrap();
 
         assert_eq!(incomplete.len(), 0);
+    }
+
+    #[tokio::test]
+    async fn test_find_incomplete_tables_with_table_archived_twice() {
+        // `block` is how the blocks of a range were named before, and it's still read as the same table
+        let storage = create_test_storage(vec![
+            "archive/eth/021000000/range-021596000_021596999.block.avro",
+            "archive/eth/021000000/range-021596000_021596999.blocks.avro",
+            "archive/eth/021000000/range-021596000_021596999.txes.avro",
+        ]).await;
+
+        let range = Range::new(21_596_000, 21_596_999);
+        let tx_options = DataOptions::default();
+
+        let incomplete = storage.find_incomplete_tables(range, &tx_options).await.unwrap();
+
+        assert_eq!(incomplete.len(), 0);
+    }
+
+    #[tokio::test]
+    async fn test_find_incomplete_tables_missing_txes_with_blocks_archived_twice() {
+        let storage = create_test_storage(vec![
+            "archive/eth/021000000/range-021596000_021596999.block.avro",
+            "archive/eth/021000000/range-021596000_021596999.blocks.avro",
+        ]).await;
+
+        let range = Range::new(21_596_000, 21_596_999);
+        let tx_options = DataOptions::default();
+
+        let incomplete = storage.find_incomplete_tables(range.clone(), &tx_options).await.unwrap();
+
+        assert_eq!(incomplete.len(), 1);
+        assert_eq!(incomplete[0].0, range);
+        assert_eq!(incomplete[0].1, vec![DataKind::Transactions]);
     }
 
     #[tokio::test]
