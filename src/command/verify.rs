@@ -268,17 +268,17 @@ fn merge_small(groups: Vec<ArchiveGroup>) -> Vec<(Range, Vec<ArchiveGroup>)> {
 
 ///
 /// Delete the list of files
-/// Does nothing is dry-run mode is enabled
+/// In dry-run mode only reports the files it would delete
 async fn delete<TS: ReadTarget + 'static>(files: Vec<FileReference>, target: Arc<TS>) -> anyhow::Result<()> {
     let dry_run = global::is_dry_run();
-    if dry_run {
-        tracing::info!("Dry run mode, no files will be deleted");
-    }
     let shutdown = global::get_shutdown();
     let semaphore = Arc::new(Semaphore::new(4));
     let mut jobs = JoinSet::new();
     for f in &files {
-        tracing::debug!(range = %f.range, dry_run = %dry_run, "Deleting file: {}", f.path);
+        if dry_run {
+            tracing::info!(range = %f.range, "Dry run, keeping the file that would be deleted: {}", f.path);
+            continue;
+        }
         if shutdown.is_signalled() {
             break;
         }
@@ -291,7 +291,10 @@ async fn delete<TS: ReadTarget + 'static>(files: Vec<FileReference>, target: Arc
                 return;
             }
             let _permit = semaphore.acquire().await;
-            let _ = target.delete(&f).await;
+            tracing::info!(range = %f.range, "Deleting file: {}", f.path);
+            if let Err(e) = target.delete(&f).await {
+                tracing::warn!(range = %f.range, "Failed to delete file {}: {}", f.path, e);
+            }
         });
     }
     while let Some(res) = jobs.join_next().await {
@@ -313,7 +316,7 @@ fn select_complete(data: &mut Preprocess) -> anyhow::Result<()> {
         if group.is_complete() {
             result.push(group);
         } else {
-            tracing::debug!(range = %group.range, "Delete incomplete group");
+            tracing::info!(range = %group.range, "Delete incomplete group");
             data.delete_all(group);
         }
     }
@@ -358,7 +361,7 @@ async fn remove_forks<B: BlockchainTypes + 'static>(data: &mut Preprocess, data_
                     }
                 }
 
-                tracing::debug!(range = %fork.range, "Delete forked blocks");
+                tracing::info!(range = %fork.range, "Delete forked blocks");
                 data.delete_all(fork);
             }
         }
@@ -388,7 +391,7 @@ fn deduplicate(data: &mut Preprocess) -> anyhow::Result<()> {
             // delete the other files
             for other in &all_groups_in_range {
                 if best.ne(other) {
-                    tracing::debug!(range = %group.range, "Delete duplicate group");
+                    tracing::info!(range = %other.range, "Delete duplicate group");
                     data.delete_all(other.clone());
                 }
             }
@@ -409,11 +412,14 @@ impl<B: BlockchainTypes + 'static, FR: ReadTarget + 'static> CommandExecutor for
     async fn execute(&self) -> anyhow::Result<()> {
         let full_range = self.blocks.to_range(self.archiver.data_provider.as_ref()).await?;
         tracing::info!(range = %full_range, "Verifying range");
+        let dry_run = global::is_dry_run();
+        if dry_run {
+            tracing::info!("Dry run mode, no files will be deleted");
+        }
 
         progress::pause();
         let ranges = full_range.split_chunks(self.chunk, false);
         let shutdown = global::get_shutdown();
-        let dry_run = global::is_dry_run();
         let stat = Arc::new(Mutex::new(VerificationStat::new()));
 
         for range in ranges {
@@ -437,6 +443,11 @@ impl<B: BlockchainTypes + 'static, FR: ReadTarget + 'static> CommandExecutor for
                                 // error means there is something wrong with the file. ex. a duplicate table
                                 match e {
                                     RangeGroupError::Duplicate(f1, f2) => {
+                                        if dry_run {
+                                            tracing::info!(range = %f1.range, "Dry run, keeping the duplicate tables that would be deleted: {} and {}", f1.path, f2.path);
+                                        } else {
+                                            tracing::info!(range = %f1.range, "Deleting duplicate tables: {} and {}", f1.path, f2.path);
+                                        }
                                         {
                                             let mut stat = stat.lock().unwrap();
                                             stat.on_delete(&f1.kind, &f1.range);
