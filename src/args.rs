@@ -120,6 +120,12 @@ pub struct Args {
     pub fix_clean: bool,
 
     ///
+    /// [Verify Command] Check only that the files exist and are not empty, without reading them; i.e., trust that the range in a file name is the range of blocks in the file.
+    /// Default is `false`, which reads all the files and verifies the data in them.
+    #[arg(long = "quick")]
+    pub quick: bool,
+
+    ///
     /// Compression algorithm to use for new output. For `--format=avro` it's
     /// the Avro file codec; for a streaming target it's the producer
     /// compression applied to every message. Default is `zstd`.
@@ -188,6 +194,7 @@ impl Default for Args {
             tables: Some("blocks,txes".to_string()),
             fields_trace: Some("calls,stateDiff".to_string()),
             fix_clean: false,
+            quick: false,
             compression: None,
             retry: None,
             follow: Follow::Latest,

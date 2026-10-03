@@ -205,6 +205,7 @@ mod tests {
             range: range.clone(),
             kind: DataKind::Blocks,
             path: "file1".to_string(),
+            size: None,
         };
 
         let is_complete = archives_list.append(file).unwrap();
@@ -220,11 +221,13 @@ mod tests {
             range: range.clone(),
             kind: DataKind::Blocks,
             path: "file1".to_string(),
+            size: None,
         };
         let file_txes = FileReference {
             range: range.clone(),
             kind: DataKind::Transactions,
             path: "file2".to_string(),
+            size: None,
         };
 
         archives_list.append(file_blocks).unwrap();
@@ -241,11 +244,13 @@ mod tests {
             range: range.clone(),
             kind: DataKind::Blocks,
             path: "file1".to_string(),
+            size: None,
         };
         let file_txes = FileReference {
             range: range.clone(),
             kind: DataKind::Transactions,
             path: "file2".to_string(),
+            size: None,
         };
 
         archives_list.append(file_blocks).unwrap();
@@ -256,6 +261,7 @@ mod tests {
             range: range.clone(),
             kind: DataKind::TransactionTraces,
             path: "file3".to_string(),
+            size: None,
         };
         let is_complete = archives_list.append(file_traces).unwrap();
         assert!(is_complete);
@@ -270,6 +276,7 @@ mod tests {
             range: range.clone(),
             kind: DataKind::Blocks,
             path: "file1".to_string(),
+            size: None,
         };
 
         archives_list.append(file).unwrap();
@@ -287,16 +294,19 @@ mod tests {
             range: range1.clone(),
             kind: DataKind::Blocks,
             path: "file1".to_string(),
+            size: None,
         };
         let file2 = FileReference {
             range: range2.clone(),
             kind: DataKind::Blocks,
             path: "file2".to_string(),
+            size: None,
         };
         let file3 = FileReference {
             range: range2.clone(),
             kind: DataKind::Transactions,
             path: "file3".to_string(),
+            size: None,
         };
 
         archives_list.append(file1).unwrap();
@@ -327,11 +337,13 @@ mod tests {
             range: range.clone(),
             kind: DataKind::Blocks,
             path: "file1".to_string(),
+            size: None,
         };
         let file_txes = FileReference {
             range: range.clone(),
             kind: DataKind::Transactions,
             path: "file2".to_string(),
+            size: None,
         };
         archives_list.append(file_blocks).unwrap();
         archives_list.append(file_txes).unwrap();
@@ -348,16 +360,19 @@ mod tests {
             range: range1.clone(),
             kind: DataKind::Blocks,
             path: "file1".to_string(),
+            size: None,
         };
         let file2 = FileReference {
             range: range2.clone(),
             kind: DataKind::Blocks,
             path: "file2".to_string(),
+            size: None,
         };
         let file3 = FileReference {
             range: range2.clone(),
             kind: DataKind::Transactions,
             path: "file3".to_string(),
+            size: None,
         };
         archives_list.append(file1).unwrap(); // incomplete
         archives_list.append(file2).unwrap();

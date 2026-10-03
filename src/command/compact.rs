@@ -1058,6 +1058,7 @@ mod tests {
                 range: range.clone(),
                 kind: *kind,
                 path: format!("{}-{}", range, kind),
+                size: None,
             })
             .collect()
     }

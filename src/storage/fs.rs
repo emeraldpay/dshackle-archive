@@ -140,6 +140,7 @@ impl ReadTarget for FsStorage {
                                 range: file_range,
                                 kind,
                                 path: path.to_string_lossy().to_string(),
+                                size: file.metadata().ok().map(|m| m.len()),
                             };
                             if tx.send(r).await.is_err() {
                                 return

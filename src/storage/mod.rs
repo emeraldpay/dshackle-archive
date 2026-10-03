@@ -493,6 +493,8 @@ pub struct FileReference {
     pub path: String,
     pub kind: DataKind,
     pub range: Range,
+    /// Size of the file in bytes. Known only when the reference comes from a listing of the storage
+    pub size: Option<u64>,
 }
 
 impl FileReference {
@@ -501,6 +503,7 @@ impl FileReference {
             path: path.to_string(),
             kind,
             range,
+            size: None,
         }
     }
 }

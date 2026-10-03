@@ -172,6 +172,7 @@ impl<S: ObjectStore> ObjectsStorage<S> {
                         range: file_range,
                         kind,
                         path: meta.location.to_string(),
+                        size: Some(meta.size),
                     };
                     if let Err(e) = tx.send(r).await {
                         tracing::warn!(range = display(range), "Error listing archives: {:?}", e);

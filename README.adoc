@@ -140,6 +140,9 @@ Options:
       --fix.clean
           [Fix Command] Set to remove any existing data in whole chunk if any of tables is missing a block in the chunk or has broken values. Default is `false`, which deleted only tables with missing / corrupted data
 
+      --quick
+          [Verify Command] Check only that the files exist and are not empty, without reading them; i.e., trust that the range in a file name is the range of blocks in the file. Default is `false`, which reads all the files and verifies the data in them
+
       --compression <COMPRESSION>
           Compression algorithm to use for new output. For `--format=avro` it's the Avro file codec; for a streaming target it's the producer compression applied to every message. Default is `zstd`
 
@@ -296,6 +299,11 @@ Verify that archive files contains required data and delete incomplete/corrupted
 The a `fix` command is supposed to run to download missing blocks.
 
 WARNING: This command is destructive, it deletes files from the archive.
+
+Reading the whole archive takes a long time.
+With `--quick` the command doesn't read the files, it only checks which files exist and that they are not empty.
+It trusts that the range in a file name is the range of blocks in the file, so it's fast, but it cannot find a missing block or broken data inside a file.
+It still deletes the files it finds wrong, i.e. the empty ones, duplicates, forks, and tables left without their blocks.
 
 === Archive Size
 

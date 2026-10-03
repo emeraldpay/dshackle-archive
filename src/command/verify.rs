@@ -23,6 +23,28 @@ use crate::blockchain::block_seq::BlockSequence;
 use crate::blockchain::{BlockReference, BlockchainData};
 use crate::storage::{FileReference, ReadFailure};
 
+mod quick;
+
+///
+/// How thoroughly the `verify` command checks the tables of the archive
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum VerifyMode {
+    /// Read all the tables and verify their content, including a check against the blockchain
+    Full,
+    /// Check only that the files exist and are not empty, see [`quick`]
+    Quick,
+}
+
+impl From<&crate::args::Args> for VerifyMode {
+    fn from(value: &crate::args::Args) -> Self {
+        if value.quick {
+            VerifyMode::Quick
+        } else {
+            VerifyMode::Full
+        }
+    }
+}
+
 ///
 /// Provides `verify` command.
 ///
@@ -47,6 +69,9 @@ use crate::storage::{FileReference, ReadFailure};
 ///   - if blocks are ok, but some txes or traces are missing or corrupted, deletes only the group of files;
 ///     i.e., if a tx for just one of the blocks is missing then it deletes all files with txes in that group;
 ///
+/// With `--quick` it doesn't read the files. The verification on the filename level stays the same, but instead of
+/// checking the blocks, txes and traces it only checks that the files are not empty, and deletes the empty ones.
+///
 #[derive(Clone)]
 pub struct VerifyCommand<B: BlockchainTypes, TS: ReadTarget> {
     b: PhantomData<B>,
@@ -57,6 +82,7 @@ pub struct VerifyCommand<B: BlockchainTypes, TS: ReadTarget> {
     /// i.e., if a Tx is invalid (or missing, etc.) the delete the file with corresponding blocks as well even if it's verified as valid
     delete_whole_groups: bool,
     chunk: usize,
+    mode: VerifyMode,
 }
 
 struct TableStat {
@@ -139,6 +165,7 @@ impl<B: BlockchainTypes + 'static, TS: ReadTarget + 'static> VerifyCommand<B, TS
             data_options: DataOptions::from(config),
             delete_whole_groups: config.fix_clean,
             chunk: config.get_chunk_size(),
+            mode: VerifyMode::from(config),
         })
     }
 
@@ -184,7 +211,7 @@ impl<B: BlockchainTypes + 'static, TS: ReadTarget + 'static> VerifyCommand<B, TS
         progress::resume();
         process_data(
             grouped,
-            self.archiver.clone(), self.data_options.clone(), self.delete_whole_groups,
+            self.archiver.clone(), self.data_options.clone(), self.delete_whole_groups, self.mode,
             &mut jobs,
             stat
         );
@@ -215,6 +242,7 @@ fn process_data<B: BlockchainTypes + 'static, TS: ReadTarget + 'static>(
     archiver: Arc<Archiver<B, TS>>,
     data_options: DataOptions,
     delete_whole_chunk: bool,
+    mode: VerifyMode,
     jobs: &mut JoinSet<anyhow::Result<()>>,
     stat: Arc<Mutex<VerificationStat>>,
 ) {
@@ -226,7 +254,7 @@ fn process_data<B: BlockchainTypes + 'static, TS: ReadTarget + 'static>(
         let stat = stat.clone();
         jobs.spawn(async move {
             let _permit = parallel.acquire().await;
-            verify_table_group(delete_whole_chunk, archiver, range, group, data_options, stat).await
+            verify_table_group(delete_whole_chunk, mode, archiver, range, group, data_options, stat).await
         });
     }
 }
@@ -416,6 +444,9 @@ impl<B: BlockchainTypes + 'static, FR: ReadTarget + 'static> CommandExecutor for
         if dry_run {
             tracing::info!("Dry run mode, no files will be deleted");
         }
+        if self.mode == VerifyMode::Quick {
+            tracing::info!("Quick mode, verifying only that the files exist and are not empty");
+        }
 
         progress::pause();
         let ranges = full_range.split_chunks(self.chunk, false);
@@ -489,6 +520,7 @@ impl<B: BlockchainTypes + 'static, FR: ReadTarget + 'static> CommandExecutor for
 
 async fn verify_table_group<B: BlockchainTypes + , TS: ReadTarget + 'static>(
     delete_whole_chunk: bool,
+    mode: VerifyMode,
     archiver: Arc<Archiver<B, TS>>,
     range: Range,
     groups: Vec<ArchiveGroup>,
@@ -499,7 +531,11 @@ async fn verify_table_group<B: BlockchainTypes + , TS: ReadTarget + 'static>(
     let mut for_deletion: Vec<&FileReference> = vec![];
     let mut incomplete = false;
 
-    if let Ok(verification) = verify_content(archiver.clone(), &range, &groups, data_options).await {
+    let verification = match mode {
+        VerifyMode::Full => verify_content(archiver.clone(), &range, &groups, data_options).await,
+        VerifyMode::Quick => Ok(RangeVerification::by_listing(&range, &groups, &data_options)),
+    };
+    if let Ok(verification) = verification {
         for_deletion.extend(verification.broken);
         incomplete = verification.incomplete;
     }
@@ -554,6 +590,14 @@ impl<'a> RangeVerification<'a> {
     fn unreadable() -> Self {
         Self { broken: vec![], incomplete: true }
     }
+
+    ///
+    /// A range that has no block table. There is nothing to verify the other tables against, so
+    /// all of them are to be archived again together with the blocks
+    fn missing_blocks(range: &Range, groups: &'a [ArchiveGroup]) -> Self {
+        tracing::error!(range = %range, "No block file. Skip verification and delete other tables in the range");
+        Self::verified(groups.iter().flat_map(|g| g.tables()).collect())
+    }
 }
 
 async fn verify_content<'a, B: BlockchainTypes, TS: ReadTarget>(archiver: Arc<Archiver<B, TS>>, range: &Range, groups: &'a Vec<ArchiveGroup>, data_options: DataOptions) -> anyhow::Result<RangeVerification<'a>> {
@@ -569,8 +613,7 @@ async fn verify_content<'a, B: BlockchainTypes, TS: ReadTarget>(archiver: Arc<Ar
     let block_verification = if blocks.len() > 0 && data_options.block.is_some() {
         BlockVerify::<B, TS>::new().verify_table(data_options.block.as_ref().unwrap(), archiver.target.as_ref(), &range, &blocks, archiver.data_provider.as_ref()).await
     } else {
-        tracing::error!(range = %range, "No block file. Skip verification and delete other tables in the range");
-        return Ok(RangeVerification::verified(groups.iter().flat_map(|g| g.tables()).collect()))
+        return Ok(RangeVerification::missing_blocks(range, groups))
     };
 
     if shutdown.is_signalled() {
