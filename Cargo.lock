@@ -2217,7 +2217,7 @@ dependencies = [
 
 [[package]]
 name = "dshackle-archive"
-version = "0.9.0-dev"
+version = "0.9.0"
 dependencies = [
  "alloy",
  "anyhow",
