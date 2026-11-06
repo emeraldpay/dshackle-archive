@@ -28,6 +28,9 @@ use crate::{
 };
 use crate::archiver::datakind::{BlockOptions, TraceOptions, TxOptions};
 
+mod discrepancy;
+use discrepancy::Discrepancy;
+
 #[derive(Clone)]
 pub struct CompactCommand<B: BlockchainTypes, TS: ReadTarget> {
     b: PhantomData<B>,
@@ -179,7 +182,6 @@ impl<B: BlockchainTypes+ 'static, TS: ReadTarget + 'static> CompactCommand<B, TS
     /// @range Range to compact
     /// @files List of files that can be used for compaction
     async fn compact_range(&self, range: &Range, files: Vec<FileReference>) -> Result<Compaction> {
-        tracing::info!(range = display(range), "Compacting range chunk");
         let sources = files.len();
         let complete = match Self::verify_files(range, files, &self.data_options) {
             Err(e) => {
@@ -194,9 +196,10 @@ impl<B: BlockchainTypes+ 'static, TS: ReadTarget + 'static> CompactCommand<B, TS
             matches!((groups.next(), groups.next()), (Some(single), None) if single.range.eq(range))
         };
         if already_compacted {
-            tracing::debug!(range = display(range), "Range is already compacted");
+            tracing::info!(range = display(range), "Range is already compacted");
             return Ok(Compaction::Skipped);
         }
+        tracing::info!(range = display(range), "Compacting range chunk from {} source files", sources);
         if self.dry_run {
             // the sources are not read here, as copying them is what writes the range files
             tracing::info!(range = display(range), "Dry run, not writing the range files that would be made of {} source files", sources);
@@ -268,7 +271,7 @@ impl<B: BlockchainTypes+ 'static, TS: ReadTarget + 'static> CompactCommand<B, TS
                 // treat the range as compacted and delete its sources
                 file.close().await?;
             }
-            tracing::debug!(range = display(range), "Range compacted");
+            tracing::info!(range = display(range), "Range compacted");
             Ok(Compaction::Done)
         } else {
             Ok(Compaction::Skipped)
@@ -307,7 +310,7 @@ impl<B: BlockchainTypes+ 'static, TS: ReadTarget + 'static> CompactCommand<B, TS
 
         // must have all the data in the same range as requested
         if bag.len() != 1 || bag.as_single_range().unwrap() != range {
-            return Err(anyhow!("Range is missing data. Please run Fix before Compaction. Skipping this range."));
+            return Err(anyhow!("Range is missing data, archived only {}. Please run Fix before Compaction. Skipping this range.", bag));
         }
         Ok(complete)
     }
@@ -322,7 +325,7 @@ struct CopiedStatus<TXID: Hash + Eq> {
     copied_traces: Vec<TXID>,
 }
 
-impl<TXID: Hash + Eq + Debug> CopiedStatus<TXID> {
+impl<TXID: Hash + Eq + Clone + Debug> CopiedStatus<TXID> {
     fn new(data_options: DataOptions) -> Self {
         Self {
             data_options,
@@ -356,33 +359,29 @@ impl<TXID: Hash + Eq + Debug> CopiedStatus<TXID> {
         self.copied_traces.push(tx);
     }
 
+    ///
+    /// Check that the copied data is exactly what the range should have.
+    ///
+    /// The files are already there for the whole range (see `verify_files`), so a difference here is in their content.
+    /// The Fix alone doesn't see it, it needs the Verify to delete such files first.
     fn validate(&self, range: &Range) -> bool {
-        if let Some(_opts) = &self.data_options.block {
-            if self.copied_blocks.len() != range.len() {
-                tracing::warn!(range = display(range), "Missing blocks. Please run Fix before Compaction. Skipping this range.");
-                return false;
-            }
-            // build the range from the copied blocks to see if it's whole range
-            let resulting_range = RangeBag::from(
-                self.copied_blocks.iter().map(|h| h.clone()).collect::<Vec<u64>>()
-            ).compact();
-
-            if resulting_range.len() != 1 || resulting_range.as_single_range().unwrap() != range {
-                tracing::warn!(range = display(range), "Missing blocks. Please run Fix before Compaction. Skipping this range.");
+        if self.data_options.block.is_some() {
+            if let Some(discrepancy) = Discrepancy::find(range.iter(), &self.copied_blocks) {
+                tracing::warn!(range = display(range), "Blocks don't match the range: {}. Please run Verify and Fix before Compaction. Skipping this range.", discrepancy);
                 return false;
             }
         }
 
-        if let Some(_opts) = &self.data_options.tx {
-            if self.expected_txes.len() != self.copied_txes.len() {
-                tracing::warn!(range = display(range), "Missing transactions. Please run Fix before Compaction. Skipping this range.");
+        if self.data_options.tx.is_some() {
+            if let Some(discrepancy) = Discrepancy::find(self.expected_txes.iter().cloned(), &self.copied_txes) {
+                tracing::warn!(range = display(range), "Transactions don't match the blocks: {}. Please run Verify and Fix before Compaction. Skipping this range.", discrepancy);
                 return false;
             }
         }
 
-        if let Some(_opts) = &self.data_options.trace {
-            if self.expected_txes.len() != self.copied_traces.len() {
-                tracing::warn!(range = display(range), "Missing traces. Please run Fix before Compaction. Skipping this range.");
+        if self.data_options.trace.is_some() {
+            if let Some(discrepancy) = Discrepancy::find(self.expected_txes.iter().cloned(), &self.copied_traces) {
+                tracing::warn!(range = display(range), "Traces don't match the blocks: {}. Please run Verify and Fix before Compaction. Skipping this range.", discrepancy);
                 return false;
             }
         }
