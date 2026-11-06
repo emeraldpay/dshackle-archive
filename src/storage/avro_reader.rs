@@ -85,7 +85,8 @@ pub(super) fn consume_sync<R: Read + Send + 'static>(kind: DataKind, schema: &'s
         };
 
         let budget = ReadBudget::new(READ_AHEAD_BYTES);
-        let mut avro_reader = match apache_avro::Reader::with_schema(&schema, reader) {
+        let mut avro_reader = match apache_avro::Reader::builder(reader)
+            .reader_schema(&schema).build() {
             Ok(reader) => reader,
             Err(err) => {
                 report(format!("Cannot open the file: {}", err));

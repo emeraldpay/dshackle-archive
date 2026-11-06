@@ -175,7 +175,7 @@ impl FsFileWriter<'_> {
         tracing::debug!("Create file: {:?}", path);
         let _ = fs::create_dir_all(path.parent().unwrap())?;
         let file = File::create(path.clone())?;
-        let writer = Writer::with_codec(avro::schema_for(kind), file, global::get_avro_codec());
+        let writer = Writer::with_codec(avro::schema_for(kind), file, global::get_avro_codec())?;
         let writer = Mutex::new(writer);
         Ok(Self { path, writer: Some(writer), kind, range })
     }
@@ -189,7 +189,7 @@ impl FsFileWriter<'_> {
             None => Err(anyhow!("Writer is already closed")),
             Some(writer) => {
                 let mut writer = writer.lock().unwrap();
-                let bytes = writer.append(data).map_err(|e| anyhow!("IO Error: {}. File: {:?}", e, self.path))?;
+                let bytes = writer.append_value(data).map_err(|e| anyhow!("IO Error: {}. File: {:?}", e, self.path))?;
                 crate::progress::on_bytes(bytes);
                 crate::metrics::add_bytes(&self.kind, crate::metrics::Direction::Write, bytes);
                 Ok(())

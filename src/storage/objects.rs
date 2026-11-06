@@ -222,7 +222,7 @@ impl NewObjectsFile<'_> {
     pub(crate) async fn append_record(&self, data: Record<'_>) -> anyhow::Result<()> {
         let size: usize = {
             let mut writer = self.writer.lock().await;
-            writer.append(data).map_err(|e| anyhow!("IO Error: {:?}", e))?
+            writer.append_value(data).map_err(|e| anyhow!("IO Error: {:?}", e))?
         };
         crate::progress::on_bytes(size);
         crate::metrics::add_bytes(&self.kind, crate::metrics::Direction::Write, size);
@@ -305,7 +305,7 @@ impl NewObjectsFile<'_> {
         let buf = BufWriter::new(storage, path.clone());
         let (closed_tx, closed_rx) = oneshot::channel();
         let pipe = Self::pipe_start(buf, closed_tx);
-        let writer = Writer::with_codec(avro::schema_for(kind), pipe.clone(), global::get_avro_codec());
+        let writer = Writer::with_codec(avro::schema_for(kind), pipe.clone(), global::get_avro_codec()).expect("Writer with codec");
         Self {
             pipe,
             writer: Mutex::new(writer),
