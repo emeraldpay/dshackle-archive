@@ -158,7 +158,7 @@ impl<S: ObjectStore> TargetFileWriter for JsonObjectsWriter<S> {
                 .put(&path, PutPayload::from(Bytes::from(file.payload)))
                 .await
                 .map_err(|e| anyhow!("Failed to put {}: {:?}", path, e))?;
-            crate::progress::on_bytes(payload_len);
+            crate::progress::on_bytes(crate::metrics::Direction::Write, payload_len);
             crate::metrics::add_bytes(&self.kind, crate::metrics::Direction::Write, payload_len);
             group.set(file.slot, format!("s3://{}/{}", self.bucket, path));
         }
@@ -169,8 +169,6 @@ impl<S: ObjectStore> TargetFileWriter for JsonObjectsWriter<S> {
                 group,
             });
         }
-        crate::progress::on_record();
-        crate::metrics::add_items(&self.kind, crate::metrics::Direction::Write, 1);
         Ok(())
     }
 

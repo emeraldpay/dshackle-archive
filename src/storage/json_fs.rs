@@ -171,7 +171,7 @@ impl TargetFileWriter for JsonFsWriter {
             }
             fs::write(&path, &file.payload)
                 .map_err(|e| anyhow!("Failed to write {:?}: {}", path, e))?;
-            crate::progress::on_bytes(file.payload.len());
+            crate::progress::on_bytes(crate::metrics::Direction::Write, file.payload.len());
             crate::metrics::add_bytes(
                 &self.kind,
                 crate::metrics::Direction::Write,
@@ -188,8 +188,6 @@ impl TargetFileWriter for JsonFsWriter {
                 group,
             });
         }
-        crate::progress::on_record();
-        crate::metrics::add_items(&self.kind, crate::metrics::Direction::Write, 1);
         Ok(())
     }
 

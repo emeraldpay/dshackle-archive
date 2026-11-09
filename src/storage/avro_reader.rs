@@ -1,8 +1,12 @@
+// Copyright 2026 EmeraldPay Ltd
+//
+// Licensed under the Apache License, Version 2.0
+
 use std::io::Read;
 use std::sync::{Arc, Mutex};
 use apache_avro::Schema;
 use tokio::sync::mpsc;
-use crate::{avros, global, metrics};
+use crate::{avros, global, metrics, progress};
 use crate::archiver::datakind::DataKind;
 use crate::storage::{ReadFailure, RecordStream};
 use crate::storage::read_budget::{ReadBudget, READ_AHEAD_BYTES};
@@ -12,7 +16,7 @@ use crate::storage::read_budget::{ReadBudget, READ_AHEAD_BYTES};
 /// reader thread to stay ahead of the consumer.
 const READ_CHANNEL_CAPACITY: usize = 16;
 
-/// Wraps a `Read` and reports bytes read to metrics as they flow through, remembering the
+/// Wraps a `Read` and reports bytes read to metrics and progress as they flow through, remembering the
 /// failures of the underlying reader. See [`IoFailure`] on why they are kept separately.
 struct CountingReader<R> {
     inner: R,
@@ -25,6 +29,7 @@ impl<R: Read> Read for CountingReader<R> {
         match self.inner.read(buf) {
             Ok(n) => {
                 metrics::add_bytes(&self.kind, metrics::Direction::Read, n);
+                progress::on_bytes(metrics::Direction::Read, n);
                 Ok(n)
             }
             Err(err) => {

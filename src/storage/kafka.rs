@@ -371,7 +371,7 @@ impl TargetFileWriter for KafkaWriter {
                 Ok(offsets) => {
                     published += offsets.len();
                     self.record_receipts(&row, field, partition, offsets);
-                    crate::progress::on_bytes(bytes);
+                    crate::progress::on_bytes(crate::metrics::Direction::Write, bytes);
                     crate::metrics::add_bytes(&self.kind, crate::metrics::Direction::Write, bytes);
                 }
                 Err(e) => failure = failure.or(Some(e)),
@@ -392,8 +392,6 @@ impl TargetFileWriter for KafkaWriter {
             return Err(failure);
         }
 
-        crate::progress::on_record();
-        crate::metrics::add_items(&self.kind, crate::metrics::Direction::Write, 1);
         Ok(())
     }
 

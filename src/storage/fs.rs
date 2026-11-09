@@ -1,3 +1,7 @@
+// Copyright 2026 EmeraldPay Ltd
+//
+// Licensed under the Apache License, Version 2.0
+
 use std::{fs};
 use std::fs::File;
 use std::io::ErrorKind;
@@ -190,7 +194,7 @@ impl FsFileWriter<'_> {
             Some(writer) => {
                 let mut writer = writer.lock().unwrap();
                 let bytes = writer.append_value(data).map_err(|e| anyhow!("IO Error: {}. File: {:?}", e, self.path))?;
-                crate::progress::on_bytes(bytes);
+                crate::progress::on_bytes(crate::metrics::Direction::Write, bytes);
                 crate::metrics::add_bytes(&self.kind, crate::metrics::Direction::Write, bytes);
                 Ok(())
             }

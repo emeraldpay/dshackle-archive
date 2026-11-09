@@ -218,11 +218,9 @@ impl TargetFileWriter for PulsarWriter {
                 },
             });
 
-            crate::progress::on_bytes(payload_len);
+            crate::progress::on_bytes(crate::metrics::Direction::Write, payload_len);
             crate::metrics::add_bytes(&self.kind, crate::metrics::Direction::Write, payload_len);
         }
-        crate::progress::on_record();
-        crate::metrics::add_items(&self.kind, crate::metrics::Direction::Write, 1);
         Ok(())
     }
 

@@ -1,3 +1,7 @@
+// Copyright 2026 EmeraldPay Ltd
+//
+// Licensed under the Apache License, Version 2.0
+
 use std::io::{Write};
 use std::sync::{Arc};
 use std::sync::atomic::{AtomicI64, Ordering};
@@ -224,7 +228,7 @@ impl NewObjectsFile<'_> {
             let mut writer = self.writer.lock().await;
             writer.append_value(data).map_err(|e| anyhow!("IO Error: {:?}", e))?
         };
-        crate::progress::on_bytes(size);
+        crate::progress::on_bytes(crate::metrics::Direction::Write, size);
         crate::metrics::add_bytes(&self.kind, crate::metrics::Direction::Write, size);
         self.pipe.apply_backpressure().await?;
         Ok(())
