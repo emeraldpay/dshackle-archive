@@ -1,3 +1,7 @@
+// Copyright 2026 EmeraldPay Ltd
+//
+// Licensed under the Apache License, Version 2.0
+
 use std::path::PathBuf;
 use std::sync::Arc;
 use apache_avro::types::Record;
@@ -39,7 +43,6 @@ pub mod kafka;
 pub mod objects;
 pub mod pulsar;
 mod avro_reader;
-mod copy;
 mod object_reader;
 mod read_budget;
 mod sorted_files;
