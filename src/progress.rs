@@ -1,4 +1,4 @@
-// Copyright 2025 EmeraldPay Ltd
+// Copyright 2026 EmeraldPay Ltd
 //
 // Licensed under the Apache License, Version 2.0
 
@@ -7,6 +7,7 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 use lazy_static::lazy_static;
+use crate::metrics::Direction;
 
 /// Number of past snapshots to keep. Each snapshot is taken once per minute,
 /// so this controls how many minutes the sliding speed window covers.
@@ -16,23 +17,39 @@ lazy_static! {
     static ref PROGRESS: Progress = Progress::new();
 }
 
-/// Tracks archiving progress and periodically reports statistics to the console.
+/// Tracks the progress of a command and periodically reports statistics to the console.
 ///
-/// Maintains global counters for blocks processed and bytes written, and spawns
-/// a background task that logs throughput every 60 seconds. The reported speed is
-/// a sliding average over the past [`WINDOW_SIZE`] minutes.
+/// Maintains global counters for records (blocks, transactions and traces) processed and
+/// bytes transferred, and spawns a background task that logs throughput every 60 seconds.
+/// The reported speed is a sliding average over the past [`WINDOW_SIZE`] minutes.
 ///
 /// For streaming mode, the timer can be paused while waiting for new blocks so that
 /// speed calculations reflect only active processing time.
 struct Progress {
-    /// Total number of blocks processed since start
+    /// Total number of records processed since start
     records: AtomicU64,
-    /// Total number of bytes written to storage since start
-    bytes: AtomicU64,
+    bytes: ByteCounters,
     /// Whether the background reporter has been started
     started: AtomicBool,
     /// Mutable timing state
     state: Mutex<ProgressState>,
+}
+
+/// Bytes are counted per direction because `compact` reads and writes the same data, and
+/// a single sum would report about twice the actual speed.
+#[derive(Default)]
+struct ByteCounters {
+    read: AtomicU64,
+    written: AtomicU64,
+}
+
+impl ByteCounters {
+    fn get(&self, direction: Direction) -> &AtomicU64 {
+        match direction {
+            Direction::Read => &self.read,
+            Direction::Write => &self.written,
+        }
+    }
 }
 
 struct ProgressState {
@@ -48,18 +65,19 @@ struct ProgressState {
 /// A point-in-time snapshot of the progress counters, used for sliding window calculation.
 #[derive(Clone)]
 struct Snapshot {
-    blocks: u64,
-    bytes: u64,
+    records: u64,
+    bytes_read: u64,
+    bytes_written: u64,
     /// Cumulative active time at the moment this snapshot was taken
     active: Duration,
 }
 
 impl Progress {
     fn new() -> Self {
-        let initial = Snapshot { blocks: 0, bytes: 0, active: Duration::ZERO };
+        let initial = Snapshot { records: 0, bytes_read: 0, bytes_written: 0, active: Duration::ZERO };
         Self {
             records: AtomicU64::new(0),
-            bytes: AtomicU64::new(0),
+            bytes: ByteCounters::default(),
             started: AtomicBool::new(false),
             state: Mutex::new(ProgressState {
                 total_active: Duration::ZERO,
@@ -102,14 +120,14 @@ pub fn start() {
     });
 }
 
-/// Record that one block has been processed.
+/// Record that one record (a block, a transaction or a trace) has been processed.
 pub fn on_record() {
     PROGRESS.records.fetch_add(1, Ordering::Relaxed);
 }
 
-/// Record that `n` bytes have been written to storage.
-pub fn on_bytes(n: usize) {
-    PROGRESS.bytes.fetch_add(n as u64, Ordering::Relaxed);
+/// Record that `n` bytes have been read from or written to storage.
+pub fn on_bytes(direction: Direction, n: usize) {
+    PROGRESS.bytes.get(direction).fetch_add(n as u64, Ordering::Relaxed);
 }
 
 /// Pause the progress timer. Call this when waiting for new blocks (streaming mode).
@@ -133,17 +151,18 @@ pub fn resume() {
 
 /// Take a snapshot and log the sliding-window speed report.
 fn report() {
-    let blocks = PROGRESS.records.load(Ordering::Relaxed);
-    let bytes = PROGRESS.bytes.load(Ordering::Relaxed);
+    let records = PROGRESS.records.load(Ordering::Relaxed);
+    let bytes_read = PROGRESS.bytes.read.load(Ordering::Relaxed);
+    let bytes_written = PROGRESS.bytes.written.load(Ordering::Relaxed);
 
-    if blocks == 0 {
+    if records == 0 {
         return;
     }
 
     let mut state = PROGRESS.state.lock().unwrap();
     let active = current_active(&state);
 
-    let current = Snapshot { blocks, bytes, active };
+    let current = Snapshot { records, bytes_read, bytes_written, active };
 
     // The oldest snapshot is the baseline for the sliding window
     let oldest = state.snapshots.front().cloned();
@@ -160,24 +179,27 @@ fn report() {
         return;
     };
 
-    let delta_blocks = current.blocks - oldest.blocks;
-    let delta_bytes = current.bytes - oldest.bytes;
-    let delta_active = current.active.saturating_sub(oldest.active);
-
-    let active_secs = delta_active.as_secs_f64();
+    let active_secs = current.active.saturating_sub(oldest.active).as_secs_f64();
     if active_secs < 0.001 {
-        tracing::info!("Progress: {} records total", blocks);
+        tracing::info!("Progress: {} records total", records);
         return;
     }
 
-    let blocks_per_min = (delta_blocks as f64) / active_secs * 60.0;
-    let bytes_per_sec = (delta_bytes as f64) / active_secs;
-    let throughput = format_throughput(bytes_per_sec);
+    let records_per_min = (current.records - oldest.records) as f64 / active_secs * 60.0;
+    let mut line = format!("Progress: {} records; {:.1} recs/min", records, records_per_min);
+    // A direction the command never uses is left out, instead of always showing zero for it
+    let directions = [
+        ("read", oldest.bytes_read, current.bytes_read),
+        ("write", oldest.bytes_written, current.bytes_written),
+    ];
+    for (label, before, now) in directions {
+        if now > 0 {
+            let bytes_per_sec = (now - before) as f64 / active_secs;
+            line.push_str(&format!("; {} {}", label, format_throughput(bytes_per_sec)));
+        }
+    }
 
-    tracing::info!(
-        "Progress: {} records; {:.1} recs/min; {}",
-        blocks, blocks_per_min, throughput
-    );
+    tracing::info!("{}", line);
 }
 
 fn format_throughput(bytes_per_sec: f64) -> String {

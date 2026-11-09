@@ -29,6 +29,8 @@ use crate::{
     },
     global,
     memory,
+    metrics,
+    progress,
     storage::{FileReference, TargetFileReader, TargetFileWriter, ReadTarget},
 };
 use crate::archiver::datakind::{BlockOptions, TraceOptions, TxOptions};
@@ -454,6 +456,8 @@ impl<B: BlockchainTypes, TS: ReadTarget> TableCompaction<BlockOptions, B, TS> fo
                                     // record that failed to be written must never be counted as copied
                                     let (record, _reservation) = record.into_parts();
                                     target_file.append_avro_record(record).await?;
+                                    progress::on_record();
+                                    metrics::add_items(&DataKind::Blocks, metrics::Direction::Write, 1);
                                     {
                                         let mut status = status.lock().unwrap();
                                         status.on_copied_block(height, txes);
@@ -519,6 +523,8 @@ impl<B: BlockchainTypes, TS: ReadTarget> TableCompaction<TxOptions, B, TS> for C
                                 if range.contains(&height.into()) {
                                     let (record, _reservation) = record.into_parts();
                                     target_file.append_avro_record(record).await?;
+                                    progress::on_record();
+                                    metrics::add_items(&DataKind::Transactions, metrics::Direction::Write, 1);
                                     {
                                         let mut status = status.lock().unwrap();
                                         status.on_copied_tx(txid);
@@ -570,6 +576,8 @@ impl<B: BlockchainTypes, TS: ReadTarget> TableCompaction<TraceOptions, B, TS> fo
                                 if range.contains(&height.into()) {
                                     let (record, _reservation) = record.into_parts();
                                     target_file.append_avro_record(record).await?;
+                                    progress::on_record();
+                                    metrics::add_items(&DataKind::TransactionTraces, metrics::Direction::Write, 1);
                                     {
                                         let mut status = status.lock().unwrap();
                                         status.on_copied_trace(txid);
