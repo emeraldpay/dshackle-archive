@@ -1,3 +1,7 @@
+// Copyright 2026 EmeraldPay Ltd
+//
+// Licensed under the Apache License, Version 2.0
+
 #[macro_use]
 extern crate enum_display_derive;
 extern crate serde;
@@ -51,6 +55,7 @@ pub mod formats;
 pub mod notify;
 pub mod kafka;
 mod global;
+pub mod memory;
 pub mod metrics;
 pub(crate) mod progress;
 pub mod archiver;
@@ -94,6 +99,7 @@ async fn main_inner() -> Result<()> {
             .expect("Invalid metrics address, expected HOST:PORT (e.g., 127.0.0.1:8080)");
         metrics::init(addr);
     }
+    memory::init(&args);
 
     if global::is_dry_run() {
         tracing::info!("Dry run mode enabled, no changes will be made");

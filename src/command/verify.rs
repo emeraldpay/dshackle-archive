@@ -1,3 +1,7 @@
+// Copyright 2026 EmeraldPay Ltd
+//
+// Licensed under the Apache License, Version 2.0
+
 use std::collections::{HashMap, HashSet};
 use std::marker::PhantomData;
 use std::str::FromStr;
@@ -12,7 +16,7 @@ use crate::{archiver::{
     Archiver,
     range::{Height, Range},
     range_group::{ArchiveGroup, ArchivesList}
-}, avros, blockchain::{BlockDetails, BlockchainTypes}, command::{CommandExecutor}, global, progress, storage::{
+}, avros, blockchain::{BlockDetails, BlockchainTypes}, command::{CommandExecutor}, global, memory, progress, storage::{
     TargetFileReader,
     ReadTarget
 }};
@@ -507,6 +511,7 @@ impl<B: BlockchainTypes + 'static, FR: ReadTarget + 'static> CommandExecutor for
             }
 
             reaching_in = self.verify_chunk(&range, archived, reaching_in, stat.clone()).await?;
+            let _ = memory::release().await;
         }
 
         {

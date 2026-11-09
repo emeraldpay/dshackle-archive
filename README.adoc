@@ -185,6 +185,9 @@ Options:
       --metrics.await
           After the main command finishes, keep the metrics server running until one final scrape completes (or 60 seconds elapse). Useful for short-lived commands (fix, verify, compact) to ensure Prometheus collects the final metrics before the process exits
 
+      --memory.limit <SIZE>
+          Memory the process should stay within, as measured by the allocator, e.g., `512m` or `2g`. It's checked every 5 seconds, and when the process holds more, it gives the free memory back to the OS without waiting for the background release. It's a soft limit: the memory in use cannot be released, so the process may still go above it, and then it logs a warning
+
   -h, --help
           Print help (see a summary with '-h')
 
@@ -304,6 +307,24 @@ Reading the whole archive takes a long time.
 With `--quick` the command doesn't read the files, it only checks which files exist and that they are not empty.
 It trusts that the range in a file name is the range of blocks in the file, so it's fast, but it cannot find a missing block or broken data inside a file.
 It still deletes the files it finds wrong, i.e. the empty ones, duplicates, forks, and tables left without their blocks.
+
+=== Memory
+
+Dshackle Archive uses jemalloc as the memory allocator.
+The `archive`, `fix`, `verify` and `compact` commands give the freed memory back to the OS right after each chunk.
+
+- On Linux, jemalloc also gives it back from background threads, about 10 seconds after it's freed.
+  macOS has no background threads, so there the memory is given back only after a chunk, on `--memory.limit`, or when the app allocates again.
+- On Linux, jemalloc replaces the system `malloc`, so the C libraries (e.g., zstd compression) use it as well.
+  Because of that, the glibc `MALLOC_ARENA_MAX` variable has no effect.
+- `--memory.limit` is checked every 5 seconds, and when the process holds more than the limit, it releases the free memory without waiting for the background release.
+  It cannot release the memory in use, so it's not a hard cap; set the container limit above it.
+  If the memory stays above the limit, it releases again only after the memory grows by another 10% of the limit.
+- With `--metrics`, the `dshackleArchive_memory_bytes` gauge shows the memory by `type`: `allocated` is what the app uses, and `resident` is what the process holds.
+- jemalloc options are set with the `MALLOC_CONF` environment variable (`_RJEM_MALLOC_CONF` on macOS), e.g., `MALLOC_CONF=narenas:4,dirty_decay_ms:5000`.
+  `background_thread:false` turns off the background release.
+- The number of arenas (`narenas`) is read before the app starts, so it cannot be a command line option and is set with `MALLOC_CONF`.
+  By default it's 4 per CPU the process may run on, which ignores a container CPU quota (e.g., Kubernetes `limits.cpu`), so it's usually 4 per CPU of the host.
 
 === Archive Size
 

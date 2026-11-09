@@ -1,8 +1,12 @@
+// Copyright 2026 EmeraldPay Ltd
+//
+// Licensed under the Apache License, Version 2.0
+
 use std::marker::PhantomData;
 use anyhow::anyhow;
 use async_trait::async_trait;
 use tokio_util::sync::CancellationToken;
-use crate::{archiver::{ArchiveAll, Archiver}, args::Args, blockchain::BlockchainTypes, command::CommandExecutor, global, notify::RunMode, storage::ScanTarget};
+use crate::{archiver::{ArchiveAll, Archiver}, args::Args, blockchain::BlockchainTypes, command::CommandExecutor, global, memory, notify::RunMode, storage::ScanTarget};
 use crate::archiver::blocks_config::Blocks;
 use crate::archiver::datakind::DataOptions;
 use crate::archiver::range::Range;
@@ -86,6 +90,7 @@ impl<B: BlockchainTypes, TS: ScanTarget> CommandExecutor for FixCommand<B, TS> {
                         tracing::error!(range = %chunk, "Failed to fix chunk: {:?}", e);
                         failed.push(chunk);
                     }
+                    let _ = memory::release().await;
                 }
             }
         }

@@ -1,3 +1,7 @@
+// Copyright 2026 EmeraldPay Ltd
+//
+// Licensed under the Apache License, Version 2.0
+
 use std::collections::HashSet;
 use std::fmt::Debug;
 use std::hash::Hash;
@@ -24,6 +28,7 @@ use crate::{
         CommandExecutor
     },
     global,
+    memory,
     storage::{FileReference, TargetFileReader, TargetFileWriter, ReadTarget},
 };
 use crate::archiver::datakind::{BlockOptions, TraceOptions, TxOptions};
@@ -173,6 +178,8 @@ impl<B: BlockchainTypes+ 'static, TS: ReadTarget + 'static> CompactCommand<B, TS
             },
             Compaction::Skipped => {},
         }
+
+        let _ = memory::release().await;
 
         next_files
     }

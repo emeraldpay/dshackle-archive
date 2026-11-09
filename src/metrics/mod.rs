@@ -13,6 +13,7 @@
 
 mod archive;
 mod blockchain;
+mod memory;
 mod server;
 
 use std::net::SocketAddr;
@@ -22,9 +23,11 @@ use lazy_static::lazy_static;
 use prometheus::Registry;
 
 use crate::archiver::datakind::DataKind;
+use crate::memory::MemoryStats;
 
 pub use archive::ArchiveMetrics;
 pub use blockchain::{BlockchainMetrics, FetchedData};
+pub use memory::MemoryMetrics;
 
 /// Whether data is being read from or written to storage.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -51,6 +54,7 @@ lazy_static! {
         let m = Metrics::new();
         m.archive.register(&REGISTRY);
         m.blockchain.register(&REGISTRY);
+        m.memory.register(&REGISTRY);
         m
     };
 }
@@ -59,6 +63,7 @@ lazy_static! {
 struct Metrics {
     archive: ArchiveMetrics,
     blockchain: BlockchainMetrics,
+    memory: MemoryMetrics,
 }
 
 impl Metrics {
@@ -66,6 +71,7 @@ impl Metrics {
         Self {
             archive: ArchiveMetrics::new("dshackleArchive"),
             blockchain: BlockchainMetrics::new("dshackleArchive"),
+            memory: MemoryMetrics::new("dshackleArchive"),
         }
     }
 }
@@ -126,4 +132,12 @@ pub fn observe_fetch(data: FetchedData, blockchain: &str, duration_secs: f64) {
         return;
     }
     METRICS.blockchain.observe_fetch(data, blockchain, duration_secs);
+}
+
+/// Record the current memory of the allocator.
+pub fn set_memory(stats: &MemoryStats) {
+    if !ENABLED.load(Ordering::Relaxed) {
+        return;
+    }
+    METRICS.memory.set(stats);
 }
