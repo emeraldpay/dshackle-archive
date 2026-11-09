@@ -1,3 +1,7 @@
+// Copyright 2026 EmeraldPay Ltd
+//
+// Licensed under the Apache License, Version 2.0
+
 use std::marker::PhantomData;
 use std::str::FromStr;
 use anyhow::anyhow;
@@ -9,6 +13,7 @@ use crate::{
     blockchain::BlockchainTypes,
     command::CommandExecutor,
     global,
+    memory,
     notify::RunMode,
     storage::WriteTarget
 };
@@ -56,6 +61,7 @@ impl<B: BlockchainTypes, TS: WriteTarget> CommandExecutor for ArchiveCommand<B, 
                 tracing::error!(range = %subrange, "Failed to archive range: {:?}", e);
                 failed.push(subrange);
             }
+            let _ = memory::release().await;
         }
         if !failed.is_empty() {
             let ranges = failed.iter().map(|r| r.to_string()).collect::<Vec<_>>().join(", ");

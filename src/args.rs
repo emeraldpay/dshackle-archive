@@ -10,6 +10,7 @@ use std::time::Duration;
 use emerald_api::proto::common::ChainRef;
 use serde::Deserialize;
 use crate::errors::ConfigError;
+use crate::memory::MemorySize;
 use shadow_rs::{shadow};
 
 shadow!(build);
@@ -174,6 +175,13 @@ pub struct Args {
     /// to ensure Prometheus collects the final metrics before the process exits.
     #[arg(long = "metrics.await", alias = "metrics-await")]
     pub metrics_await: bool,
+
+    /// Memory the process should stay within, as measured by the allocator, e.g., `512m` or `2g`. It's checked every
+    /// 5 seconds, and when the process holds more, it gives the free memory back to the OS without waiting for the
+    /// background release. It's a soft limit: the memory in use cannot be released, so the process may still go above
+    /// it, and then it logs a warning.
+    #[arg(long = "memory.limit", aliases = vec!["memoryLimit", "memory-limit"], value_name = "SIZE")]
+    pub memory_limit: Option<MemorySize>,
 }
 
 impl Default for Args {
@@ -202,6 +210,7 @@ impl Default for Args {
             format: Format::Avro,
             metrics: None,
             metrics_await: false,
+            memory_limit: None,
         }
     }
 }

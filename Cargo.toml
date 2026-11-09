@@ -42,6 +42,14 @@ shadow-rs = { version = "2.0", default-features = false }
 itertools = "0.15"
 prometheus = "0.14"
 warp = { version = "0.4", features = ["server"] }
+tikv-jemallocator = "0.7"
+tikv-jemalloc-ctl = { version = "0.7", features = ["stats", "use_std"] }
+tikv-jemalloc-sys = "0.7"
+
+# Export jemalloc as the plain `malloc`, so the C libraries (zstd in particular) use it too and not the glibc one.
+# And release the free memory from background threads; it's a build-time default, so `MALLOC_CONF` can still turn it off.
+[target.'cfg(target_os = "linux")'.dependencies]
+tikv-jemallocator = { version = "0.7", features = ["unprefixed_malloc_on_supported_platforms", "background_threads"] }
 
 [build-dependencies]
 shadow-rs = "2.0"
