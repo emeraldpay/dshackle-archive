@@ -30,7 +30,7 @@ use crate::global;
 use crate::notify::Location;
 use crate::record::ArchiveRow;
 use crate::storage::{
-    avro_reader, copy, find_incomplete_by_listing, object_reader::ResumableObjectRead,
+    avro_reader, find_incomplete_by_listing, object_reader::ResumableObjectRead,
     sorted_files, FileReference, ReadTarget, RecordStream, ScanTarget, TargetFile,
     TargetFileReader, TargetFileWriter, WriteTarget,
 };
@@ -296,10 +296,7 @@ impl TargetFileReader for ExisingObjectsFile {
 
         let std_reader = ResumableObjectRead::new(self.os, path, self.stream.into_inner());
 
-        let rx_sync = avro_reader::consume_sync(kind, avro::schema_for(kind), url, std_reader);
-        let rx = copy::copy_from_sync(rx_sync);
-
-        Ok(rx)
+        Ok(avro_reader::consume_sync(kind, avro::schema_for(kind), url, std_reader))
     }
 }
 

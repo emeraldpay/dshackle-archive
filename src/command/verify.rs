@@ -20,15 +20,19 @@ use crate::{archiver::{
     TargetFileReader,
     ReadTarget
 }};
-use crate::archiver::datakind::{BlockOptions, DataKind, TraceOptions, TxOptions};
+use crate::archiver::datakind::{BlockOptions, DataKind};
 use crate::archiver::range_bag::RangeBag;
 use crate::archiver::range_group::RangeGroupError;
 use crate::blockchain::block_seq::BlockSequence;
 use crate::blockchain::{BlockReference, BlockchainData};
 use crate::storage::{FileReference, ReadFailure};
+use block_txes::BlockTxes;
+use tx_tables::{verify_tx_tables, TxRecordCheck};
 
+mod block_txes;
 mod overlap;
 mod quick;
+mod tx_tables;
 
 ///
 /// How thoroughly the `verify` command checks the tables of the archive
@@ -73,8 +77,10 @@ impl From<&crate::args::Args> for VerifyMode {
 ///
 /// What it deleted:
 ///   - if blocks in the groups are not in sequence or missing, deletes all files in the group (i.e., including txes and traces)
-///   - if blocks are ok, but some txes or traces are missing or corrupted, deletes only the group of files;
-///     i.e., if a tx for just one of the blocks is missing then it deletes all files with txes in that group;
+///   - if blocks are ok, each file of txes and traces is checked against the transactions of the blocks it covers,
+///     and only the files with a missing, an unexpected, a duplicate, or a corrupted transaction are deleted;
+///     i.e., in a range of a file per block, a broken tx of one block deletes the txes of only that block;
+///   - a file that cannot be read is kept, and with `--fix.clean` the rest of its chunk is kept as well
 ///
 /// With `--quick` it doesn't read the files. The verification on the filename level stays the same, but instead of
 /// checking the blocks, txes and traces it only checks that the files are not empty, and deletes the empty ones.
@@ -646,43 +652,20 @@ async fn verify_content<'a, B: BlockchainTypes, TS: ReadTarget>(archiver: Arc<Ar
             }
         },
         Ok(expected_txes) => {
-            if let Some(tx_options) = &data_options.tx {
-                let txes: Vec<&FileReference> = groups.iter()
-                    .filter_map(|g| g.txes.as_ref())
+            let tables = [
+                (DataKind::Transactions, data_options.tx.as_ref().map(|o| o as &dyn TxRecordCheck)),
+                (DataKind::TransactionTraces, data_options.trace.as_ref().map(|o| o as &dyn TxRecordCheck)),
+            ];
+            for (kind, checks) in tables {
+                let Some(checks) = checks else {
+                    continue;
+                };
+                let files: Vec<&FileReference> = groups.iter()
+                    .filter_map(|g| g.table(kind))
                     .collect();
-
-                if !txes.is_empty() {
-                    match TxVerify::<B, TS>::new().verify_table(tx_options, archiver.target.as_ref(), &range, &txes, &expected_txes).await {
-                        Ok(_) => {},
-                        Err(VerifyFailure::Unverifiable(e)) => {
-                            tracing::error!(range = %range, "Cannot verify the txes, keeping the files as is: {}", e);
-                            incomplete = true;
-                        },
-                        Err(VerifyFailure::Invalid(e)) => {
-                            tracing::error!(range = %range, "Tx data is corrupted: {}", e);
-                            broken_files.extend_from_slice(txes.as_slice());
-                        }
-                    }
-                }
-            }
-            if let Some(trace_options) = &data_options.trace {
-                let traces: Vec<&FileReference> = groups.iter()
-                    .filter_map(|g| g.traces.as_ref())
-                    .collect();
-
-                if !traces.is_empty() {
-                    match TraceVerify::<B, TS>::new().verify_table(trace_options, archiver.target.as_ref(), &range, &traces, &expected_txes).await {
-                        Ok(_) => {},
-                        Err(VerifyFailure::Unverifiable(e)) => {
-                            tracing::error!(range = %range, "Cannot verify the traces, keeping the files as is: {}", e);
-                            incomplete = true;
-                        },
-                        Err(VerifyFailure::Invalid(e)) => {
-                            tracing::error!(range = %range, "Trace data is corrupted: {}", e);
-                            broken_files.extend_from_slice(traces.as_slice());
-                        }
-                    }
-                }
+                let verification = verify_tx_tables::<B, TS>(kind, archiver.target.as_ref(), range, &files, &expected_txes, checks).await;
+                broken_files.extend(verification.broken);
+                incomplete |= verification.incomplete;
             }
         }
     }
@@ -782,156 +765,6 @@ trait VerifyTable<T, B: BlockchainTypes, TS: ReadTarget> {
 }
 
 
-struct TxVerify<B, TS> where B: BlockchainTypes, TS: ReadTarget {
-    _b: PhantomData<B>,
-    _ts: PhantomData<TS>,
-}
-
-impl<B: BlockchainTypes, TS: ReadTarget> TxVerify<B, TS> {
-    pub fn new() -> Self {
-        Self { _b: Default::default(), _ts: Default::default() }
-    }
-}
-
-#[async_trait]
-impl<B: BlockchainTypes, TS: ReadTarget> VerifyTable<TxOptions, B, TS> for TxVerify<B, TS> {
-    type Returns = ();
-    type Params = Vec<B::TxId>;
-
-    async fn verify_table(&self, _options: &TxOptions, storage: &TS, range: &Range, files: &Vec<&FileReference>, params: &Self::Params) -> Result<Self::Returns, VerifyFailure> {
-        tracing::trace!(range = %range, "Verify txes");
-        let shutdown = global::get_shutdown();
-        let expected_txes = params;
-        let mut existing_txes = HashSet::new();
-
-        for file in files {
-            tracing::debug!(range = %file.range, "Processing tx file: {}", file.path);
-            let mut txes = storage.open(file)
-                .await.map_err(|e| VerifyFailure::Unverifiable(format!("Failed to open {}: {}", file.path, e)))?
-                .read().map_err(|e| VerifyFailure::Unverifiable(format!("Failed to read {}: {}", file.path, e)))?;
-            while !shutdown.is_signalled() {
-                tokio::select! {
-                    _ = shutdown.signalled() => {
-                        tracing::info!("Shutting down...");
-                        break;
-                    },
-                    record = txes.recv() => {
-                        let record = match record {
-                            None => break,
-                            Some(record) => record?,
-                        };
-                        crate::progress::on_record();
-                        let txid = record.fields.iter()
-                            .find(|f| f.0 == "txid")
-                            .ok_or(format!("No txid in the record"))?;
-                        let txid_str = match &txid.1 {
-                            Value::String(s) => s.clone(),
-                            _ => return Err(VerifyFailure::Invalid(format!("Invalid txid type: {:?}", txid.1)))
-                        };
-
-                        let txid = B::TxId::from_str(&txid_str)
-                            .map_err(|_| format!("Invalid txid: {}", txid_str))?;
-                        if !expected_txes.contains(&txid) {
-                            return Err(VerifyFailure::Invalid(format!("Unexpected txid: {}", txid_str)));
-                        }
-
-                        verify_field_non_null(&record, "json")?;
-                        verify_field_exist(&record, "raw")?;
-                        //TODO blockchain specific verification
-
-                        let first = existing_txes.insert(txid);
-                        if !first {
-                            return Err(VerifyFailure::Invalid(format!("Duplicate txid: {}", txid_str)));
-                        }
-                    }
-                }
-            }
-        }
-
-        if existing_txes.len() != expected_txes.len() {
-            return Err(VerifyFailure::Invalid(format!("Missing txes in the table")));
-        }
-        Ok(())
-    }
-}
-
-struct TraceVerify<B, TS> where B: BlockchainTypes, TS: ReadTarget {
-    _b: PhantomData<B>,
-    _ts: PhantomData<TS>,
-}
-
-impl<B: BlockchainTypes, TS: ReadTarget> TraceVerify<B, TS> {
-    pub fn new() -> Self {
-        Self { _b: Default::default(), _ts: Default::default() }
-    }
-}
-
-#[async_trait]
-impl<B: BlockchainTypes, TS: ReadTarget> VerifyTable<TraceOptions, B, TS> for TraceVerify<B, TS> {
-    type Returns = ();
-    type Params = Vec<B::TxId>;
-
-    async fn verify_table(&self, options: &TraceOptions, storage: &TS, range: &Range, files: &Vec<&FileReference>, params: &Self::Params) -> Result<Self::Returns, VerifyFailure> {
-        tracing::trace!(range = %range, "Verify traces");
-        let shutdown = global::get_shutdown();
-        let expected_txes = params;
-        let mut existing_txes = HashSet::new();
-
-        for file in files {
-            tracing::debug!(range = %file.range, "Processing trace file: {}", file.path);
-            let mut traces = storage.open(file)
-                .await.map_err(|e| VerifyFailure::Unverifiable(format!("Failed to open {}: {}", file.path, e)))?
-                .read().map_err(|e| VerifyFailure::Unverifiable(format!("Failed to read {}: {}", file.path, e)))?;
-
-            while !shutdown.is_signalled() {
-                tokio::select! {
-                    _ = shutdown.signalled() => {
-                        tracing::info!("Shutting down...");
-                        break;
-                    },
-                    record = traces.recv() => {
-                        let record = match record {
-                            None => break,
-                            Some(record) => record?,
-                        };
-                        crate::progress::on_record();
-                        let txid = record.fields.iter()
-                            .find(|f| f.0 == "txid")
-                            .ok_or("No txid in the record".to_string())?;
-                        let txid_str = match &txid.1 {
-                            Value::String(s) => s.clone(),
-                            _ => return Err(VerifyFailure::Invalid(format!("Invalid txid type: {:?}", txid.1)))
-                        };
-
-                        let txid = B::TxId::from_str(&txid_str)
-                            .map_err(|_| format!("Invalid txid: {}", txid_str))?;
-                        if !expected_txes.contains(&txid) {
-                            return Err(VerifyFailure::Invalid(format!("Unexpected txid: {}", txid_str)));
-                        }
-
-                        if options.include_trace {
-                            verify_field_non_null(&record, "traceJson")?;
-                        }
-                        if options.include_state_diff {
-                            verify_field_non_null(&record, "stateDiffJson")?;
-                        }
-
-                        let first = existing_txes.insert(txid);
-                        if !first {
-                            return Err(VerifyFailure::Invalid(format!("Duplicate txid: {}", txid_str)));
-                        }
-                    }
-                }
-            }
-        }
-
-        if existing_txes.len() != expected_txes.len() {
-            return Err(VerifyFailure::Invalid("Missing txes in the table".to_string()));
-        }
-        Ok(())
-    }
-}
-
 struct BlockVerify<B, TS> where B: BlockchainTypes, TS: ReadTarget {
     _b: PhantomData<B>,
     _ts: PhantomData<TS>,
@@ -945,7 +778,7 @@ impl<B: BlockchainTypes, TS: ReadTarget> BlockVerify<B, TS> {
 
 #[async_trait]
 impl<B: BlockchainTypes, TS: ReadTarget> VerifyTable<BlockOptions, B, TS> for BlockVerify<B, TS> {
-    type Returns = Vec<B::TxId>;
+    type Returns = BlockTxes<B::TxId>;
     type Params = B::DataProvider;
 
     async fn verify_table(&self, _options: &BlockOptions, storage: &TS, range: &Range, files: &Vec<&FileReference>, data_provider: &Self::Params) -> Result<Self::Returns, VerifyFailure> {
@@ -953,7 +786,7 @@ impl<B: BlockchainTypes, TS: ReadTarget> VerifyTable<BlockOptions, B, TS> for Bl
 
         let mut block_seq: BlockSequence<B> = BlockSequence::new(range.len());
         let mut heights = HashSet::new();
-        let mut expected_txes = Vec::new();
+        let mut expected_txes = BlockTxes::new();
         let shutdown = global::get_shutdown();
 
         for file in files {
@@ -1012,7 +845,7 @@ impl<B: BlockchainTypes, TS: ReadTarget> VerifyTable<BlockOptions, B, TS> for Bl
                         let block = block.unwrap();
                         tracing::trace!(height = height, "Block {:?} is on top of {:?}", block.hash(), block.parent());
                         block_seq.append(height, block.parent(), block.hash());
-                        expected_txes.extend(block.txes());
+                        expected_txes.add_block(height, block.txes());
                     },
                 }
             }
@@ -1081,7 +914,8 @@ mod tests {
     use crate::archiver::range::{Height, Range};
     use crate::archiver::range_group::ArchiveGroup;
     use crate::avros::{BLOCK_SCHEMA, TX_TRACE_SCHEMA};
-    use crate::storage::{FileReference, TargetFileWriter, WriteTarget};
+    use crate::record::Field;
+    use crate::storage::{FileReference, ReadTarget, TargetFileWriter, WriteTarget};
     use crate::testing;
 
     fn create_archiver(mem: Arc<InMemory>) -> Archiver<MockType, ObjectsStorage<InMemory>> {
@@ -1364,6 +1198,183 @@ mod tests {
 
         let files = testing::list_mem_filenames(mem).await;
         assert_eq!(files.len(), 0);
+    }
+
+    ///
+    /// A range that is not compacted yet has a file per block, and an invalid record in one of
+    /// them used to delete the txes of every block in the range.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn deletes_only_tx_file_with_invalid_record() {
+        testing::start_test();
+        let mem = Arc::new(InMemory::new());
+        let data = Arc::new(MockData::new("TEST"));
+        let archiver = create_archiver_with_data(mem.clone(), data.clone());
+
+        let blocks = vec![
+            MockBlock {
+                height: 101,
+                hash: "B101".to_string(),
+                parent: "B100".to_string(),
+                transactions: vec!["TX001".to_string()],
+            },
+            MockBlock {
+                height: 102,
+                hash: "B102".to_string(),
+                parent: "B101".to_string(),
+                transactions: vec!["TX002".to_string()],
+            },
+        ];
+        for block in &blocks {
+            data.add_block(block.clone());
+            data.add_tx(MockTx { hash: block.transactions[0].clone() });
+        }
+
+        for block in &blocks {
+            let range = Range::Single(block.height.into());
+            let write = archiver.target.create(DataKind::Blocks, &range, true).await.unwrap().unwrap();
+            let record = data.fetch_block(&BlockReference::Height(block.height.into())).await.unwrap();
+            write.append(record.0).await.unwrap();
+            write.close().await.unwrap();
+
+            let write = archiver.target.create(DataKind::Transactions, &range, true).await.unwrap().unwrap();
+            let mut record = data.fetch_tx(block, 0).await.unwrap();
+            if block.height == 102 {
+                for field in record.fields.iter_mut() {
+                    if let Field::TxRaw(raw) = field {
+                        raw.clear();
+                    }
+                }
+            }
+            write.append(record).await.unwrap();
+            write.close().await.unwrap();
+        }
+
+        let args = Args {
+            range: Some("100..110".to_string()),
+            ..Default::default()
+        };
+        let command = VerifyCommand::new(&args, archiver).unwrap();
+        let result = command.execute().await;
+        if let Err(err) = result {
+            panic!("Failed: {:?}", err);
+        }
+
+        let files = testing::list_mem_filenames(mem).await;
+        assert_eq!(files, vec![
+            "archive/eth/000000000/000000000/000000101.block.avro".to_string(),
+            "archive/eth/000000000/000000000/000000101.txes.avro".to_string(),
+            "archive/eth/000000000/000000000/000000102.block.avro".to_string(),
+        ]);
+    }
+
+    ///
+    /// Add a chain of blocks, each with the given transactions, to the mock blockchain
+    fn add_blocks(data: &MockData, blocks: &[(u64, &[&str])]) -> Vec<MockBlock> {
+        blocks.iter().map(|(height, txes)| {
+            let block = MockBlock {
+                height: *height,
+                hash: format!("B{}", height),
+                parent: format!("B{}", height - 1),
+                transactions: txes.iter().map(|tx| tx.to_string()).collect(),
+            };
+            data.add_block(block.clone());
+            for tx in *txes {
+                data.add_tx(MockTx { hash: tx.to_string() });
+            }
+            block
+        }).collect()
+    }
+
+    async fn verify_range_100_110<TS: ReadTarget + 'static>(archiver: Archiver<MockType, TS>) {
+        let args = Args {
+            range: Some("100..110".to_string()),
+            ..Default::default()
+        };
+        let command = VerifyCommand::new(&args, archiver).unwrap();
+        if let Err(err) = command.execute().await {
+            panic!("Failed: {:?}", err);
+        }
+    }
+
+    ///
+    /// A file that ended early, e.g. because it's truncated, has only a part of its txes. It used
+    /// to show up only as missing txes of the whole range, deleting the txes of every block in it.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn deletes_only_tx_file_missing_a_tx() {
+        testing::start_test();
+        let mem = Arc::new(InMemory::new());
+        let archiver = create_archiver(mem.clone());
+        add_blocks(&archiver.data_provider, &[(101, &["TX001"]), (102, &["TX002", "TX003"])]);
+
+        testing::write_block_and_tx(&archiver, 101, None).await.unwrap();
+        testing::write_block_and_tx(&archiver, 102, Some(vec![0])).await.unwrap();
+
+        verify_range_100_110(archiver).await;
+
+        let files = testing::list_mem_filenames(mem).await;
+        assert_eq!(files, vec![
+            "archive/eth/000000000/000000000/000000101.block.avro".to_string(),
+            "archive/eth/000000000/000000000/000000101.txes.avro".to_string(),
+            "archive/eth/000000000/000000000/000000102.block.avro".to_string(),
+        ]);
+    }
+
+    ///
+    /// Every tx of the range is in the archive, but one of them is in the file of another block.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn deletes_tx_file_with_tx_of_another_block() {
+        testing::start_test();
+        let mem = Arc::new(InMemory::new());
+        let archiver = create_archiver(mem.clone());
+        let blocks = add_blocks(&archiver.data_provider, &[(101, &["TX001"]), (102, &["TX002"])]);
+
+        testing::write_block_and_tx(&archiver, 101, Some(vec![])).await.unwrap();
+        testing::write_block_and_tx(&archiver, 102, None).await.unwrap();
+        // overwrite the txes of 101 with the tx of 102 added to them
+        let write = archiver.target.create(DataKind::Transactions, &Range::single(101), true).await.unwrap().unwrap();
+        write.append(archiver.data_provider.fetch_tx(&blocks[0], 0).await.unwrap()).await.unwrap();
+        write.append(archiver.data_provider.fetch_tx(&blocks[1], 0).await.unwrap()).await.unwrap();
+        write.close().await.unwrap();
+
+        verify_range_100_110(archiver).await;
+
+        let files = testing::list_mem_filenames(mem).await;
+        assert_eq!(files, vec![
+            "archive/eth/000000000/000000000/000000101.block.avro".to_string(),
+            "archive/eth/000000000/000000000/000000102.block.avro".to_string(),
+            "archive/eth/000000000/000000000/000000102.txes.avro".to_string(),
+        ]);
+    }
+
+    ///
+    /// A file that could not be read says nothing about the files checked before it, and the
+    /// broken ones among them are still deleted.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn deletes_broken_tx_file_when_another_cannot_be_read() {
+        testing::start_test();
+        let mem = Arc::new(InMemory::new());
+        let archiver = create_archiver(mem.clone());
+        let data = archiver.data_provider.clone();
+        add_blocks(&data, &[(101, &["TX001", "TX002"]), (102, &["TX003"])]);
+
+        testing::write_block_and_tx(&archiver, 101, Some(vec![0])).await.unwrap();
+        testing::write_block_and_tx(&archiver, 102, None).await.unwrap();
+
+        let storage = ObjectsStorage::new(
+            Arc::new(testing::BrokenDownloads::only(mem.clone(), "000000102.txes.avro")),
+            "test".to_string(),
+            Filenames::with_dir("archive/eth".to_string()),
+        );
+        let archiver: Archiver<MockType, _> = Archiver::new_simple(Arc::new(storage), data);
+
+        verify_range_100_110(archiver).await;
+
+        let files = testing::list_mem_filenames(mem).await;
+        assert_eq!(files, vec![
+            "archive/eth/000000000/000000000/000000101.block.avro".to_string(),
+            "archive/eth/000000000/000000000/000000102.block.avro".to_string(),
+            "archive/eth/000000000/000000000/000000102.txes.avro".to_string(),
+        ]);
     }
 
     ///
