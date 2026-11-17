@@ -30,7 +30,7 @@ impl<'a> RangeVerification<'a> {
 
         let expected = data_options.files();
         let mut broken = vec![];
-        let mut incomplete = false;
+        let mut unverified = None;
         let tables = groups.iter()
             .flat_map(|g| g.tables())
             .filter(|table| expected.include(table.kind));
@@ -43,12 +43,12 @@ impl<'a> RangeVerification<'a> {
                 Some(_) => {},
                 None => {
                     tracing::warn!(range = %table.range, "Unknown size of the file, keeping it as is: {}", table.path);
-                    incomplete = true;
+                    unverified.get_or_insert(format!("Unknown size of the file {}", table.path));
                 }
             }
         }
 
-        Self { broken, incomplete }
+        Self { broken, unverified }
     }
 }
 
@@ -98,7 +98,7 @@ mod tests {
         let verification = RangeVerification::by_listing(&range, &groups, &DataOptions::default());
 
         assert!(verification.broken.is_empty());
-        assert!(!verification.incomplete);
+        assert!(verification.unverified.is_none());
     }
 
     #[test]
@@ -113,7 +113,7 @@ mod tests {
 
         assert_eq!(verification.broken.len(), 1);
         assert_eq!(verification.broken[0].kind, DataKind::Transactions);
-        assert!(!verification.incomplete);
+        assert!(verification.unverified.is_none());
     }
 
     #[test]
@@ -140,7 +140,7 @@ mod tests {
         let verification = RangeVerification::by_listing(&range, &groups, &DataOptions::default());
 
         assert!(verification.broken.is_empty());
-        assert!(verification.incomplete);
+        assert!(verification.unverified.is_some());
     }
 
     #[tokio::test(flavor = "multi_thread")]

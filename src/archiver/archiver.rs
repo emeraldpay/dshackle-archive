@@ -1,3 +1,7 @@
+// Copyright 2026 EmeraldPay Ltd
+//
+// Licensed under the Apache License, Version 2.0
+
 use std::marker::PhantomData;
 use std::sync::Arc;
 use async_trait::async_trait;
@@ -58,6 +62,15 @@ impl<B: BlockchainTypes, TS: WriteTarget> Archiver<B, TS> {
 
 }
 
+///
+/// What a single archive run put into the target
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub struct Archived {
+    /// Files written, or messages published by a streaming target. With `overwrite` off the existing files are kept,
+    /// and they are not counted.
+    pub files: usize,
+}
+
 /// Drives a full archive run for a single height or a range of heights.
 ///
 /// The `cancel` token lets the caller abort cooperatively — it's wired into
@@ -74,7 +87,7 @@ pub trait ArchiveAll<T> {
         maturity: Option<Maturity>,
         options: &DataOptions,
         cancel: &CancellationToken,
-    ) -> anyhow::Result<()>;
+    ) -> anyhow::Result<Archived>;
 }
 
 #[async_trait]
@@ -86,7 +99,7 @@ impl<B: BlockchainTypes, TS: WriteTarget> ArchiveAll<Height> for Archiver<B, TS>
         maturity: Option<Maturity>,
         options: &DataOptions,
         cancel: &CancellationToken,
-    ) -> anyhow::Result<()> {
+    ) -> anyhow::Result<Archived> {
         let start_time = Utc::now();
 
         let template = NotificationBuilder {
@@ -105,7 +118,7 @@ impl<B: BlockchainTypes, TS: WriteTarget> ArchiveAll<Height> for Archiver<B, TS>
                     "Block {} cancelled (re-org) — skipping tx/trace fetch",
                     what
                 );
-                return Ok(());
+                return Ok(Archived::default());
             }
         };
         let range = Range::Single(what.clone());
@@ -160,15 +173,17 @@ impl<B: BlockchainTypes, TS: WriteTarget> ArchiveAll<Height> for Archiver<B, TS>
         // due to corruption rather than a re-org. On cancel the partial
         // artifacts have already been cleaned up via writer Drop in the
         // process_* functions; the doomed block is invisible to consumers.
-        if !cancelled && !global::get_shutdown().is_signalled() {
+        let archived = if !cancelled && !global::get_shutdown().is_signalled() {
             self.publish_notifications(
                 blocks_notifs
                     .into_iter()
                     .chain(extract_notifications(tx_side.as_ref()))
                     .chain(extract_notifications(trace_side.as_ref())),
             )
-            .await;
-        }
+            .await
+        } else {
+            Archived::default()
+        };
 
         if cancelled {
             tracing::info!(
@@ -189,7 +204,7 @@ impl<B: BlockchainTypes, TS: WriteTarget> ArchiveAll<Height> for Archiver<B, TS>
                 duration.num_milliseconds()
             );
         }
-        Ok(())
+        Ok(archived)
     }
 }
 
@@ -202,7 +217,7 @@ impl<B: BlockchainTypes, TS: WriteTarget> ArchiveAll<Range> for Archiver<B, TS> 
         maturity: Option<Maturity>,
         options: &DataOptions,
         cancel: &CancellationToken,
-    ) -> anyhow::Result<()> {
+    ) -> anyhow::Result<Archived> {
         let start_time = Utc::now();
         tracing::debug!("Archiving range: {}", what);
 
@@ -219,7 +234,7 @@ impl<B: BlockchainTypes, TS: WriteTarget> ArchiveAll<Range> for Archiver<B, TS> 
             ProcessOutcome::Completed { value, notifications } => (value, notifications),
             ProcessOutcome::Cancelled => {
                 tracing::info!(range = %what, "Range archive cancelled before tx/trace fetch");
-                return Ok(());
+                return Ok(Archived::default());
             }
         };
 
@@ -256,19 +271,21 @@ impl<B: BlockchainTypes, TS: WriteTarget> ArchiveAll<Range> for Archiver<B, TS> 
 
         let shutdown = global::get_shutdown();
         if shutdown.is_signalled() {
-            return Ok(());
+            return Ok(Archived::default());
         }
 
         let cancelled = tx_outcome.is_cancelled() || trace_outcome.is_cancelled();
-        if !cancelled {
+        let archived = if !cancelled {
             self.publish_notifications(
                 blocks_notifs
                     .into_iter()
                     .chain(extract_notifications(Some(&tx_outcome)))
                     .chain(extract_notifications(Some(&trace_outcome))),
             )
-            .await;
-        }
+            .await
+        } else {
+            Archived::default()
+        };
 
         let duration = Utc::now().signed_duration_since(start_time);
         if what.len() == 1 {
@@ -283,7 +300,7 @@ impl<B: BlockchainTypes, TS: WriteTarget> ArchiveAll<Range> for Archiver<B, TS> 
             tracing::info!("Range {} is archived in {}ms", what, duration.num_milliseconds());
         }
 
-        Ok(())
+        Ok(archived)
     }
 }
 
@@ -306,11 +323,17 @@ impl<B: BlockchainTypes, TS: WriteTarget> Archiver<B, TS> {
     /// the notification channel are logged but not propagated — the data
     /// itself has already landed in the archive; a failed notify shouldn't
     /// fail the whole run.
-    async fn publish_notifications(&self, notifs: impl IntoIterator<Item = Notification>) {
+    ///
+    /// There is a notification for each output the target wrote, and none for the existing files it kept, so they're
+    /// also what tells how much was written.
+    async fn publish_notifications(&self, notifs: impl IntoIterator<Item = Notification>) -> Archived {
+        let mut archived = Archived::default();
         for notif in notifs {
+            archived.files += notif.location.len();
             if let Err(e) = self.notifications.send(notif).await {
                 tracing::warn!("Failed to publish notification: {}", e);
             }
         }
+        archived
     }
 }

@@ -2,14 +2,16 @@
 //
 // Licensed under the Apache License, Version 2.0
 
+use std::fmt::{Display, Formatter};
 use std::marker::PhantomData;
 use anyhow::anyhow;
 use async_trait::async_trait;
 use tokio_util::sync::CancellationToken;
-use crate::{archiver::{ArchiveAll, Archiver}, args::Args, blockchain::BlockchainTypes, command::CommandExecutor, global, memory, notify::RunMode, storage::ScanTarget};
+use crate::{archiver::{ArchiveAll, Archiver}, args::{Args, Command}, blockchain::BlockchainTypes, command::{CommandExecutor, report::RunReport}, global, memory, notify::RunMode, storage::ScanTarget};
 use crate::archiver::blocks_config::Blocks;
 use crate::archiver::datakind::DataOptions;
 use crate::archiver::range::Range;
+use crate::archiver::range_bag::RangeBag;
 
 ///
 /// Provides `fix` command.
@@ -22,6 +24,28 @@ pub struct FixCommand<B: BlockchainTypes, TS: ScanTarget> {
     chunk_size: usize,
     archiver: Archiver<B, TS>,
     tx_options: DataOptions,
+}
+
+///
+/// What the Fix did with a part of the range
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+enum Fixing {
+    /// The missing tables are archived
+    Fixed,
+    /// The tables are missing, but nothing is archived because of the dry-run mode
+    DryRun,
+    /// Nothing is missing there, so the Fix didn't touch it
+    AlreadyArchived,
+}
+
+impl Display for Fixing {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Fixing::Fixed => write!(f, "fixed"),
+            Fixing::DryRun => write!(f, "would be fixed (dry run)"),
+            Fixing::AlreadyArchived => write!(f, "already archived"),
+        }
+    }
 }
 
 impl<B: BlockchainTypes, TS: ScanTarget> FixCommand<B, TS> {
@@ -67,33 +91,63 @@ impl<B: BlockchainTypes, TS: ScanTarget> CommandExecutor for FixCommand<B, TS> {
             overwrite: false,
             ..self.tx_options.clone()
         };
-        let missing = self.archiver.target.find_incomplete_tables(range, &options).await?;
+        let missing = self.archiver.target.find_incomplete_tables(range.clone(), &options).await?;
+
+        let mut already_archived = RangeBag::new();
+        already_archived.append(range.clone());
+        let mut chunked: Vec<(Vec<Range>, DataOptions)> = vec![];
+        for (missing_range, kinds) in missing {
+            already_archived.remove(&missing_range);
+            tracing::info!(range = %missing_range, "Found missing data: {:?}", kinds);
+            let chunks = missing_range.split_chunks(self.chunk_size, false);
+            chunked.push((chunks, options.clone().only_include(&kinds)));
+        }
+        let planned = already_archived.len() + chunked.iter().map(|(chunks, _)| chunks.len()).sum::<usize>();
+        let mut report = RunReport::new(Command::Fix, range, planned);
+        // the scan stops at a shutdown and gives only what it found by then, so the rest is not known to be archived
+        if !shutdown.is_signalled() {
+            for part in &already_archived.ranges {
+                report.on_range(Fixing::AlreadyArchived, part, None);
+            }
+        }
+
         // `fix` runs against settled archive state — no re-org signal applies.
         let cancel = CancellationToken::new();
         let mut failed: Vec<Range> = vec![];
-        for (range, kinds) in missing {
+        for (chunks, options) in chunked {
             if shutdown.is_signalled() {
                 break;
             }
-            tracing::info!(range = %range, "Found missing data: {:?}", kinds);
-            let chunks = range.split_chunks(self.chunk_size, false);
-            let options = options.clone().only_include(&kinds);
             for chunk in chunks {
                 if shutdown.is_signalled() {
                     break;
                 }
                 tracing::info!(range = %chunk, "Fixing chunk");
-                if !dry_run {
-                    // A failed table is never committed, so the chunk stays incomplete and the next run finds it again.
-                    // It's safe to move on instead of leaving the rest of the range unfixed because of one failed block.
-                    if let Err(e) = self.archiver.archive(chunk.clone(), RunMode::Fix, None, &options, &cancel).await {
+                if dry_run {
+                    report.on_range(Fixing::DryRun, &chunk, None);
+                    continue;
+                }
+                // A failed table is never committed, so the chunk stays incomplete and the next run finds it again.
+                // It's safe to move on instead of leaving the rest of the range unfixed because of one failed block.
+                match self.archiver.archive(chunk.clone(), RunMode::Fix, None, &options, &cancel).await {
+                    Ok(archived) => report.on_range(Fixing::Fixed, &chunk, Some(archived.files)),
+                    // a chunk interrupted by a shutdown is not a failure, it's just not processed
+                    Err(_) if shutdown.is_signalled() => {},
+                    Err(e) => {
                         tracing::error!(range = %chunk, "Failed to fix chunk: {:?}", e);
+                        report.on_failure(&chunk, None, format!("{:#}", e));
                         failed.push(chunk);
                     }
-                    let _ = memory::release().await;
                 }
+                let _ = memory::release().await;
             }
         }
+
+        if shutdown.is_signalled() {
+            report.on_interrupted();
+        }
+        report.log();
+
         if !failed.is_empty() {
             let ranges = failed.iter().map(|r| r.to_string()).collect::<Vec<_>>().join(", ");
             return Err(anyhow!("Failed to fix {} chunk(s): {}", failed.len(), ranges));

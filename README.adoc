@@ -210,6 +210,15 @@ The main operation, copies historical data from a blockchain to archive.
 The data is copied in ranges, and with default range of 1000 blocks it produces two files per range.
 One for blocks in that range, and another one with _all_ transactions in all blocks in that range.
 
+When it's done, it logs a report:
+
+----
+Archive report for 21000000..21009999 (10 ranges)
+  archived: 9 ranges, 18 files, 9000 heights
+  failed: 1 ranges, 1000 heights
+    21007000..21007999: Failed to fetch block 21007412: Request timeout
+----
+
 See <<archive-format>>.
 
 ==== Stream as Tables
@@ -292,9 +301,28 @@ Every message of one block goes to the same partition, selected by block height,
 
 Merge individual block files into larger range files.
 
+When it's done, it logs a report in the following style:
+
+----
+Compact report for 21000000..21009999 (10 ranges)
+  compacted: 8 ranges, 24000 files, 8000 heights
+  already compacted: 1 ranges, 3 files, 1000 heights
+  failed: 1 ranges, 2997 files, 1000 heights
+    21004000..21004999: Range is missing data, archived only [21004000..21004998]. Please run Fix before Compaction. Skipping this range.
+----
+
 ==== Fix
 
 Fixes the archive by checking if there are any missing blocks, and if so, it creates new archives for the missing blocks.
+
+When it's done, it logs a report:
+----
+Fix report for 21000000..21009999 (4 ranges)
+  fixed: 2 ranges, 3 files, 2000 heights
+  already archived: 1 ranges, 7000 heights
+  failed: 1 ranges, 1000 heights
+    21005000..21005999: Failed to fetch block 21005321: Request timeout
+----
 
 ==== Verify
 
@@ -307,6 +335,23 @@ Reading the whole archive takes a long time.
 With `--quick` the command doesn't read the files, it only checks which files exist and that they are not empty.
 It trusts that the range in a file name is the range of blocks in the file, so it's fast, but it cannot find a missing block or broken data inside a file.
 It still deletes the files it finds wrong, i.e. the empty ones, duplicates, forks, and tables left without their blocks.
+
+When it's done, it logs a report per chunk (`--range.chunk`):
+
+- `good` - the chunks where all the files are fine, with the number of the files
+- `deleted` - the chunks where some files were deleted (or `would be deleted` in `--dry-run`), with the number of the deleted files
+- `no files` - the chunks without any files, which are for `fix` to archive
+- `failed` - the chunks where some files could not be verified, e.g. a file could not be read or the blockchain node didn't answer.
+  Such files are kept as they are, and the report lists a few of the chunks with the reason.
+
+----
+Verify report for 21000000..21009999 (10 ranges)
+  good: 7 ranges, 21 files, 7000 heights
+  deleted: 1 ranges, 1 files, 1000 heights
+  no files: 1 ranges, 1000 heights
+  failed: 1 ranges, 1000 heights
+    21003000..21003999: Cannot verify Transactions file archive/eth/021000000/range-021003000_021003999.txes.avro: Failed to read: connection reset
+----
 
 === Memory
 

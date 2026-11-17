@@ -1,3 +1,7 @@
+// Copyright 2026 EmeraldPay Ltd
+//
+// Licensed under the Apache License, Version 2.0
+
 mod archiver;
 mod table;
 mod block;
@@ -10,7 +14,7 @@ pub mod range_group;
 pub mod resume;
 pub mod order;
 
-pub use archiver::{ArchiveAll, Archiver};
+pub use archiver::{ArchiveAll, Archived, Archiver};
 pub use resume::{ScanResume, StreamResume};
 pub use order::{AppendSink, OrderedSink};
 
