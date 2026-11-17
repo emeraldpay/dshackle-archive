@@ -65,7 +65,7 @@ where
 {
     let shutdown = global::get_shutdown();
     let mut broken = vec![];
-    let mut incomplete = false;
+    let mut unverified = None;
 
     for file in files {
         if shutdown.is_signalled() {
@@ -85,12 +85,12 @@ where
             },
             Err(VerifyFailure::Unverifiable(reason)) => {
                 tracing::error!(range = %range, "Cannot verify {} file {}, keeping it as is: {}", kind, file.path, reason);
-                incomplete = true;
+                unverified.get_or_insert(format!("Cannot verify {} file {}: {}", kind, file.path, reason));
             },
         }
     }
 
-    RangeVerification { broken, incomplete }
+    RangeVerification { broken, unverified }
 }
 
 ///

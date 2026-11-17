@@ -3,7 +3,7 @@
 // Licensed under the Apache License, Version 2.0
 
 use std::collections::HashSet;
-use std::fmt::Debug;
+use std::fmt::{Debug, Display, Formatter};
 use std::hash::Hash;
 use std::marker::PhantomData;
 use std::str::FromStr;
@@ -21,11 +21,12 @@ use crate::{
         range_bag::RangeBag,
         range_group::ArchivesList
     },
-    args::Args,
+    args::{Args, Command},
     avros,
     blockchain::{BlockDetails, BlockchainTypes},
     command::{
-        CommandExecutor
+        CommandExecutor,
+        report::RunReport,
     },
     global,
     memory,
@@ -52,14 +53,51 @@ pub struct CompactCommand<B: BlockchainTypes, TS: ReadTarget> {
 
 ///
 /// What a compaction did with a chunk
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 enum Compaction {
     /// All the sources are copied into the range files, so the sources are not needed anymore
     Done,
     /// The sources are fine to make the range files of, but nothing is written because of the dry-run mode
     DryRun,
-    /// The chunk stays as it is
-    Skipped,
+    /// The chunk is a single range file already, so it stays as it is
+    AlreadyCompacted,
+}
+
+impl Display for Compaction {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Compaction::Done => write!(f, "compacted"),
+            Compaction::DryRun => write!(f, "would be compacted (dry run)"),
+            Compaction::AlreadyCompacted => write!(f, "already compacted"),
+        }
+    }
+}
+
+///
+/// Why a chunk is not compacted
+#[derive(Debug)]
+enum Failure {
+    /// The sources are not fit to make the range files of. It's an expected state of an archive that is not verified
+    /// or fixed yet, and the reason tells which of them to run.
+    Rejected(anyhow::Error),
+    /// Reading or writing the files failed
+    Error(anyhow::Error),
+}
+
+impl From<anyhow::Error> for Failure {
+    fn from(e: anyhow::Error) -> Self {
+        Failure::Error(e)
+    }
+}
+
+impl Display for Failure {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Failure::Rejected(e) => write!(f, "{}", e),
+            // the top message of an I/O failure is usually generic, and the cause is what tells what went wrong
+            Failure::Error(e) => write!(f, "{:#}", e),
+        }
+    }
 }
 
 #[async_trait]
@@ -70,6 +108,7 @@ impl<B: BlockchainTypes + 'static, TS: ReadTarget + 'static> CommandExecutor for
         let range = self.blocks.to_range(self.archiver.data_provider.as_ref()).await?;
         tracing::info!(range = display(&range), "Compacting all in range");
         let chunks = range.split_chunks(self.chunk_size, self.blocks.is_tail());
+        let mut report = RunReport::new(Command::Compact, range.clone(), chunks.len());
 
         let mut files = self.archiver.target.list(range.clone())?;
 
@@ -95,7 +134,7 @@ impl<B: BlockchainTypes + 'static, TS: ReadTarget + 'static> CommandExecutor for
 
                             if !current_chunk.eq(relevant_chunk) {
                                 // the files of another chunk mean that all files of the current one are listed
-                                current_files = self.compact_chunk(current_chunk, current_files).await;
+                                current_files = self.compact_chunk(current_chunk, current_files, &mut report).await;
                                 if shutdown.is_signalled() {
                                     break;
                                 }
@@ -117,9 +156,14 @@ impl<B: BlockchainTypes + 'static, TS: ReadTarget + 'static> CommandExecutor for
             // A range that ends in the middle of a chunk gives a short last chunk. Compacting it would make a short
             // range file, which is only to be read and written again once the rest of the chunk is archived
             if let Some(last_chunk) = current.filter(|chunk| chunk.len() == self.chunk_size) {
-                let _ = self.compact_chunk(&last_chunk, current_files).await;
+                let _ = self.compact_chunk(&last_chunk, current_files, &mut report).await;
             }
         }
+
+        if shutdown.is_signalled() {
+            report.on_interrupted();
+        }
+        report.log();
 
         Ok(())
     }
@@ -144,16 +188,11 @@ impl<B: BlockchainTypes+ 'static, TS: ReadTarget + 'static> CompactCommand<B, TS
     ///
     /// Returns the files that are still needed after that, i.e. the files that cover blocks after the chunk
     /// and are the sources of the next one.
-    async fn compact_chunk(&self, chunk: &Range, files: Vec<FileReference>) -> Vec<FileReference> {
-        let compaction = match self.compact_range(chunk, files.clone()).await {
-            Ok(compaction) => compaction,
-            Err(e) => {
-                tracing::error!(range = display(chunk), "Range is not compacted: {}", e);
-                Compaction::Skipped
-            }
-        };
+    async fn compact_chunk(&self, chunk: &Range, files: Vec<FileReference>, report: &mut RunReport<Compaction>) -> Vec<FileReference> {
+        let compaction = self.compact_range(chunk, files.clone()).await;
 
-        // a compaction interrupted by a shutdown says nothing about the files, so keep all of them
+        // a compaction interrupted by a shutdown says nothing about the files, so keep all of them,
+        // and it's not a failure of the chunk either
         if global::get_shutdown().is_signalled() {
             return files;
         }
@@ -161,8 +200,19 @@ impl<B: BlockchainTypes+ 'static, TS: ReadTarget + 'static> CompactCommand<B, TS
         let (copied, next_files): (Vec<FileReference>, Vec<FileReference>) = files.into_iter()
             .partition(|f| chunk.contains(&f.range) || f.range.end() < chunk.end());
 
+        match &compaction {
+            Ok(outcome) => report.on_range(*outcome, chunk, Some(copied.len())),
+            Err(failure) => {
+                match failure {
+                    Failure::Rejected(e) => tracing::warn!(range = display(chunk), "{}", e),
+                    Failure::Error(e) => tracing::error!(range = display(chunk), "Range is not compacted: {:#}", e),
+                }
+                report.on_failure(chunk, Some(copied.len()), failure);
+            }
+        }
+
         match compaction {
-            Compaction::Done => {
+            Ok(Compaction::Done) => {
                 let mut deleting = JoinSet::new();
                 for file in copied {
                     let target = self.archiver.target.clone();
@@ -172,13 +222,13 @@ impl<B: BlockchainTypes+ 'static, TS: ReadTarget + 'static> CompactCommand<B, TS
                 }
                 let _ = deleting.join_all().await;
             },
-            Compaction::DryRun => {
+            Ok(Compaction::DryRun) => {
                 tracing::info!(range = display(chunk), "Dry run, keeping {} source files that would be deleted", copied.len());
                 for file in copied {
                     tracing::debug!(range = display(chunk), "Dry run, keeping the file that would be deleted: {}", file.path);
                 }
             },
-            Compaction::Skipped => {},
+            Ok(Compaction::AlreadyCompacted) | Err(_) => {},
         }
 
         let _ = memory::release().await;
@@ -190,15 +240,10 @@ impl<B: BlockchainTypes+ 'static, TS: ReadTarget + 'static> CompactCommand<B, TS
     /// Compact data from the given tables into a single range table (per data kind). It only selects data that is in the given range.
     /// @range Range to compact
     /// @files List of files that can be used for compaction
-    async fn compact_range(&self, range: &Range, files: Vec<FileReference>) -> Result<Compaction> {
+    async fn compact_range(&self, range: &Range, files: Vec<FileReference>) -> Result<Compaction, Failure> {
         let sources = files.len();
-        let complete = match Self::verify_files(range, files, &self.data_options) {
-            Err(e) => {
-                tracing::warn!(range = display(range), "{}", e);
-                return Ok(Compaction::Skipped);
-            },
-            Ok(c) => c,
-        };
+        let complete = Self::verify_files(range, files, &self.data_options)
+            .map_err(Failure::Rejected)?;
         // Such a chunk would be written to the path of its own source, and the source is deleted after a compaction
         let already_compacted = {
             let mut groups = complete.iter();
@@ -206,7 +251,7 @@ impl<B: BlockchainTypes+ 'static, TS: ReadTarget + 'static> CompactCommand<B, TS
         };
         if already_compacted {
             tracing::info!(range = display(range), "Range is already compacted");
-            return Ok(Compaction::Skipped);
+            return Ok(Compaction::AlreadyCompacted);
         }
         tracing::info!(range = display(range), "Compacting range chunk from {} source files", sources);
         if self.dry_run {
@@ -263,28 +308,23 @@ impl<B: BlockchainTypes+ 'static, TS: ReadTarget + 'static> CompactCommand<B, TS
         while let Some(next) = compactions.join_next().await {
             match next {
                 Ok(Ok(file)) => files.push(file),
-                Ok(Err(e)) => return Err(e),
+                Ok(Err(e)) => return Err(e.into()),
                 // a panicked compaction must not kill the whole run, the caller just skips this range
-                Err(e) => return Err(anyhow!("Compaction of the range failed: {}", e)),
+                Err(e) => return Err(anyhow!("Compaction of the range failed: {}", e).into()),
             }
         }
 
-        let all_copied = {
-            let status = status.lock().unwrap();
-            status.validate(range)
-        };
+        status.lock().unwrap()
+            .validate(range)
+            .map_err(Failure::Rejected)?;
 
-        if all_copied {
-            for file in files.into_iter() {
-                // an unclosed file is incomplete (and dropped from the archive), so the caller must not
-                // treat the range as compacted and delete its sources
-                file.close().await?;
-            }
-            tracing::info!(range = display(range), "Range compacted");
-            Ok(Compaction::Done)
-        } else {
-            Ok(Compaction::Skipped)
+        for file in files.into_iter() {
+            // an unclosed file is incomplete (and dropped from the archive), so the caller must not
+            // treat the range as compacted and delete its sources
+            file.close().await?;
         }
+        tracing::info!(range = display(range), "Range compacted");
+        Ok(Compaction::Done)
     }
 
     fn verify_files(range: &Range, files: Vec<FileReference>, tx_options: &DataOptions) -> Result<ArchivesList> {
@@ -373,29 +413,26 @@ impl<TXID: Hash + Eq + Clone + Debug> CopiedStatus<TXID> {
     ///
     /// The files are already there for the whole range (see `verify_files`), so a difference here is in their content.
     /// The Fix alone doesn't see it, it needs the Verify to delete such files first.
-    fn validate(&self, range: &Range) -> bool {
+    fn validate(&self, range: &Range) -> Result<()> {
         if self.data_options.block.is_some() {
             if let Some(discrepancy) = Discrepancy::find(range.iter(), &self.copied_blocks) {
-                tracing::warn!(range = display(range), "Blocks don't match the range: {}. Please run Verify and Fix before Compaction. Skipping this range.", discrepancy);
-                return false;
+                return Err(anyhow!("Blocks don't match the range: {}. Please run Verify and Fix before Compaction. Skipping this range.", discrepancy));
             }
         }
 
         if self.data_options.tx.is_some() {
             if let Some(discrepancy) = Discrepancy::find(self.expected_txes.iter().cloned(), &self.copied_txes) {
-                tracing::warn!(range = display(range), "Transactions don't match the blocks: {}. Please run Verify and Fix before Compaction. Skipping this range.", discrepancy);
-                return false;
+                return Err(anyhow!("Transactions don't match the blocks: {}. Please run Verify and Fix before Compaction. Skipping this range.", discrepancy));
             }
         }
 
         if self.data_options.trace.is_some() {
             if let Some(discrepancy) = Discrepancy::find(self.expected_txes.iter().cloned(), &self.copied_traces) {
-                tracing::warn!(range = display(range), "Traces don't match the blocks: {}. Please run Verify and Fix before Compaction. Skipping this range.", discrepancy);
-                return false;
+                return Err(anyhow!("Traces don't match the blocks: {}. Please run Verify and Fix before Compaction. Skipping this range.", discrepancy));
             }
         }
 
-        true
+        Ok(())
     }
 }
 
@@ -723,7 +760,7 @@ mod tests {
         }
 
         let range = Range::new(100, 104);
-        assert!(status.validate(&range));
+        assert!(status.validate(&range).is_ok());
     }
 
     #[test]
@@ -739,7 +776,7 @@ mod tests {
         }
 
         let range = Range::new(100, 104);
-        assert!(!status.validate(&range));
+        assert!(status.validate(&range).is_err());
     }
 
     #[test]
@@ -756,7 +793,7 @@ mod tests {
         status.on_copied_block(104, vec![]);
 
         let range = Range::new(100, 104);
-        assert!(!status.validate(&range));
+        assert!(status.validate(&range).is_err());
     }
 
     #[test]
@@ -777,7 +814,7 @@ mod tests {
         status.on_copied_tx("tx3".to_string());
 
         let range = Range::new(100, 101);
-        assert!(status.validate(&range));
+        assert!(status.validate(&range).is_ok());
     }
 
     #[test]
@@ -797,7 +834,7 @@ mod tests {
         // Missing tx2 and tx3
 
         let range = Range::new(100, 101);
-        assert!(!status.validate(&range));
+        assert!(status.validate(&range).is_err());
     }
 
     #[test]
@@ -819,7 +856,7 @@ mod tests {
         status.on_copied_trace("tx2".to_string());
 
         let range = Range::Single(100.into());
-        assert!(status.validate(&range));
+        assert!(status.validate(&range).is_ok());
     }
 
     #[test]
@@ -838,7 +875,7 @@ mod tests {
         // Missing tx2 trace
 
         let range = Range::new(100, 100);
-        assert!(!status.validate(&range));
+        assert!(status.validate(&range).is_err());
     }
 
     #[test]
@@ -865,7 +902,7 @@ mod tests {
         status.on_copied_trace("tx3".to_string());
 
         let range = Range::new(100, 101);
-        assert!(status.validate(&range));
+        assert!(status.validate(&range).is_ok());
     }
 
     #[test]
@@ -887,7 +924,7 @@ mod tests {
         // Don't add txes or traces - but validation should still pass since they're not enabled
 
         let range = Range::new(100, 101);
-        assert!(status.validate(&range));
+        assert!(status.validate(&range).is_ok());
     }
 
     // ============================================================================

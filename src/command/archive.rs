@@ -2,6 +2,7 @@
 //
 // Licensed under the Apache License, Version 2.0
 
+use std::fmt::{Display, Formatter};
 use std::marker::PhantomData;
 use std::str::FromStr;
 use anyhow::anyhow;
@@ -9,9 +10,9 @@ use async_trait::async_trait;
 use tokio_util::sync::CancellationToken;
 use crate::{
     archiver::{ArchiveAll, Archiver},
-    args::Args,
+    args::{Args, Command},
     blockchain::BlockchainTypes,
-    command::CommandExecutor,
+    command::{CommandExecutor, report::RunReport},
     global,
     memory,
     notify::RunMode,
@@ -34,12 +35,32 @@ pub struct ArchiveCommand<B: BlockchainTypes, TS: WriteTarget> {
     data_options: DataOptions,
 }
 
+///
+/// What the archive did with a range that didn't fail
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+enum Archiving {
+    Archived,
+    /// The data is fetched, but nothing is written because of the dry-run mode
+    DryRun,
+}
+
+impl Display for Archiving {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Archiving::Archived => write!(f, "archived"),
+            Archiving::DryRun => write!(f, "would be archived (dry run)"),
+        }
+    }
+}
+
 #[async_trait]
 impl<B: BlockchainTypes, TS: WriteTarget> CommandExecutor for ArchiveCommand<B, TS> {
 
     async fn execute(&self) -> anyhow::Result<()> {
         let shutdown = global::get_shutdown();
         let ranges = self.range.split_chunks(self.chunk_size, false);
+        let mut report = RunReport::new(Command::Archive, self.range.clone(), ranges.len());
+        let dry_run = global::is_dry_run();
 
         // Historical archive runs against settled blocks; no re-org signal
         // ever fires here, so a never-cancelled token covers the trait
@@ -53,16 +74,29 @@ impl<B: BlockchainTypes, TS: WriteTarget> CommandExecutor for ArchiveCommand<B, 
             if shutdown.is_signalled() {
                 break;
             }
-            let result = self.archiver.archive(subrange.clone(), RunMode::Archive, None, &self.data_options, &cancel).await;
-            if let Err(e) = result {
-                if !skip_failed {
-                    return Err(e);
+            match self.archiver.archive(subrange.clone(), RunMode::Archive, None, &self.data_options, &cancel).await {
+                // a dry run writes no files, and showing zero of them would read as if all of them were there already
+                Ok(_) if dry_run => report.on_range(Archiving::DryRun, &subrange, None),
+                Ok(archived) => report.on_range(Archiving::Archived, &subrange, Some(archived.files)),
+                // a range interrupted by a shutdown is not a failure, it's just not processed
+                Err(_) if shutdown.is_signalled() => {},
+                Err(e) => {
+                    report.on_failure(&subrange, None, format!("{:#}", e));
+                    if !skip_failed {
+                        report.log();
+                        return Err(e);
+                    }
+                    tracing::error!(range = %subrange, "Failed to archive range: {:?}", e);
+                    failed.push(subrange);
                 }
-                tracing::error!(range = %subrange, "Failed to archive range: {:?}", e);
-                failed.push(subrange);
             }
             let _ = memory::release().await;
         }
+
+        if shutdown.is_signalled() {
+            report.on_interrupted();
+        }
+        report.log();
         if !failed.is_empty() {
             let ranges = failed.iter().map(|r| r.to_string()).collect::<Vec<_>>().join(", ");
             return Err(anyhow!("Failed to archive {} range(s): {}. Use the `fix` command to complete them", failed.len(), ranges));

@@ -110,16 +110,19 @@ impl FileGroup {
         }
     }
 
+    /// How many files the group points to (`tx_id` is metadata, not a file)
+    pub fn len(&self) -> usize {
+        [&self.block, &self.tx, &self.raw, &self.receipt, &self.calls, &self.state_diff]
+            .iter()
+            .filter(|url| url.is_some())
+            .count()
+            + self.uncles.len()
+    }
+
     /// True when the group points to no files at all (`tx_id` is metadata,
     /// not a file). Such a group carries nothing to notify about.
     pub fn is_empty(&self) -> bool {
-        self.block.is_none()
-            && self.uncles.is_empty()
-            && self.tx.is_none()
-            && self.raw.is_none()
-            && self.receipt.is_none()
-            && self.calls.is_none()
-            && self.state_diff.is_none()
+        self.len() == 0
     }
 }
 
@@ -155,6 +158,22 @@ pub struct RowFiles {
 
 impl Location {
     ///
+    /// How many files, or broker messages, the location points to
+    pub fn len(&self) -> usize {
+        match self {
+            Location::File { .. } => 1,
+            Location::Files { files } => files.iter().map(FileGroup::len).sum(),
+            Location::Pulsar { messages } | Location::Kafka { messages } => messages.len(),
+        }
+    }
+
+    ///
+    /// True when the location points to no files or messages at all
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+
+    ///
     /// Group per-row file groups into one `files` location per height, in
     /// chain-natural order (block entry first, then transactions by index).
     ///
@@ -177,6 +196,28 @@ impl Location {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn counts_files_of_all_groups() {
+        let location = Location::Files {
+            files: vec![
+                FileGroup {
+                    block: Some("block.json".to_string()),
+                    uncles: vec!["uncle-0.json".to_string(), "uncle-1.json".to_string()],
+                    ..FileGroup::default()
+                },
+                FileGroup {
+                    tx_id: Some("0x40846886cf7b8".to_string()),
+                    tx: Some("tx.json".to_string()),
+                    raw: Some("raw.hex".to_string()),
+                    receipt: Some("receipt.json".to_string()),
+                    ..FileGroup::default()
+                },
+            ],
+        };
+
+        assert_eq!(location.len(), 6);
+    }
 
     #[test]
     fn file_location_json() {

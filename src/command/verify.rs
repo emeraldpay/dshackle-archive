@@ -3,6 +3,7 @@
 // Licensed under the Apache License, Version 2.0
 
 use std::collections::{HashMap, HashSet};
+use std::fmt::{Display, Formatter};
 use std::marker::PhantomData;
 use std::str::FromStr;
 use std::sync::{Arc, Mutex};
@@ -16,7 +17,7 @@ use crate::{archiver::{
     Archiver,
     range::{Height, Range},
     range_group::{ArchiveGroup, ArchivesList}
-}, avros, blockchain::{BlockDetails, BlockchainTypes}, command::{CommandExecutor}, global, memory, progress, storage::{
+}, args::Command, avros, blockchain::{BlockDetails, BlockchainTypes}, command::{CommandExecutor, report::RunReport}, global, memory, progress, storage::{
     TargetFileReader,
     ReadTarget
 }};
@@ -135,6 +136,51 @@ impl VerificationStat {
 }
 
 ///
+/// What the verification found in a chunk that has no failures
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+enum Verification {
+    /// All the tables are fine, and they are kept
+    Good,
+    /// Some tables are broken or extra, and they are deleted
+    Deleted,
+    /// Some tables are broken or extra, but nothing is deleted because of the dry-run mode
+    DryRun,
+    /// Nothing is archived in the chunk, which is for the Fix to archive
+    NoFiles,
+}
+
+impl Display for Verification {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Verification::Good => write!(f, "good"),
+            Verification::Deleted => write!(f, "deleted"),
+            Verification::DryRun => write!(f, "would be deleted (dry run)"),
+            Verification::NoFiles => write!(f, "no files"),
+        }
+    }
+}
+
+///
+/// What the verification did with a group of tables
+struct GroupVerification {
+    /// Tables that are deleted, or are to be deleted in the dry-run mode
+    deleted: Vec<FileReference>,
+    /// Why the tables could not be verified, in full or in part
+    failure: Option<String>,
+}
+
+///
+/// What the verification did with a chunk
+struct ChunkVerification {
+    /// A group that goes over the end of the chunk, see [`VerifyCommand::verify_chunk`]
+    reaching_out: Option<ArchiveGroup>,
+    /// How many tables are deleted, or are to be deleted in the dry-run mode
+    deleted: usize,
+    /// Why some tables of the chunk could not be verified. It's the first reason when there are a few of them.
+    failure: Option<String>,
+}
+
+///
 /// Data for the verification based on the filenames only
 struct Preprocess {
     input: Vec<ArchiveGroup>,
@@ -191,7 +237,7 @@ impl<B: BlockchainTypes + 'static, TS: ReadTarget + 'static> VerifyCommand<B, TS
     ///
     /// A group may cover blocks after the end of the chunk, where it can overlap with the files that are listed only with
     /// the following chunks. Such group is passed from one chunk to another, as `reaching_in`, until the chunks pass its end.
-    async fn verify_chunk(&self, chunk: &Range, archived: ArchivesList, reaching_in: Option<ArchiveGroup>, stat: Arc<Mutex<VerificationStat>>) -> anyhow::Result<Option<ArchiveGroup>> {
+    async fn verify_chunk(&self, chunk: &Range, archived: ArchivesList, reaching_in: Option<ArchiveGroup>, stat: Arc<Mutex<VerificationStat>>) -> anyhow::Result<ChunkVerification> {
         progress::pause();
         let mut jobs = JoinSet::new();
 
@@ -231,10 +277,12 @@ impl<B: BlockchainTypes + 'static, TS: ReadTarget + 'static> VerifyCommand<B, TS
         for delete in &preprocess.for_deletion {
             stat.lock().unwrap().on_delete(&delete.kind, &delete.range);
         }
+        let deleted_by_filenames = preprocess.for_deletion.len();
         let target = self.archiver.target.clone();
         jobs.spawn(async move {
             delete(preprocess.for_deletion, target).await?;
-            Ok(vec![])
+            // they're not in any group that goes on, so not needed to update the groups
+            Ok(GroupVerification { deleted: vec![], failure: None })
         });
 
         progress::resume();
@@ -246,6 +294,7 @@ impl<B: BlockchainTypes + 'static, TS: ReadTarget + 'static> VerifyCommand<B, TS
         );
 
         let mut deleted: Vec<FileReference> = vec![];
+        let mut failure: Option<String> = None;
         let shutdown = global::get_shutdown();
         while !shutdown.is_signalled() {
             tokio::select! {
@@ -255,14 +304,28 @@ impl<B: BlockchainTypes + 'static, TS: ReadTarget + 'static> VerifyCommand<B, TS
                 },
                 next = jobs.join_next() => match next {
                     None => break,
-                    Some(Ok(Ok(files))) => deleted.extend(files),
-                    Some(_) => {},
+                    Some(Ok(Ok(group))) => {
+                        deleted.extend(group.deleted);
+                        failure = failure.or(group.failure);
+                    },
+                    Some(Ok(Err(e))) => {
+                        tracing::error!(range = %chunk, "Failed to verify: {:#}", e);
+                        failure = failure.or(Some(format!("{:#}", e)));
+                    },
+                    Some(Err(e)) => {
+                        tracing::error!(range = %chunk, "Verification failed: {}", e);
+                        failure = failure.or(Some(format!("Verification failed: {}", e)));
+                    },
                 }
             }
         }
 
-        // what the verification has deleted is not in the archive anymore, i.e. cannot have a duplicate
-        Ok(reaching_out.and_then(|g| g.retain_tables(|table| !deleted.contains(table))))
+        Ok(ChunkVerification {
+            deleted: deleted_by_filenames + deleted.len(),
+            // what the verification has deleted is not in the archive anymore, i.e. cannot have a duplicate
+            reaching_out: reaching_out.and_then(|g| g.retain_tables(|table| !deleted.contains(table))),
+            failure,
+        })
     }
 
 }
@@ -275,7 +338,7 @@ fn process_data<B: BlockchainTypes + 'static, TS: ReadTarget + 'static>(
     data_options: DataOptions,
     delete_whole_chunk: bool,
     mode: VerifyMode,
-    jobs: &mut JoinSet<anyhow::Result<Vec<FileReference>>>,
+    jobs: &mut JoinSet<anyhow::Result<GroupVerification>>,
     stat: Arc<Mutex<VerificationStat>>,
 ) {
     let parallel = Arc::new(Semaphore::new(4));
@@ -450,6 +513,7 @@ impl<B: BlockchainTypes + 'static, FR: ReadTarget + 'static> CommandExecutor for
         let ranges = full_range.split_chunks(self.chunk, false);
         let shutdown = global::get_shutdown();
         let stat = Arc::new(Mutex::new(VerificationStat::new()));
+        let mut report = RunReport::new(Command::Verify, full_range.clone(), ranges.len());
         let mut reaching_in = None;
 
         for range in ranges {
@@ -461,7 +525,7 @@ impl<B: BlockchainTypes + 'static, FR: ReadTarget + 'static> CommandExecutor for
 
             while !shutdown.is_signalled() {
                 tokio::select! {
-                    _ = shutdown.signalled() => return Ok(()),
+                    _ = shutdown.signalled() => break,
                     file = existing.recv() => {
                         if file.is_none() {
                             break;
@@ -516,9 +580,41 @@ impl<B: BlockchainTypes + 'static, FR: ReadTarget + 'static> CommandExecutor for
                 }
             }
 
-            reaching_in = self.verify_chunk(&range, archived, reaching_in, stat.clone()).await?;
+            if shutdown.is_signalled() {
+                break;
+            }
+
+            let listed: usize = archived.iter().map(|g| g.tables().len()).sum();
+            let verified = match self.verify_chunk(&range, archived, reaching_in, stat.clone()).await {
+                Ok(verified) => verified,
+                Err(e) => {
+                    report.on_failure(&range, None, format!("{:#}", e));
+                    report.log();
+                    return Err(e);
+                }
+            };
+            reaching_in = verified.reaching_out;
+            // a chunk interrupted by a shutdown is not verified in full, so it's neither good nor failed
+            if !shutdown.is_signalled() {
+                let deleted = dropped.len() + verified.deleted;
+                let deleted_outcome = if dry_run { Verification::DryRun } else { Verification::Deleted };
+                match verified.failure {
+                    Some(reason) if deleted > 0 => {
+                        report.on_failure(&range, None, format!("{} ({}: {} files)", reason, deleted_outcome, deleted))
+                    },
+                    Some(reason) => report.on_failure(&range, None, reason),
+                    None if deleted > 0 => report.on_range(deleted_outcome, &range, Some(deleted)),
+                    None if listed == 0 => report.on_range(Verification::NoFiles, &range, None),
+                    None => report.on_range(Verification::Good, &range, Some(listed)),
+                }
+            }
             let _ = memory::release().await;
         }
+
+        if shutdown.is_signalled() {
+            report.on_interrupted();
+        }
+        report.log();
 
         {
             let stat = stat.lock().unwrap();
@@ -542,27 +638,32 @@ async fn verify_table_group<B: BlockchainTypes + , TS: ReadTarget + 'static>(
     groups: Vec<ArchiveGroup>,
     data_options: DataOptions,
     stat: Arc<Mutex<VerificationStat>>
-) -> anyhow::Result<Vec<FileReference>> {
+) -> anyhow::Result<GroupVerification> {
     let shutdown = global::get_shutdown();
     let mut for_deletion: Vec<&FileReference> = vec![];
-    let mut incomplete = false;
 
     let verification = match mode {
         VerifyMode::Full => verify_content(archiver.clone(), &range, &groups, data_options).await,
         VerifyMode::Quick => Ok(RangeVerification::by_listing(&range, &groups, &data_options)),
     };
-    if let Ok(verification) = verification {
-        for_deletion.extend(verification.broken);
-        incomplete = verification.incomplete;
-    }
+    let unverified = match verification {
+        Ok(verification) => {
+            for_deletion.extend(verification.broken);
+            verification.unverified
+        },
+        Err(e) => {
+            tracing::error!(range = %range, "Failed to verify: {:#}", e);
+            Some(format!("{:#}", e))
+        }
+    };
 
     if shutdown.is_signalled() {
         // when it's shutting down there (1) is not time for deletion and (2) most likely it got some invalid data as other threads are stopping
-        return Ok(vec![]);
+        return Ok(GroupVerification { deleted: vec![], failure: None });
     }
 
     if !for_deletion.is_empty() && delete_whole_chunk {
-        if incomplete {
+        if unverified.is_some() {
             // Cleaning the whole chunk means replacing all of it, and a table that was never read
             // gives no reason to replace it. The tables known to be broken are still deleted, so
             // the next run, when the storage answers again, can clean the chunk properly
@@ -583,7 +684,7 @@ async fn verify_table_group<B: BlockchainTypes + , TS: ReadTarget + 'static>(
     let for_deletion: Vec<FileReference> = for_deletion.into_iter().cloned().collect();
     delete(for_deletion.clone(), archiver.target.clone()).await?;
 
-    Ok(for_deletion)
+    Ok(GroupVerification { deleted: for_deletion, failure: unverified })
 }
 
 ///
@@ -591,21 +692,22 @@ async fn verify_table_group<B: BlockchainTypes + , TS: ReadTarget + 'static>(
 struct RangeVerification<'a> {
     /// Files that were read and must be archived again
     broken: Vec<&'a FileReference>,
-    /// Some of the tables could not be read, i.e. what is wrong with the range is known only in part
-    incomplete: bool,
+    /// Why some of the tables could not be read, i.e. what is wrong with the range is known only in part.
+    /// It's the first reason when there are a few of them.
+    unverified: Option<String>,
 }
 
 impl<'a> RangeVerification<'a> {
     fn verified(broken: Vec<&'a FileReference>) -> Self {
-        Self { broken, incomplete: false }
+        Self { broken, unverified: None }
     }
 
     fn nothing_to_do() -> Self {
-        Self { broken: vec![], incomplete: false }
+        Self { broken: vec![], unverified: None }
     }
 
-    fn unreadable() -> Self {
-        Self { broken: vec![], incomplete: true }
+    fn unreadable(reason: String) -> Self {
+        Self { broken: vec![], unverified: Some(reason) }
     }
 
     ///
@@ -621,7 +723,7 @@ async fn verify_content<'a, B: BlockchainTypes, TS: ReadTarget>(archiver: Arc<Ar
     tracing::trace!(range = %range, "Verify table data");
     let shutdown = global::get_shutdown();
     let mut broken_files = vec![];
-    let mut incomplete = false;
+    let mut unverified = None;
 
     let blocks: Vec<&FileReference> = groups.iter()
         .filter_map(|g| g.blocks.as_ref())
@@ -639,7 +741,7 @@ async fn verify_content<'a, B: BlockchainTypes, TS: ReadTarget>(archiver: Arc<Ar
     match block_verification {
         Err(VerifyFailure::Unverifiable(e)) => {
             tracing::error!(range = %range, "Cannot verify the blocks, keeping the range as is: {}", e);
-            return Ok(RangeVerification::unreadable());
+            return Ok(RangeVerification::unreadable(format!("Cannot verify the blocks: {}", e)));
         },
         Err(VerifyFailure::Invalid(e)) => {
             tracing::error!(range = %range, "Block data is corrupted: {}", e);
@@ -665,12 +767,12 @@ async fn verify_content<'a, B: BlockchainTypes, TS: ReadTarget>(archiver: Arc<Ar
                     .collect();
                 let verification = verify_tx_tables::<B, TS>(kind, archiver.target.as_ref(), range, &files, &expected_txes, checks).await;
                 broken_files.extend(verification.broken);
-                incomplete |= verification.incomplete;
+                unverified = unverified.or(verification.unverified);
             }
         }
     }
 
-    Ok(RangeVerification { broken: broken_files, incomplete })
+    Ok(RangeVerification { broken: broken_files, unverified })
 }
 
 ///
