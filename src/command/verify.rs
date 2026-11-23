@@ -220,12 +220,17 @@ impl<B: BlockchainTypes + 'static, TS: ReadTarget + 'static> VerifyCommand<B, TS
     pub fn new(config: &crate::args::Args,
                archiver: Archiver<B, TS>,
     ) -> anyhow::Result<Self> {
+        let data_options = DataOptions::from(config);
+        // The other tables are verified against the blocks, and without them every range looks broken and is deleted
+        if !data_options.include_block() {
+            return Err(anyhow::anyhow!("Verify needs `blocks` in --tables, as the other tables are verified against the blocks"));
+        }
 
         Ok(Self {
             b: PhantomData,
             blocks: Blocks::try_from(config)?,
             archiver: Arc::new(archiver),
-            data_options: DataOptions::from(config),
+            data_options,
             delete_whole_groups: config.fix_clean,
             chunk: config.get_chunk_size(),
             mode: VerifyMode::from(config),
@@ -519,7 +524,8 @@ impl<B: BlockchainTypes + 'static, FR: ReadTarget + 'static> CommandExecutor for
         for range in ranges {
             tracing::info!(range = %range, "Verifying chunk");
             let mut existing = self.archiver.target.list(range.clone())?;
-            let mut archived = ArchivesList::new(self.data_options.files());
+            let tables = self.data_options.files();
+            let mut archived = ArchivesList::new(tables.clone());
             // paths of the duplicate tables that are already dropped from this chunk
             let mut dropped: HashSet<String> = HashSet::new();
 
@@ -531,6 +537,11 @@ impl<B: BlockchainTypes + 'static, FR: ReadTarget + 'static> CommandExecutor for
                             break;
                         }
                         let file = file.unwrap();
+                        // A table that is not verified this time is not deleted either, as the Fix that follows with
+                        // the same --tables would not restore it. Even a broken one is left for a run that includes it.
+                        if !tables.include(file.kind) {
+                            continue;
+                        }
                         tracing::trace!("Received file: {:?}", file.path);
                         //TODO start processing once it's known the range is complete / incomplete
                         let is_completed = archived.append(file);
@@ -1641,6 +1652,77 @@ mod tests {
 
         let after = testing::list_mem_filenames(mem).await;
         assert_eq!(after, before);
+    }
+
+    ///
+    /// A group without its block file is deleted, but only the tables that are verified, as the Fix that follows
+    /// with the same `--tables` would not restore the others
+    #[tokio::test(flavor = "multi_thread")]
+    async fn keeps_tables_not_verified() {
+        testing::start_test();
+        let mem = Arc::new(InMemory::new());
+        let archiver = create_archiver(mem.clone());
+        let data = archiver.data_provider.clone();
+        let trace_options = TraceOptions {
+            include_trace: true,
+            include_state_diff: true,
+        };
+
+        for height in 100..102u64 {
+            let block = MockBlock {
+                height,
+                hash: format!("B{}", height),
+                parent: format!("B{}", height - 1),
+                transactions: vec![format!("TX{}", height)],
+            };
+            data.add_block(block.clone());
+            for tx in &block.transactions {
+                data.add_tx(MockTx { hash: tx.clone() });
+                data.add_trace(MockTrace {
+                    tx_hash: tx.clone(),
+                    trace_json: Some(format!(r#"{{"trace":"{}"}}"#, tx).into_bytes()),
+                    state_diff_json: Some(format!(r#"{{"diff":"{}"}}"#, tx).into_bytes()),
+                });
+            }
+            testing::write_block_tx_and_traces(&archiver, height, None, Some(trace_options.clone())).await.unwrap();
+        }
+        archiver.target.delete(&FileReference::new(
+            "archive/eth/000000000/000000000/000000101.block.avro".to_string(),
+            DataKind::Blocks,
+            Range::single(101),
+        )).await.unwrap();
+
+        let args = Args {
+            range: Some("100..110".to_string()),
+            tables: Some("blocks,txes".to_string()),
+            ..Default::default()
+        };
+        let command = VerifyCommand::new(&args, archiver).unwrap();
+        let result = command.execute().await;
+        if let Err(err) = result {
+            panic!("Failed: {:?}", err);
+        }
+
+        let after = testing::list_mem_filenames(mem).await;
+        assert_eq!(after, vec![
+            "archive/eth/000000000/000000000/000000100.block.avro",
+            "archive/eth/000000000/000000000/000000100.traces.avro",
+            "archive/eth/000000000/000000000/000000100.txes.avro",
+            "archive/eth/000000000/000000000/000000101.traces.avro",
+        ]);
+    }
+
+    #[tokio::test]
+    async fn rejects_tables_without_blocks() {
+        let mem = Arc::new(InMemory::new());
+        let archiver = create_archiver(mem);
+        let args = Args {
+            range: Some("100..110".to_string()),
+            tables: Some("txes,traces".to_string()),
+            ..Default::default()
+        };
+
+        assert!(VerifyCommand::new(&args, archiver).is_err());
     }
 
     fn blocks_group(range: Range) -> ArchiveGroup {
