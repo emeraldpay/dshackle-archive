@@ -32,23 +32,52 @@ use crate::{
     memory,
     metrics,
     progress,
-    storage::{FileReference, TargetFileReader, TargetFileWriter, ReadTarget},
+    storage::{FileReference, TargetFileWriter, ReadTarget},
 };
 use crate::archiver::datakind::{BlockOptions, TraceOptions, TxOptions};
 
 mod discrepancy;
+mod prefetch;
+mod running;
 use discrepancy::Discrepancy;
+use prefetch::{OpenSources, PrefetchedSources};
+use running::{FinishedChunk, RunningChunks, StartedChunk};
 
-#[derive(Clone)]
+/// How many chunks are compacted at the same time, unless set with `--compact.parallel`
+const DEFAULT_PARALLEL: usize = 4;
+
+///
+/// Merges the files of each chunk (`--range.chunk`) into a single range file per table, and deletes the merged files.
+/// Most of a chunk's time is waiting for the storage, so a few chunks are compacted at the same time
+/// (`--compact.parallel`).
 pub struct CompactCommand<B: BlockchainTypes, TS: ReadTarget> {
     b: PhantomData<B>,
     archiver: Archiver<B, TS>,
-    
+
     blocks: Blocks,
     chunk_size: usize,
+    /// How many chunks are compacted at the same time
+    parallel: usize,
+    open_sources: OpenSources,
     data_options: DataOptions,
     /// When set, the command only reports what it would compact, and neither writes nor deletes any file
     dry_run: bool,
+}
+
+// Manual `Clone`, because derive(Clone) would require `B: Clone` and `TS: Clone`, while the storage is shared via `Arc` anyway
+impl<B: BlockchainTypes, TS: ReadTarget> Clone for CompactCommand<B, TS> {
+    fn clone(&self) -> Self {
+        Self {
+            b: PhantomData,
+            archiver: self.archiver.clone(),
+            blocks: self.blocks.clone(),
+            chunk_size: self.chunk_size,
+            parallel: self.parallel,
+            open_sources: self.open_sources.clone(),
+            data_options: self.data_options.clone(),
+            dry_run: self.dry_run,
+        }
+    }
 }
 
 ///
@@ -112,11 +141,16 @@ impl<B: BlockchainTypes + 'static, TS: ReadTarget + 'static> CommandExecutor for
 
         let mut files = self.archiver.target.list(range.clone())?;
 
+        let mut running = RunningChunks::new(self.parallel);
         let mut current: Option<Range> = None;
         let mut current_files = vec![];
         while !shutdown.is_signalled() {
             tokio::select! {
                 _ = shutdown.signalled() => break,
+                // a finished chunk is cleaned up right away, as until then it has both the range files and the sources
+                Some(finished) = running.next_finished(), if !running.is_empty() => {
+                    self.finish_chunk(finished, &mut report).await;
+                },
                 f = files.recv() => {
                     match f {
                         Some(file) => {
@@ -134,7 +168,7 @@ impl<B: BlockchainTypes + 'static, TS: ReadTarget + 'static> CommandExecutor for
 
                             if !current_chunk.eq(relevant_chunk) {
                                 // the files of another chunk mean that all files of the current one are listed
-                                current_files = self.compact_chunk(current_chunk, current_files, &mut report).await;
+                                current_files = self.start_chunk(current_chunk, current_files, &mut running, &mut report).await;
                                 if shutdown.is_signalled() {
                                     break;
                                 }
@@ -156,8 +190,14 @@ impl<B: BlockchainTypes + 'static, TS: ReadTarget + 'static> CommandExecutor for
             // A range that ends in the middle of a chunk gives a short last chunk. Compacting it would make a short
             // range file, which is only to be read and written again once the rest of the chunk is archived
             if let Some(last_chunk) = current.filter(|chunk| chunk.len() == self.chunk_size) {
-                let _ = self.compact_chunk(&last_chunk, current_files, &mut report).await;
+                let _ = self.start_chunk(&last_chunk, current_files, &mut running, &mut report).await;
             }
+        }
+
+        // on a shutdown the running compactions stop by themselves, and are still waited for, so the files they
+        // finished are not left behind
+        while let Some(finished) = running.next_finished().await {
+            self.finish_chunk(finished, &mut report).await;
         }
 
         if shutdown.is_signalled() {
@@ -178,40 +218,71 @@ impl<B: BlockchainTypes+ 'static, TS: ReadTarget + 'static> CompactCommand<B, TS
             archiver,
             blocks: Blocks::try_from(config)?,
             chunk_size: config.range_chunk.unwrap_or(1000),
+            parallel: config.compact_parallel.unwrap_or(DEFAULT_PARALLEL),
+            open_sources: OpenSources::default(),
             data_options: DataOptions::from(config),
             dry_run: config.dry_run,
         })
     }
 
     ///
-    /// Compact the chunk, and delete the files that are copied into its range files.
+    /// Start compacting the chunk, once there is a free place for it among the running ones.
     ///
     /// Returns the files that are still needed after that, i.e. the files that cover blocks after the chunk
     /// and are the sources of the next one.
-    async fn compact_chunk(&self, chunk: &Range, files: Vec<FileReference>, report: &mut RunReport<Compaction>) -> Vec<FileReference> {
-        let compaction = self.compact_range(chunk, files.clone()).await;
-
-        // a compaction interrupted by a shutdown says nothing about the files, so keep all of them,
-        // and it's not a failure of the chunk either
+    async fn start_chunk(&self, chunk: &Range, files: Vec<FileReference>, running: &mut RunningChunks, report: &mut RunReport<Compaction>) -> Vec<FileReference> {
+        while running.is_full() {
+            let finished = running.next_finished().await
+                .expect("A full set of chunks has a chunk to finish");
+            self.finish_chunk(finished, report).await;
+        }
+        // the shutdown may come while waiting for a place, and a chunk started after it would only fail
         if global::get_shutdown().is_signalled() {
             return files;
         }
 
-        let (copied, next_files): (Vec<FileReference>, Vec<FileReference>) = files.into_iter()
+        let (copied, next_files): (Vec<FileReference>, Vec<FileReference>) = files.iter().cloned()
             .partition(|f| chunk.contains(&f.range) || f.range.end() < chunk.end());
 
-        match &compaction {
-            Ok(outcome) => report.on_range(*outcome, chunk, Some(copied.len())),
+        let command = self.clone();
+        let range = chunk.clone();
+        running.start(
+            StartedChunk { chunk: chunk.clone(), copied },
+            async move { command.compact_range(&range, files).await },
+        );
+
+        next_files
+    }
+
+    ///
+    /// Report the outcome of a chunk, and delete the files that are copied into its range files.
+    ///
+    /// The chunks finish in any order, and a chunk may be finished before the chunks listed ahead of it. That's
+    /// fine for the deletion, because a chunk is compacted only when its sources are entirely within it
+    /// (see `verify_files`), so the files of a compacted chunk are never the sources of another chunk.
+    async fn finish_chunk(&self, finished: FinishedChunk, report: &mut RunReport<Compaction>) {
+        let FinishedChunk { chunk, copied, outcome } = finished;
+
+        // A failure after a shutdown is most likely the shutdown itself, so it's not a failure of the chunk.
+        // A compacted chunk, on the other hand, has its range files complete, and its sources must be deleted even
+        // when shutting down, otherwise the next run sees each block twice and refuses to compact it.
+        // A chunk stopped by the shutdown is never `Done`, see `compact_range`.
+        if outcome.is_err() && global::get_shutdown().is_signalled() {
+            return;
+        }
+
+        match &outcome {
+            Ok(compaction) => report.on_range(*compaction, &chunk, Some(copied.len())),
             Err(failure) => {
                 match failure {
-                    Failure::Rejected(e) => tracing::warn!(range = display(chunk), "{}", e),
-                    Failure::Error(e) => tracing::error!(range = display(chunk), "Range is not compacted: {:#}", e),
+                    Failure::Rejected(e) => tracing::warn!(range = display(&chunk), "{}", e),
+                    Failure::Error(e) => tracing::error!(range = display(&chunk), "Range is not compacted: {:#}", e),
                 }
-                report.on_failure(chunk, Some(copied.len()), failure);
+                report.on_failure(&chunk, Some(copied.len()), failure);
             }
         }
 
-        match compaction {
+        match outcome {
             Ok(Compaction::Done) => {
                 let mut deleting = JoinSet::new();
                 for file in copied {
@@ -223,17 +294,15 @@ impl<B: BlockchainTypes+ 'static, TS: ReadTarget + 'static> CompactCommand<B, TS
                 let _ = deleting.join_all().await;
             },
             Ok(Compaction::DryRun) => {
-                tracing::info!(range = display(chunk), "Dry run, keeping {} source files that would be deleted", copied.len());
+                tracing::info!(range = display(&chunk), "Dry run, keeping {} source files that would be deleted", copied.len());
                 for file in copied {
-                    tracing::debug!(range = display(chunk), "Dry run, keeping the file that would be deleted: {}", file.path);
+                    tracing::debug!(range = display(&chunk), "Dry run, keeping the file that would be deleted: {}", file.path);
                 }
             },
             Ok(Compaction::AlreadyCompacted) | Err(_) => {},
         }
 
         let _ = memory::release().await;
-
-        next_files
     }
 
     ///
@@ -272,7 +341,8 @@ impl<B: BlockchainTypes+ 'static, TS: ReadTarget + 'static> CompactCommand<B, TS
                 self.archiver.target.clone(),
                 range.clone(),
                 complete.clone(),
-                status.clone()
+                status.clone(),
+                self.open_sources.clone(),
             );
             compactions.spawn(async move {
                 job.await
@@ -284,7 +354,8 @@ impl<B: BlockchainTypes+ 'static, TS: ReadTarget + 'static> CompactCommand<B, TS
                 self.archiver.target.clone(),
                 range.clone(),
                 complete.clone(),
-                status.clone()
+                status.clone(),
+                self.open_sources.clone(),
             );
             compactions.spawn(async move {
                 job.await
@@ -296,7 +367,8 @@ impl<B: BlockchainTypes+ 'static, TS: ReadTarget + 'static> CompactCommand<B, TS
                 self.archiver.target.clone(),
                 range.clone(),
                 complete.clone(),
-                status.clone()
+                status.clone(),
+                self.open_sources.clone(),
             );
             compactions.spawn(async move {
                 job.await
@@ -312,6 +384,13 @@ impl<B: BlockchainTypes+ 'static, TS: ReadTarget + 'static> CompactCommand<B, TS
                 // a panicked compaction must not kill the whole run, the caller just skips this range
                 Err(e) => return Err(anyhow!("Compaction of the range failed: {}", e).into()),
             }
+        }
+
+        // A shutdown may stop the copying without an error, as if the sources just ended. The part copied by then may
+        // still pass the validation, while the rest of the sources, which nobody has read, may have duplicates or
+        // conflicting records, so such a chunk must not become compacted and lose its sources.
+        if global::get_shutdown().is_signalled() {
+            return Err(anyhow!("Shutdown signalled").into());
         }
 
         status.lock().unwrap()
@@ -440,7 +519,8 @@ trait TableCompaction<T, B: BlockchainTypes, TS: ReadTarget> {
     async fn compact_table(target: Arc<TS>,
                            range: Range,
                            files: Arc<ArchivesList>,
-                           status: Arc<Mutex<CopiedStatus<B::TxId>>>) -> Result<TS::Writer>;
+                           status: Arc<Mutex<CopiedStatus<B::TxId>>>,
+                           open_sources: OpenSources) -> Result<TS::Writer>;
 }
 
 fn parse_block<B: BlockchainTypes>(record: &Record) -> Result<B::BlockParsed> {
@@ -456,26 +536,25 @@ fn parse_block<B: BlockchainTypes>(record: &Record) -> Result<B::BlockParsed> {
         .map_err(|e| anyhow!("Unable to parse block: {}", e))
 }
 
-impl<B: BlockchainTypes, TS: ReadTarget> TableCompaction<BlockOptions, B, TS> for CompactCommand<B, TS> {
+impl<B: BlockchainTypes, TS: ReadTarget + 'static> TableCompaction<BlockOptions, B, TS> for CompactCommand<B, TS> {
     async fn compact_table(target: Arc<TS>,
                            range: Range,
                            files: Arc<ArchivesList>,
-                           status: Arc<Mutex<CopiedStatus<B::TxId>>>) -> Result<TS::Writer> {
+                           status: Arc<Mutex<CopiedStatus<B::TxId>>>,
+                           open_sources: OpenSources) -> Result<TS::Writer> {
         let target_file = target.create(DataKind::Blocks, &range, true)
             .await
             .map_err(|e| anyhow!("Unable to create block file: {}", e))?
             .ok_or_else(|| anyhow!("Target file was not created"))?;
         let shutdown = global::get_shutdown();
 
-        for source_group in files.iter() {
+        let sources = files.iter().map(|group| group.blocks.clone().unwrap()).collect();
+        let mut sources = PrefetchedSources::new(target.clone(), sources, open_sources);
+        while let Some(source) = sources.next().await {
             if shutdown.is_signalled() {
                 return Err(anyhow!("Shutdown signalled"));
             }
-
-            let mut source = target
-                .open(source_group.blocks.as_ref().unwrap())
-                .await?
-                .read()?;
+            let mut source = source?.read()?;
 
             while !shutdown.is_signalled() {
                 tokio::select! {
@@ -527,25 +606,25 @@ fn parse_tx_id<B: BlockchainTypes>(record: &Record) -> Result<B::TxId> {
         .map_err(|_| anyhow!("Unable to parse txid"))
 }
 
-impl<B: BlockchainTypes, TS: ReadTarget> TableCompaction<TxOptions, B, TS> for CompactCommand<B, TS> {
+impl<B: BlockchainTypes, TS: ReadTarget + 'static> TableCompaction<TxOptions, B, TS> for CompactCommand<B, TS> {
     async fn compact_table(target: Arc<TS>,
                            range: Range,
                            files: Arc<ArchivesList>,
-                           status: Arc<Mutex<CopiedStatus<B::TxId>>>) -> Result<TS::Writer> {
+                           status: Arc<Mutex<CopiedStatus<B::TxId>>>,
+                           open_sources: OpenSources) -> Result<TS::Writer> {
         let target_file = target.create(DataKind::Transactions, &range, true)
             .await
             .map_err(|e| anyhow!("Unable to create tx file: {}", e))?
             .ok_or_else(|| anyhow!("Target file was not created"))?;
         let shutdown = global::get_shutdown();
 
-        for source_group in files.iter() {
+        let sources = files.iter().map(|group| group.txes.clone().unwrap()).collect();
+        let mut sources = PrefetchedSources::new(target.clone(), sources, open_sources);
+        while let Some(source) = sources.next().await {
             if shutdown.is_signalled() {
                 return Err(anyhow!("Shutdown signalled"));
             }
-            let mut source = target
-                .open(source_group.txes.as_ref().unwrap())
-                .await?
-                .read()?;
+            let mut source = source?.read()?;
 
             while !shutdown.is_signalled() {
                 tokio::select! {
@@ -580,25 +659,25 @@ impl<B: BlockchainTypes, TS: ReadTarget> TableCompaction<TxOptions, B, TS> for C
     }
 }
 
-impl<B: BlockchainTypes, TS: ReadTarget> TableCompaction<TraceOptions, B, TS> for CompactCommand<B, TS> {
+impl<B: BlockchainTypes, TS: ReadTarget + 'static> TableCompaction<TraceOptions, B, TS> for CompactCommand<B, TS> {
     async fn compact_table(target: Arc<TS>,
                            range: Range,
                            files: Arc<ArchivesList>,
-                           status: Arc<Mutex<CopiedStatus<B::TxId>>>) -> Result<TS::Writer> {
+                           status: Arc<Mutex<CopiedStatus<B::TxId>>>,
+                           open_sources: OpenSources) -> Result<TS::Writer> {
         let target_file = target.create(DataKind::TransactionTraces, &range, true)
             .await
             .map_err(|e| anyhow!("Unable to create trace file: {}", e))?
             .ok_or_else(|| anyhow!("Target file was not created"))?;
         let shutdown = global::get_shutdown();
 
-        for source_group in files.iter() {
+        let sources = files.iter().map(|group| group.traces.clone().unwrap()).collect();
+        let mut sources = PrefetchedSources::new(target.clone(), sources, open_sources);
+        while let Some(source) = sources.next().await {
             if shutdown.is_signalled() {
                 return Err(anyhow!("Shutdown signalled"));
             }
-            let mut source = target
-                .open(source_group.traces.as_ref().unwrap())
-                .await?
-                .read()?;
+            let mut source = source?.read()?;
 
             while !shutdown.is_signalled() {
                 tokio::select! {

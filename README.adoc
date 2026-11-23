@@ -140,6 +140,9 @@ Options:
       --fix.clean
           [Fix Command] Set to remove any existing data in whole chunk if any of tables is missing a block in the chunk or has broken values. Default is `false`, which deleted only tables with missing / corrupted data
 
+      --compact.parallel <COMPACT_PARALLEL>
+          [Compact Command] How many chunks (see `--range.chunk`) to compact at the same time. Range: 1..64. Default: 4. Each chunk reads and writes its own files, so the memory use grows with it, especially with large traces
+
       --quick
           [Verify Command] Check only that the files exist and are not empty, without reading them; i.e., trust that the range in a file name is the range of blocks in the file. Default is `false`, which reads all the files and verifies the data in them
 
@@ -301,6 +304,11 @@ Every message of one block goes to the same partition, selected by block height,
 
 Merge individual block files into larger range files.
 
+The chunks (`--range.chunk`) are compacted a few at a time, as set with `--compact.parallel` (default 4).
+A single chunk spends much of its time waiting for the storage (opening, uploading, and deleting its files), so on S3 running a few of them at the same time uses more of the bandwidth.
+Each running chunk holds its own reading and writing buffers, so the memory grows with the number of them.
+The source files are opened a few ahead of the one being copied, and all the running chunks together keep at most 128 of them open.
+
 When it's done, it logs a report in the following style:
 
 ----
@@ -365,6 +373,7 @@ The `archive`, `fix`, `verify` and `compact` commands give the freed memory back
 - `--memory.limit` is checked every 5 seconds, and when the process holds more than the limit, it releases the free memory without waiting for the background release.
   It cannot release the memory in use, so it's not a hard cap; set the container limit above it.
   If the memory stays above the limit, it releases again only after the memory grows by another 10% of the limit.
+- `compact` holds the buffers of each chunk it compacts at the same time, so its memory grows with `--compact.parallel`.
 - With `--metrics`, the `dshackleArchive_memory_bytes` gauge shows the memory by `type`: `allocated` is what the app uses, and `resident` is what the process holds.
 - jemalloc options are set with the `MALLOC_CONF` environment variable (`_RJEM_MALLOC_CONF` on macOS), e.g., `MALLOC_CONF=narenas:4,dirty_decay_ms:5000`.
   `background_thread:false` turns off the background release.
