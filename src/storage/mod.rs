@@ -33,6 +33,7 @@ use object_store::{
 };
 use tokio::sync::mpsc::Receiver;
 pub use read_budget::{ReadRecord, ReadReservation};
+pub use deletion::DeleteFailure;
 use url::Url;
 use itertools::Itertools;
 
@@ -43,6 +44,7 @@ pub mod kafka;
 pub mod objects;
 pub mod pulsar;
 mod avro_reader;
+mod deletion;
 mod object_reader;
 mod read_budget;
 mod sorted_files;
@@ -184,7 +186,8 @@ pub fn create_aws(value: &Args) -> Result<ObjectsStorage<AmazonS3>> {
     }
 
     builder = builder
-        .with_virtual_hosted_style_request(!aws.path_style);
+        .with_virtual_hosted_style_request(!aws.path_style)
+        .with_disable_bulk_delete(aws.no_bulk_delete);
 
     let bucket = {
         // AWS builder doesn't give access to the bucket name, so this is copied from its source code
@@ -251,7 +254,9 @@ pub fn create_aws_json(value: &Args) -> Result<JsonObjectsStorage<AmazonS3>> {
     if let Some(region) = &aws.region {
         builder = builder.with_region(region.clone());
     }
-    builder = builder.with_virtual_hosted_style_request(!aws.path_style);
+    builder = builder
+        .with_virtual_hosted_style_request(!aws.path_style)
+        .with_disable_bulk_delete(aws.no_bulk_delete);
 
     let bucket = {
         let parsed = Url::parse(value.dir.clone().unwrap().as_str())?;
@@ -329,6 +334,33 @@ pub trait ReadTarget: ScanTarget {
     ///
     /// Delete the file
     async fn delete(&self, path: &FileReference) -> Result<()>;
+
+    ///
+    /// Delete the files, as many at once as the storage handles well.
+    ///
+    /// By default the files are deleted one by one, a few of them at the same time. A storage that can delete
+    /// many files in a single request should use it instead.
+    async fn delete_all(&self, files: Vec<FileReference>) -> std::result::Result<(), DeleteFailure> {
+        use futures_util::StreamExt;
+
+        let results: Vec<(FileReference, Result<()>)> = futures_util::stream::iter(files)
+            .map(|file| async move {
+                let result = self.delete(&file).await;
+                (file, result)
+            })
+            .buffer_unordered(deletion::DELETE_PARALLEL)
+            .collect()
+            .await;
+        let mut not_deleted = vec![];
+        let mut first_error = None;
+        for (file, result) in results {
+            if let Err(e) = result {
+                first_error.get_or_insert_with(|| format!("{:#}", e));
+                not_deleted.push(file);
+            }
+        }
+        DeleteFailure::check(not_deleted, first_error)
+    }
 
     ///
     /// Open the file for reading

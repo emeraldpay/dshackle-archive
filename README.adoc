@@ -96,6 +96,9 @@ Options:
       --aws.s3.path-style
           Enable S3 Path Style access (default is false). Use this flag for a no-AWS service
 
+      --aws.s3.no-bulk-delete
+          Delete S3 objects one by one, instead of in batches with `DeleteObjects` (default is false). Use this flag for an S3 compatible service that doesn't support the batch deletion
+
       --aws.trust-tls
           Trust any TLS certificate for AWS / S3 (default is false)
 
@@ -308,6 +311,7 @@ Only the tables given with `--tables` are merged, and the files of other tables 
 The chunks (`--range.chunk`) are compacted a few at a time, as set with `--compact.parallel` (default 4).
 A single chunk spends much of its time waiting for the storage (opening, uploading, and deleting its files), so on S3 running a few of them at the same time uses more of the bandwidth.
 Each running chunk holds its own reading and writing buffers, so the memory grows with the number of them.
+On S3 the merged files are deleted in batches of up to 1000 with a single `DeleteObjects` request each; for a service that doesn't support it, use `--aws.s3.no-bulk-delete`.
 The source files are opened a few ahead of the one being copied, and all the running chunks together keep at most 128 of them open.
 
 When it's done, it logs a report in the following style:
@@ -319,6 +323,10 @@ Compact report for 21000000..21009999 (10 ranges)
   failed: 1 ranges, 2997 files, 1000 heights
     21004000..21004999: Range is missing data, archived only [21004000..21004998]. Please run Fix before Compaction. Skipping this range.
 ----
+
+A chunk can also be reported as `compacted, but source files are left (run Verify to delete them)`, with the number of the files left.
+Its range files are complete, but some of the merged files failed to be deleted, so the chunk has their blocks twice.
+Run `verify` before compacting it again: it keeps the range files and deletes the rest as duplicates.
 
 ==== Fix
 
