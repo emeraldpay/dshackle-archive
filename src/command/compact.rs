@@ -141,6 +141,7 @@ impl<B: BlockchainTypes + 'static, TS: ReadTarget + 'static> CommandExecutor for
 
         let mut files = self.archiver.target.list(range.clone())?;
 
+        let tables = self.data_options.files();
         let mut running = RunningChunks::new(self.parallel);
         let mut current: Option<Range> = None;
         let mut current_files = vec![];
@@ -154,6 +155,12 @@ impl<B: BlockchainTypes + 'static, TS: ReadTarget + 'static> CommandExecutor for
                 f = files.recv() => {
                     match f {
                         Some(file) => {
+                            // The archive may have tables that are not compacted this time (ex., traces when only
+                            // `--tables blocks,txes` is given). Such a file is not copied, so it must not be deleted
+                            // with the sources either; it's left for a compaction that includes its table.
+                            if !tables.include(file.kind) {
+                                continue;
+                            }
                             let relevant_chunk = chunks.iter().find(|c| c.is_intersected_with(&file.range));
                             if relevant_chunk.is_none() {
                                 continue;
@@ -1484,6 +1491,61 @@ mod tests {
         compact_cmd.execute().await.unwrap();
         let after_second = testing::list_mem_filenames(mem).await;
         assert_eq!(after_second, after_first);
+    }
+
+    ///
+    /// Compacting only some of the tables leaves the files of the other tables as they are
+    #[tokio::test(flavor = "multi_thread")]
+    async fn compact_command_keeps_tables_not_compacted() {
+        testing::start_test();
+
+        let mem = Arc::new(InMemory::new());
+        let data_provider: Arc<MockData> = Arc::new(MockData::new("TEST_KEEP_TRACES"));
+        let storage = ObjectsStorage::new(mem.clone(), "test".to_string(), Filenames::with_dir("archive/eth".to_string()));
+        let archiver = Archiver::new_simple(Arc::new(storage), data_provider.clone());
+        let trace_options = TraceOptions {
+            include_trace: true,
+            include_state_diff: true,
+        };
+
+        for block_height in 100..115u64 {
+            let txs = vec![format!("TX{}", block_height)];
+            data_provider.add_block(MockBlock {
+                height: block_height,
+                hash: format!("B{}", block_height),
+                parent: format!("B{}", block_height - 1),
+                transactions: txs.clone(),
+            });
+            for tx in &txs {
+                data_provider.add_tx(MockTx { hash: tx.clone() });
+                data_provider.add_trace(MockTrace {
+                    tx_hash: tx.clone(),
+                    trace_json: Some(format!(r#"{{"trace":"data for {}"}}"#, tx).into_bytes()),
+                    state_diff_json: Some(format!(r#"{{"diff":"state for {}"}}"#, tx).into_bytes()),
+                });
+            }
+            testing::write_block_tx_and_traces(&archiver, block_height, None, Some(trace_options.clone())).await.unwrap();
+        }
+
+        let args = Args {
+            range: Some("100..115".to_string()),
+            range_chunk: Some(10),
+            tables: Some("blocks,txes".to_string()),
+            ..Default::default()
+        };
+        let compact_cmd = CompactCommand::new(&args, archiver).unwrap();
+
+        compact_cmd.execute().await.unwrap();
+
+        let after = testing::list_mem_filenames(mem).await;
+        assert!(after.contains(&"archive/eth/000000000/range-000000100_000000109.blocks.avro".to_string()));
+        assert!(after.contains(&"archive/eth/000000000/range-000000100_000000109.txes.avro".to_string()));
+        assert!(!after.contains(&"archive/eth/000000000/range-000000100_000000109.traces.avro".to_string()));
+        for height in 100..110 {
+            assert!(!after.contains(&format!("archive/eth/000000000/000000000/{:09}.block.avro", height)));
+            assert!(!after.contains(&format!("archive/eth/000000000/000000000/{:09}.txes.avro", height)));
+            assert!(after.contains(&format!("archive/eth/000000000/000000000/{:09}.traces.avro", height)));
+        }
     }
 
     async fn archive_single_blocks(archiver: &Archiver<MockType, ObjectsStorage<InMemory>>, data_provider: &MockData, heights: std::ops::Range<u64>) {
