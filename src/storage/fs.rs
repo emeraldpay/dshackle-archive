@@ -67,10 +67,11 @@ impl ReadTarget for FsStorage {
 
     async fn delete(&self, path: &FileReference) -> Result<()> {
         let path = PathBuf::from(&path.path);
-        if !fs::exists(&path).map_err(|e| anyhow!("FS is not accessible: {}", e))? {
+        // async, so many files can be deleted at the same time without blocking the runtime thread
+        if !tokio::fs::try_exists(&path).await.map_err(|e| anyhow!("FS is not accessible: {}", e))? {
             return Ok(())
         }
-        let removed = fs::remove_file(&path);
+        let removed = tokio::fs::remove_file(&path).await;
         if let Err(err) = removed {
             return Err(anyhow!("Failed to remove file: {:?}", err));
         }

@@ -2,6 +2,7 @@
 //
 // Licensed under the Apache License, Version 2.0
 
+use std::collections::HashMap;
 use std::io::{Write};
 use std::sync::{Arc};
 use std::sync::atomic::{AtomicI64, Ordering};
@@ -30,7 +31,7 @@ use crate::global;
 use crate::notify::Location;
 use crate::record::ArchiveRow;
 use crate::storage::{
-    avro_reader, find_incomplete_by_listing, object_reader::ResumableObjectRead,
+    avro_reader, find_incomplete_by_listing, DeleteFailure, object_reader::ResumableObjectRead,
     sorted_files, FileReference, ReadTarget, RecordStream, ScanTarget, TargetFile,
     TargetFileReader, TargetFileWriter, WriteTarget,
 };
@@ -89,6 +90,23 @@ impl<S: ObjectStore> ReadTarget for ObjectsStorage<S> {
         Ok(())
     }
 
+    async fn delete_all(&self, files: Vec<FileReference>) -> Result<(), DeleteFailure> {
+        // S3 deletes up to 1000 objects in one `DeleteObjects` request, which takes about as long as a single
+        // `DELETE`, and is much less likely to be throttled than thousands of them
+        let mut left: HashMap<Path, FileReference> = files.into_iter()
+            .map(|file| (Path::from(file.path.clone()), file))
+            .collect();
+        let mut first_error = self.delete_batch(&mut left).await;
+        if !left.is_empty() {
+            // The `DeleteObjects` is a POST, which the client doesn't retry after a broken connection or a timeout,
+            // and it doesn't retry the errors of particular objects either. A batch is up to 1000 files, so a single
+            // network failure would leave all of them, while deleting a file again does no harm.
+            tracing::warn!("Failed to delete {} files, retrying: {}", left.len(), first_error.as_deref().unwrap_or("not confirmed"));
+            first_error = self.delete_batch(&mut left).await.or(first_error);
+        }
+        DeleteFailure::check(left.into_values().collect(), first_error)
+    }
+
     async fn open(&self, path: &FileReference) -> anyhow::Result<ExisingObjectsFile> {
         let object_path = Path::from(path.path.clone());
         let get_result = self.os.get(&object_path).await?;
@@ -129,6 +147,21 @@ impl<S: ObjectStore> ReadTarget for ObjectsStorage<S> {
 }
 
 impl<S: ObjectStore> ObjectsStorage<S> {
+    ///
+    /// Delete the objects, removing each one confirmed as deleted from `left`. Returns the first error, if any.
+    async fn delete_batch(&self, left: &mut HashMap<Path, FileReference>) -> Option<String> {
+        let paths: Vec<object_store::Result<Path>> = left.keys().cloned().map(Ok).collect();
+        let mut results = self.os.delete_stream(futures_util::stream::iter(paths).boxed());
+        let mut first_error = None;
+        while let Some(result) = results.next().await {
+            match result {
+                Ok(path) => { left.remove(&path); },
+                Err(e) => { first_error.get_or_insert_with(|| e.to_string()); },
+            }
+        }
+        first_error
+    }
+
     async fn list_single(os: Arc<S>, tx: Sender<FileReference>, filenames: Filenames, range: &Range) {
         let level = LevelDouble::new(&filenames, range.start());
         let offset = filenames.offset(&range.first());

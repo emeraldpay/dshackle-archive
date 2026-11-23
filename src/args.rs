@@ -339,6 +339,10 @@ pub struct Aws {
     #[arg(long = "aws.s3.path-style", aliases = vec!["aws.s3.pathStyle", "aws.s3.pathstyle", "aws-s3-path-style"])]
     pub path_style: bool,
 
+    /// Delete S3 objects one by one, instead of in batches with `DeleteObjects` (default is false). Use this flag for an S3 compatible service that doesn't support the batch deletion
+    #[arg(long = "aws.s3.no-bulk-delete", aliases = vec!["aws.s3.noBulkDelete", "aws-s3-no-bulk-delete"])]
+    pub no_bulk_delete: bool,
+
     /// Trust any TLS certificate for AWS / S3 (default is false)
     #[arg(long = "aws.trust-tls", aliases = vec!["aws.trustTls", "aws.trusttls", "aws-trust-tls"])]
     pub trust_tls: bool,
@@ -461,6 +465,7 @@ impl Default for Aws {
             endpoint: None,
             region: None,
             path_style: false,
+            no_bulk_delete: false,
             trust_tls: false,
         }
     }

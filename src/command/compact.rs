@@ -86,6 +86,9 @@ impl<B: BlockchainTypes, TS: ReadTarget> Clone for CompactCommand<B, TS> {
 enum Compaction {
     /// All the sources are copied into the range files, so the sources are not needed anymore
     Done,
+    /// The range files are complete, but some of the sources failed to be deleted. Until they're gone, the chunk has
+    /// each of their blocks twice, and Verify is the one to delete them, as duplicates of the range
+    SourcesLeft,
     /// The sources are fine to make the range files of, but nothing is written because of the dry-run mode
     DryRun,
     /// The chunk is a single range file already, so it stays as it is
@@ -96,6 +99,7 @@ impl Display for Compaction {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
             Compaction::Done => write!(f, "compacted"),
+            Compaction::SourcesLeft => write!(f, "compacted, but source files are left (run Verify to delete them)"),
             Compaction::DryRun => write!(f, "would be compacted (dry run)"),
             Compaction::AlreadyCompacted => write!(f, "already compacted"),
         }
@@ -278,35 +282,42 @@ impl<B: BlockchainTypes+ 'static, TS: ReadTarget + 'static> CompactCommand<B, TS
             return;
         }
 
-        match &outcome {
-            Ok(compaction) => report.on_range(*compaction, &chunk, Some(copied.len())),
-            Err(failure) => {
-                match failure {
-                    Failure::Rejected(e) => tracing::warn!(range = display(&chunk), "{}", e),
-                    Failure::Error(e) => tracing::error!(range = display(&chunk), "Range is not compacted: {:#}", e),
-                }
-                report.on_failure(&chunk, Some(copied.len()), failure);
-            }
-        }
-
+        let sources = copied.len();
         match outcome {
             Ok(Compaction::Done) => {
-                let mut deleting = JoinSet::new();
-                for file in copied {
-                    let target = self.archiver.target.clone();
-                    deleting.spawn(async move {
-                        let _ = target.delete(&file).await;
-                    });
+                match self.archiver.target.delete_all(copied).await {
+                    Ok(()) => report.on_range(Compaction::Done, &chunk, Some(sources)),
+                    Err(failure) => {
+                        // Run Verify before compacting the chunk again: with the sources left, the chunk has the range
+                        // files as its source too, and Verify is what knows to keep the range and delete the rest
+                        tracing::error!(
+                            range = display(&chunk),
+                            "Range is compacted, but {} of {} source files are not deleted ({}). Run Verify to delete them as duplicates of the range.",
+                            failure.files.len(), sources, failure.reason,
+                        );
+                        for file in &failure.files {
+                            tracing::debug!(range = display(&chunk), "Source file is not deleted: {}", file.path);
+                        }
+                        // the count is of the files left, as that's what needs attention
+                        report.on_range(Compaction::SourcesLeft, &chunk, Some(failure.files.len()));
+                    }
                 }
-                let _ = deleting.join_all().await;
             },
             Ok(Compaction::DryRun) => {
-                tracing::info!(range = display(&chunk), "Dry run, keeping {} source files that would be deleted", copied.len());
+                tracing::info!(range = display(&chunk), "Dry run, keeping {} source files that would be deleted", sources);
                 for file in copied {
                     tracing::debug!(range = display(&chunk), "Dry run, keeping the file that would be deleted: {}", file.path);
                 }
+                report.on_range(Compaction::DryRun, &chunk, Some(sources));
             },
-            Ok(Compaction::AlreadyCompacted) | Err(_) => {},
+            Ok(outcome @ (Compaction::AlreadyCompacted | Compaction::SourcesLeft)) => report.on_range(outcome, &chunk, Some(sources)),
+            Err(failure) => {
+                match &failure {
+                    Failure::Rejected(e) => tracing::warn!(range = display(&chunk), "{}", e),
+                    Failure::Error(e) => tracing::error!(range = display(&chunk), "Range is not compacted: {:#}", e),
+                }
+                report.on_failure(&chunk, Some(sources), failure);
+            }
         }
 
         let _ = memory::release().await;
