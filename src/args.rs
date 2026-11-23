@@ -121,6 +121,12 @@ pub struct Args {
     pub fix_clean: bool,
 
     ///
+    /// [Compact Command] How many chunks (see `--range.chunk`) to compact at the same time. Range: 1..64. Default: 4.
+    /// Each chunk reads and writes its own files, so the memory use grows with it, especially with large traces.
+    #[arg(long = "compact.parallel", alias = "compact-parallel", value_parser = clap::builder::RangedU64ValueParser::<usize>::new().range(1..=64))]
+    pub compact_parallel: Option<usize>,
+
+    ///
     /// [Verify Command] Check only that the files exist and are not empty, without reading them; i.e., trust that the range in a file name is the range of blocks in the file.
     /// Default is `false`, which reads all the files and verifies the data in them.
     #[arg(long = "quick")]
@@ -202,6 +208,7 @@ impl Default for Args {
             tables: Some("blocks,txes".to_string()),
             fields_trace: Some("calls,stateDiff".to_string()),
             fix_clean: false,
+            compact_parallel: None,
             quick: false,
             compression: None,
             retry: None,
