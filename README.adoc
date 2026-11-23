@@ -303,6 +303,7 @@ Every message of one block goes to the same partition, selected by block height,
 ==== Compact
 
 Merge individual block files into larger range files.
+Only the tables given with `--tables` are merged, and the files of other tables are left as they are.
 
 The chunks (`--range.chunk`) are compacted a few at a time, as set with `--compact.parallel` (default 4).
 A single chunk spends much of its time waiting for the storage (opening, uploading, and deleting its files), so on S3 running a few of them at the same time uses more of the bandwidth.
@@ -338,6 +339,9 @@ Verify that archive files contains required data and delete incomplete/corrupted
 The a `fix` command is supposed to run to download missing blocks.
 
 WARNING: This command is destructive, it deletes files from the archive.
+
+Only the tables given with `--tables` are verified, and only they are deleted; the files of other tables are left as they are, as the `fix` that follows with the same `--tables` would not restore them.
+The tables are verified against the blocks, so `--tables` must include `blocks`.
 
 Reading the whole archive takes a long time.
 With `--quick` the command doesn't read the files, it only checks which files exist and that they are not empty.
