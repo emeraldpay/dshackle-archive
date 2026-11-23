@@ -37,7 +37,9 @@ use crate::{
 use crate::archiver::datakind::{BlockOptions, TraceOptions, TxOptions};
 
 mod discrepancy;
+mod prefetch;
 use discrepancy::Discrepancy;
+use prefetch::PrefetchedSources;
 
 #[derive(Clone)]
 pub struct CompactCommand<B: BlockchainTypes, TS: ReadTarget> {
@@ -456,7 +458,7 @@ fn parse_block<B: BlockchainTypes>(record: &Record) -> Result<B::BlockParsed> {
         .map_err(|e| anyhow!("Unable to parse block: {}", e))
 }
 
-impl<B: BlockchainTypes, TS: ReadTarget> TableCompaction<BlockOptions, B, TS> for CompactCommand<B, TS> {
+impl<B: BlockchainTypes, TS: ReadTarget + 'static> TableCompaction<BlockOptions, B, TS> for CompactCommand<B, TS> {
     async fn compact_table(target: Arc<TS>,
                            range: Range,
                            files: Arc<ArchivesList>,
@@ -467,15 +469,13 @@ impl<B: BlockchainTypes, TS: ReadTarget> TableCompaction<BlockOptions, B, TS> fo
             .ok_or_else(|| anyhow!("Target file was not created"))?;
         let shutdown = global::get_shutdown();
 
-        for source_group in files.iter() {
+        let sources = files.iter().map(|group| group.blocks.clone().unwrap()).collect();
+        let mut sources = PrefetchedSources::new(target.clone(), sources);
+        while let Some(source) = sources.next().await {
             if shutdown.is_signalled() {
                 return Err(anyhow!("Shutdown signalled"));
             }
-
-            let mut source = target
-                .open(source_group.blocks.as_ref().unwrap())
-                .await?
-                .read()?;
+            let mut source = source?.read()?;
 
             while !shutdown.is_signalled() {
                 tokio::select! {
@@ -527,7 +527,7 @@ fn parse_tx_id<B: BlockchainTypes>(record: &Record) -> Result<B::TxId> {
         .map_err(|_| anyhow!("Unable to parse txid"))
 }
 
-impl<B: BlockchainTypes, TS: ReadTarget> TableCompaction<TxOptions, B, TS> for CompactCommand<B, TS> {
+impl<B: BlockchainTypes, TS: ReadTarget + 'static> TableCompaction<TxOptions, B, TS> for CompactCommand<B, TS> {
     async fn compact_table(target: Arc<TS>,
                            range: Range,
                            files: Arc<ArchivesList>,
@@ -538,14 +538,13 @@ impl<B: BlockchainTypes, TS: ReadTarget> TableCompaction<TxOptions, B, TS> for C
             .ok_or_else(|| anyhow!("Target file was not created"))?;
         let shutdown = global::get_shutdown();
 
-        for source_group in files.iter() {
+        let sources = files.iter().map(|group| group.txes.clone().unwrap()).collect();
+        let mut sources = PrefetchedSources::new(target.clone(), sources);
+        while let Some(source) = sources.next().await {
             if shutdown.is_signalled() {
                 return Err(anyhow!("Shutdown signalled"));
             }
-            let mut source = target
-                .open(source_group.txes.as_ref().unwrap())
-                .await?
-                .read()?;
+            let mut source = source?.read()?;
 
             while !shutdown.is_signalled() {
                 tokio::select! {
@@ -580,7 +579,7 @@ impl<B: BlockchainTypes, TS: ReadTarget> TableCompaction<TxOptions, B, TS> for C
     }
 }
 
-impl<B: BlockchainTypes, TS: ReadTarget> TableCompaction<TraceOptions, B, TS> for CompactCommand<B, TS> {
+impl<B: BlockchainTypes, TS: ReadTarget + 'static> TableCompaction<TraceOptions, B, TS> for CompactCommand<B, TS> {
     async fn compact_table(target: Arc<TS>,
                            range: Range,
                            files: Arc<ArchivesList>,
@@ -591,14 +590,13 @@ impl<B: BlockchainTypes, TS: ReadTarget> TableCompaction<TraceOptions, B, TS> fo
             .ok_or_else(|| anyhow!("Target file was not created"))?;
         let shutdown = global::get_shutdown();
 
-        for source_group in files.iter() {
+        let sources = files.iter().map(|group| group.traces.clone().unwrap()).collect();
+        let mut sources = PrefetchedSources::new(target.clone(), sources);
+        while let Some(source) = sources.next().await {
             if shutdown.is_signalled() {
                 return Err(anyhow!("Shutdown signalled"));
             }
-            let mut source = target
-                .open(source_group.traces.as_ref().unwrap())
-                .await?
-                .read()?;
+            let mut source = source?.read()?;
 
             while !shutdown.is_signalled() {
                 tokio::select! {
