@@ -266,8 +266,7 @@ impl<B: BlockchainTypes+ 'static, TS: ReadTarget + 'static> CompactCommand<B, TS
         // A failure after a shutdown is most likely the shutdown itself, so it's not a failure of the chunk.
         // A compacted chunk, on the other hand, has its range files complete, and its sources must be deleted even
         // when shutting down, otherwise the next run sees each block twice and refuses to compact it.
-        // Note that a shutdown may also stop the copying without an error, as if a source just ended. Such a chunk is
-        // still not `Done`, because the copied records are validated against the range before the files are closed.
+        // A chunk stopped by the shutdown is never `Done`, see `compact_range`.
         if outcome.is_err() && global::get_shutdown().is_signalled() {
             return;
         }
@@ -385,6 +384,13 @@ impl<B: BlockchainTypes+ 'static, TS: ReadTarget + 'static> CompactCommand<B, TS
                 // a panicked compaction must not kill the whole run, the caller just skips this range
                 Err(e) => return Err(anyhow!("Compaction of the range failed: {}", e).into()),
             }
+        }
+
+        // A shutdown may stop the copying without an error, as if the sources just ended. The part copied by then may
+        // still pass the validation, while the rest of the sources, which nobody has read, may have duplicates or
+        // conflicting records, so such a chunk must not become compacted and lose its sources.
+        if global::get_shutdown().is_signalled() {
+            return Err(anyhow!("Shutdown signalled").into());
         }
 
         status.lock().unwrap()
@@ -553,7 +559,7 @@ impl<B: BlockchainTypes, TS: ReadTarget + 'static> TableCompaction<BlockOptions,
             while !shutdown.is_signalled() {
                 tokio::select! {
                     _ = shutdown.signalled() => return Err(anyhow!("Shutdown signalled")),
-                    record = source.records.recv() => {
+                    record = source.recv() => {
                         match record {
                             // The sources are deleted once the range is copied, so a file that stopped
                             // being readable must stop the whole compaction instead of copying a part of it
@@ -623,7 +629,7 @@ impl<B: BlockchainTypes, TS: ReadTarget + 'static> TableCompaction<TxOptions, B,
             while !shutdown.is_signalled() {
                 tokio::select! {
                     _ = shutdown.signalled() => return Err(anyhow!("Shutdown signalled")),
-                    record = source.records.recv() => {
+                    record = source.recv() => {
                         match record {
                             // See the blocks compaction on why a failed read is not just an end of the file
                             Some(Err(failure)) => return Err(failure.into()),
@@ -676,7 +682,7 @@ impl<B: BlockchainTypes, TS: ReadTarget + 'static> TableCompaction<TraceOptions,
             while !shutdown.is_signalled() {
                 tokio::select! {
                     _ = shutdown.signalled() => return Err(anyhow!("Shutdown signalled")),
-                    record = source.records.recv() => {
+                    record = source.recv() => {
                         match record {
                             // See the blocks compaction on why a failed read is not just an end of the file
                             Some(Err(failure)) => return Err(failure.into()),

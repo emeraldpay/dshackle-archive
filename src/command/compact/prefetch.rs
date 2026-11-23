@@ -12,7 +12,7 @@ use std::sync::Arc;
 use anyhow::{anyhow, Result};
 use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 use tokio_util::task::AbortOnDropHandle;
-use crate::storage::{FileReference, ReadTarget, RecordStream, TargetFileReader};
+use crate::storage::{FileReference, ReadFailure, ReadRecord, ReadTarget, RecordStream, TargetFileReader};
 
 /// How many sources are opened ahead of the one being copied.
 ///
@@ -54,18 +54,55 @@ pub(super) struct OpenedSource<R> {
 impl<R: TargetFileReader> OpenedSource<R> {
     pub(super) fn read(self) -> Result<ReadingSource> {
         Ok(ReadingSource {
-            records: self.reader.read()?,
-            _permit: self.permit,
+            records: Some(self.reader.read()?),
+            ended: false,
+            permit: Some(self.permit),
         })
     }
 }
 
 ///
-/// The records of an open source. The source stays counted as open until it's dropped, since that's when its
-/// reader is stopped and the file is closed.
+/// The records of an open source.
+///
+/// The records are decoded by a separate producer, which holds the file (or the HTTP response) until it exits, and
+/// that may be well after the consumer has stopped. So the source counts as open until the producer is gone.
 pub(super) struct ReadingSource {
-    pub records: RecordStream,
-    _permit: OwnedSemaphorePermit,
+    records: Option<RecordStream>,
+    /// The producer is known to be gone, as the stream gives no records after that
+    ended: bool,
+    permit: Option<OwnedSemaphorePermit>,
+}
+
+impl ReadingSource {
+    pub(super) async fn recv(&mut self) -> Option<std::result::Result<ReadRecord, ReadFailure>> {
+        let record = self.records.as_mut()?.recv().await;
+        if record.is_none() {
+            self.ended = true;
+        }
+        record
+    }
+}
+
+impl Drop for ReadingSource {
+    fn drop(&mut self) {
+        if self.ended {
+            return;
+        }
+        let (Some(mut records), Some(permit)) = (self.records.take(), self.permit.take()) else {
+            return;
+        };
+        // The closed stream makes the producer stop at its next record, and the stream ends once it's gone.
+        // Until then the buffered records are dropped as well, since the producer may wait for their memory.
+        records.close();
+        // without a runtime the process is ending anyway, and there is nothing left to limit
+        let Ok(runtime) = tokio::runtime::Handle::try_current() else {
+            return;
+        };
+        runtime.spawn(async move {
+            while records.recv().await.is_some() {}
+            drop(permit);
+        });
+    }
 }
 
 ///
@@ -73,11 +110,11 @@ pub(super) struct ReadingSource {
 struct Opening<R> {
     size: u64,
     path: String,
-    permit: OwnedSemaphorePermit,
     /// The opening runs as a separate task, because a future would progress only while it's polled,
     /// and it's not polled while the previous source is copied.
-    /// Aborted on drop, so a compaction that stopped doesn't leave them running.
-    task: AbortOnDropHandle<Result<R>>,
+    /// Aborted on drop, so a compaction that stopped doesn't leave them running. The task holds the place of the
+    /// source until it's actually stopped, as a request may be still going on after the abort.
+    task: AbortOnDropHandle<(Result<R>, OwnedSemaphorePermit)>,
 }
 
 ///
@@ -124,9 +161,9 @@ impl<TS: ReadTarget + 'static> PrefetchedSources<TS> {
         let path = source.path.clone();
         let target = self.target.clone();
         let task = tokio::spawn(async move {
-            target.open(&source).await
+            (target.open(&source).await, permit)
         });
-        self.opening.push_back(Opening { size, path, permit, task: AbortOnDropHandle::new(task) });
+        self.opening.push_back(Opening { size, path, task: AbortOnDropHandle::new(task) });
     }
 
     /// Bytes to copy before the next source to open is read
@@ -155,12 +192,14 @@ impl<TS: ReadTarget + 'static> PrefetchedSources<TS> {
             let source = self.waiting.next()?;
             self.open(source, permit);
         }
-        let Opening { size, path, permit, task } = self.opening.pop_front()?;
+        let Opening { size, path, task } = self.opening.pop_front()?;
         self.copying = size;
         self.open_ahead();
-        let opened = task.await
-            .unwrap_or_else(|e| Err(anyhow!("Opening {} failed: {}", path, e)))
-            .map(|reader| OpenedSource { reader, permit });
+        let opened = match task.await {
+            Ok((Ok(reader), permit)) => Ok(OpenedSource { reader, permit }),
+            Ok((Err(e), _)) => Err(e),
+            Err(e) => Err(anyhow!("Opening {} failed: {}", path, e)),
+        };
         Some(opened)
     }
 }
@@ -257,10 +296,12 @@ mod tests {
 
         let first = sources.next().await.unwrap().unwrap();
         assert_eq!(sources.opening.len(), 0);
-        let reading = first.read().unwrap();
+        let mut reading = first.read().unwrap();
         assert_eq!(open_sources.0.available_permits(), 0);
 
+        while reading.recv().await.is_some() {}
         drop(reading);
+        assert_eq!(open_sources.0.available_permits(), 1);
         drop(held);
         assert!(sources.next().await.unwrap().is_ok());
         assert_eq!(sources.opening.len(), 1);
@@ -282,5 +323,23 @@ mod tests {
         drop(held);
         assert!(sources.next().await.unwrap().is_ok());
         assert!(sources.next().await.is_none());
+    }
+
+    #[tokio::test]
+    async fn releases_source_dropped_before_its_end() {
+        testing::start_test();
+        let (storage, files) = storage_with_files(1).await;
+        let open_sources = OpenSources::default();
+
+        let mut sources = PrefetchedSources::new(storage, files, open_sources.clone());
+        let reading = sources.next().await.unwrap().unwrap().read().unwrap();
+        drop(reading);
+
+        let released = tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            while open_sources.0.available_permits() < MAX_OPEN_SOURCES {
+                tokio::task::yield_now().await;
+            }
+        }).await;
+        assert!(released.is_ok(), "Source is never released");
     }
 }
