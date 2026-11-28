@@ -93,9 +93,9 @@ where
         // previous process didn't finish), so there's no re-org signal — use
         // a never-cancelled token.
         let cancel = CancellationToken::new();
-        for (range, kinds) in missing {
-            let range_opts = options.clone().only_include(&kinds);
-            for height in range.iter().collect::<Vec<u64>>() {
+        for missing in missing {
+            let range_opts = options.clone().only_include(&missing.kinds);
+            for height in missing.range.iter().collect::<Vec<u64>>() {
                 self.archiver
                     .archive(Height::from(height), RunMode::Stream, None, &range_opts, &cancel)
                     .await?;

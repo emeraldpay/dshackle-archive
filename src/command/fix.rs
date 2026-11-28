@@ -7,7 +7,7 @@ use std::marker::PhantomData;
 use anyhow::anyhow;
 use async_trait::async_trait;
 use tokio_util::sync::CancellationToken;
-use crate::{archiver::{ArchiveAll, Archiver}, args::{Args, Command}, blockchain::BlockchainTypes, command::{CommandExecutor, report::RunReport}, global, memory, notify::RunMode, storage::ScanTarget};
+use crate::{archiver::{ArchiveAll, Archiver}, args::{Args, Command}, blockchain::BlockchainTypes, command::{CommandExecutor, report::RunReport}, global, memory, notify::RunMode, storage::{MissingTables, ScanTarget}};
 use crate::archiver::blocks_config::Blocks;
 use crate::archiver::datakind::DataOptions;
 use crate::archiver::range::Range;
@@ -96,13 +96,18 @@ impl<B: BlockchainTypes, TS: ScanTarget> CommandExecutor for FixCommand<B, TS> {
         let mut already_archived = RangeBag::new();
         already_archived.append(range.clone());
         let mut chunked: Vec<(Vec<Range>, DataOptions)> = vec![];
-        for (missing_range, kinds) in missing {
-            already_archived.remove(&missing_range);
-            tracing::info!(range = %missing_range, "Found missing data: {:?}", kinds);
-            let chunks = missing_range.split_chunks(self.chunk_size, false);
-            chunked.push((chunks, options.clone().only_include(&kinds)));
+        let mut unfixable: Vec<MissingTables> = vec![];
+        for missing in missing {
+            already_archived.remove(&missing.range);
+            tracing::info!(range = %missing.range, "Found missing data: {:?}", missing.kinds);
+            match missing.chunks(self.chunk_size) {
+                Some(chunks) => chunked.push((chunks, options.clone().only_include(&missing.kinds))),
+                None => unfixable.push(missing),
+            }
         }
-        let planned = already_archived.len() + chunked.iter().map(|(chunks, _)| chunks.len()).sum::<usize>();
+        let planned = already_archived.len()
+            + unfixable.len()
+            + chunked.iter().map(|(chunks, _)| chunks.len()).sum::<usize>();
         let mut report = RunReport::new(Command::Fix, range, planned);
         // the scan stops at a shutdown and gives only what it found by then, so the rest is not known to be archived
         if !shutdown.is_signalled() {
@@ -111,9 +116,22 @@ impl<B: BlockchainTypes, TS: ScanTarget> CommandExecutor for FixCommand<B, TS> {
             }
         }
 
+        let mut failed: Vec<Range> = vec![];
+        // Archiving them would only add files next to the existing ones, under another name, and every following run
+        // would find the same tables missing. It needs Verify to delete the existing files first.
+        for missing in unfixable {
+            let kinds = missing.kinds.iter().map(|k| k.to_string()).collect::<Vec<_>>().join("+");
+            let reason = format!(
+                "Range has an incomplete archive that Fix cannot complete with chunks of {} blocks (no {}). Please run Verify with --fix.clean before Fix.",
+                self.chunk_size, kinds,
+            );
+            tracing::warn!(range = %missing.range, "{}", reason);
+            report.on_failure(&missing.range, None, reason);
+            failed.push(missing.range);
+        }
+
         // `fix` runs against settled archive state — no re-org signal applies.
         let cancel = CancellationToken::new();
-        let mut failed: Vec<Range> = vec![];
         for (chunks, options) in chunked {
             if shutdown.is_signalled() {
                 break;
@@ -153,5 +171,60 @@ impl<B: BlockchainTypes, TS: ScanTarget> CommandExecutor for FixCommand<B, TS> {
             return Err(anyhow!("Failed to fix {} chunk(s): {}", failed.len(), ranges));
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+    use futures_util::StreamExt;
+    use object_store::memory::InMemory;
+    use object_store::path::Path;
+    use object_store::{ObjectStore, ObjectStoreExt, PutPayload};
+    use crate::archiver::Archiver;
+    use crate::archiver::filenames::Filenames;
+    use crate::args::Args;
+    use crate::blockchain::mock::{MockData, MockType};
+    use crate::command::CommandExecutor;
+    use crate::command::fix::FixCommand;
+    use crate::storage::objects::ObjectsStorage;
+    use crate::testing;
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn fails_on_single_block_range_file_and_keeps_files() {
+        testing::start_test();
+        let files = [
+            "archive/eth/000000000/000000000/000000105.block.avro",
+            "archive/eth/000000000/000000000/000000105.txes.avro",
+            "archive/eth/000000000/range-000000105_000000105.blocks.avro",
+        ];
+        let mem = Arc::new(InMemory::new());
+        for path in files {
+            mem.put(&Path::from(path), PutPayload::from_static(b"data")).await.unwrap();
+        }
+        let storage = ObjectsStorage::new(mem.clone(), "test".to_string(), Filenames::with_dir("archive/eth".to_string()));
+        let archiver: Archiver<MockType, ObjectsStorage<InMemory>> = Archiver::new_simple(
+            Arc::new(storage),
+            Arc::new(MockData::new("test")),
+        );
+        let args = Args {
+            range: Some("105..105".to_string()),
+            range_chunk: Some(10),
+            ..Default::default()
+        };
+
+        let result = FixCommand::new(&args, archiver).unwrap()
+            .execute().await;
+
+        assert!(result.is_err());
+        let mut left: Vec<String> = mem.list(None)
+            .map(|meta| meta.unwrap().location.to_string())
+            .collect().await;
+        left.sort();
+        assert_eq!(left, vec![
+            "archive/eth/000000000/000000000/000000105.block.avro",
+            "archive/eth/000000000/000000000/000000105.txes.avro",
+            "archive/eth/000000000/range-000000105_000000105.blocks.avro",
+        ]);
     }
 }

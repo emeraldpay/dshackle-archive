@@ -341,6 +341,10 @@ Fix report for 21000000..21009999 (4 ranges)
     21005000..21005999: Failed to fetch block 21005321: Request timeout
 ----
 
+A table missing from a range file is archived for the same range, so it completes the existing files.
+When it cannot be, ex. the range contains other corrupted files, the range is reported as failed.
+Run `verify --fix.clean` for such a range first, and then `fix`.
+
 ==== Verify
 
 Verify that archive files contains required data and delete incomplete/corrupted files.

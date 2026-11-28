@@ -31,7 +31,7 @@ use crate::global;
 use crate::notify::Location;
 use crate::record::ArchiveRow;
 use crate::storage::{
-    avro_reader, find_incomplete_by_listing, DeleteFailure, object_reader::ResumableObjectRead,
+    avro_reader, find_incomplete_by_listing, DeleteFailure, MissingTables, object_reader::ResumableObjectRead,
     sorted_files, FileReference, ReadTarget, RecordStream, ScanTarget, TargetFile,
     TargetFileReader, TargetFileWriter, WriteTarget,
 };
@@ -71,7 +71,7 @@ impl<S: ObjectStore> ScanTarget for ObjectsStorage<S> {
         &self,
         blocks: Range,
         tx_options: &DataOptions,
-    ) -> anyhow::Result<Vec<(Range, Vec<DataKind>)>> {
+    ) -> anyhow::Result<Vec<MissingTables>> {
         find_incomplete_by_listing(self, blocks, tx_options).await
     }
 }
