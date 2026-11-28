@@ -27,7 +27,7 @@ use crate::archiver::range::Range;
 use crate::formats::json;
 use crate::notify::{FileGroup, Location, RowFiles};
 use crate::record::ArchiveRow;
-use crate::storage::{ScanTarget, TargetFile, TargetFileWriter, WriteTarget};
+use crate::storage::{MissingTables, ScanTarget, TargetFile, TargetFileWriter, WriteTarget};
 
 pub struct JsonObjectsStorage<S: ObjectStore> {
     os: Arc<S>,
@@ -91,7 +91,7 @@ impl<S: ObjectStore> ScanTarget for JsonObjectsStorage<S> {
         &self,
         blocks: Range,
         tx_options: &DataOptions,
-    ) -> Result<Vec<(Range, Vec<DataKind>)>> {
+    ) -> Result<Vec<MissingTables>> {
         let mut per_height: HashMap<u64, Vec<DataKind>> = HashMap::new();
         // Collect heights up front — Range::iter() returns a non-Send iterator
         // we can't hold across an .await.
@@ -345,8 +345,8 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(incomplete.len(), 1);
-        assert_eq!(incomplete[0].0, Range::new(101, 102));
-        let mut kinds = incomplete[0].1.clone();
+        assert_eq!(incomplete[0].range, Range::new(101, 102));
+        let mut kinds = incomplete[0].kinds.clone();
         kinds.sort();
         assert_eq!(kinds, vec![DataKind::Blocks, DataKind::Transactions]);
     }

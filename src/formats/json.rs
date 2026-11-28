@@ -35,6 +35,7 @@ use crate::archiver::range::Range;
 use crate::archiver::range_bag::RangeBag;
 use crate::notify::FileSlot;
 use crate::record::{ArchiveRow, BlockchainType, Field};
+use crate::storage::{Completion, MissingTables};
 
 /// A single file produced by [`encode_row`].
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -174,9 +175,9 @@ where
 
 /// Collapse a per-height missing-kinds map into the shape that
 /// [`crate::storage::ScanTarget::find_incomplete_tables`] returns: one
-/// `(Range, Vec<DataKind>)` entry per contiguous run of heights that share the
-/// same missing-kinds set.
-pub fn collapse_missing(per_height: HashMap<u64, Vec<DataKind>>) -> Vec<(Range, Vec<DataKind>)> {
+/// entry per contiguous run of heights that share the same missing-kinds set.
+/// Each height has its own files, so the tables can be archived in any chunks.
+pub fn collapse_missing(per_height: HashMap<u64, Vec<DataKind>>) -> Vec<MissingTables> {
     let mut by_kinds: HashMap<Vec<DataKind>, RangeBag> = HashMap::new();
     for (height, kinds) in per_height {
         by_kinds
@@ -187,7 +188,7 @@ pub fn collapse_missing(per_height: HashMap<u64, Vec<DataKind>>) -> Vec<(Range, 
     let mut result = Vec::new();
     for (kinds, bag) in by_kinds {
         for range in bag.compact().ranges {
-            result.push((range, kinds.clone()));
+            result.push(MissingTables::new(range, kinds.clone(), Completion::AnyChunks));
         }
     }
     result

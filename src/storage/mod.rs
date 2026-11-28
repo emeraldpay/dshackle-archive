@@ -34,6 +34,7 @@ use object_store::{
 use tokio::sync::mpsc::Receiver;
 pub use read_budget::{ReadRecord, ReadReservation};
 pub use deletion::DeleteFailure;
+pub use missing::{Completion, MissingTables};
 use url::Url;
 use itertools::Itertools;
 
@@ -45,6 +46,7 @@ pub mod objects;
 pub mod pulsar;
 mod avro_reader;
 mod deletion;
+mod missing;
 mod object_reader;
 mod read_budget;
 mod sorted_files;
@@ -315,7 +317,7 @@ pub trait ScanTarget: WriteTarget {
         &self,
         blocks: Range,
         tx_options: &DataOptions,
-    ) -> Result<Vec<(Range, Vec<DataKind>)>>;
+    ) -> Result<Vec<MissingTables>>;
 }
 
 ///
@@ -387,7 +389,7 @@ pub async fn find_incomplete_by_listing<T>(
     target: &T,
     blocks: Range,
     tx_options: &DataOptions,
-) -> Result<Vec<(Range, Vec<DataKind>)>>
+) -> Result<Vec<MissingTables>>
 where
     T: ReadTarget,
 {
@@ -430,7 +432,7 @@ where
     }
 
     let incomplete = archived.list_incomplete();
-    let mut result: Vec<(Range, Vec<DataKind>)> = Vec::new();
+    let mut result: Vec<MissingTables> = Vec::new();
 
     // Add ranges that have incomplete files (some files present but not all)
     if !incomplete.is_empty() {
@@ -444,12 +446,12 @@ where
             ranges.iter().take(5).map(|r| r.to_string()).join(",")
         );
 
-        let incomplete_by_range: Vec<(Range, Vec<DataKind>)> = ranges.iter()
+        let incomplete_by_range: Vec<MissingTables> = ranges.iter()
             .filter_map(|r| {
                 // we clone all file groups here b/c if it split by different ranges each range would download its part
                 incomplete.iter()
                     .find(|g| g.range.eq(r))
-                    .map(|g| (r.clone(), g.get_incomplete_kinds()))
+                    .map(|g| MissingTables::new(r.clone(), g.get_incomplete_kinds(), Completion::SameRange))
             })
             .collect();
         result.extend(incomplete_by_range);
@@ -464,7 +466,7 @@ where
         );
 
         for range in missing_ranges.ranges {
-            result.push((range, all_kinds.clone()));
+            result.push(MissingTables::new(range, all_kinds.clone(), Completion::AnyChunks));
         }
     }
 
@@ -711,8 +713,8 @@ mod tests {
         let incomplete = storage.find_incomplete_tables(range.clone(), &tx_options).await.unwrap();
 
         assert_eq!(incomplete.len(), 1);
-        assert_eq!(incomplete[0].0, range);
-        assert_eq!(incomplete[0].1, vec![DataKind::Transactions]);
+        assert_eq!(incomplete[0].range, range);
+        assert_eq!(incomplete[0].kinds, vec![DataKind::Transactions]);
     }
 
     #[tokio::test]
@@ -729,8 +731,8 @@ mod tests {
         let incomplete = storage.find_incomplete_tables(range, &tx_options).await.unwrap();
 
         assert_eq!(incomplete.len(), 1);
-        assert_eq!(incomplete[0].0, Range::Single(21596362.into()));
-        assert_eq!(incomplete[0].1, vec![DataKind::Blocks]);
+        assert_eq!(incomplete[0].range, Range::Single(21596362.into()));
+        assert_eq!(incomplete[0].kinds, vec![DataKind::Blocks]);
     }
 
     #[tokio::test]
@@ -747,8 +749,8 @@ mod tests {
         let incomplete = storage.find_incomplete_tables(range, &tx_options).await.unwrap();
 
         assert_eq!(incomplete.len(), 1);
-        assert_eq!(incomplete[0].0, Range::Single(21596362.into()));
-        assert_eq!(incomplete[0].1, vec![DataKind::Transactions]);
+        assert_eq!(incomplete[0].range, Range::Single(21596362.into()));
+        assert_eq!(incomplete[0].kinds, vec![DataKind::Transactions]);
     }
 
     #[tokio::test]
@@ -765,9 +767,9 @@ mod tests {
 
         // 21596362 has no files at all, so it's reported as completely missing
         assert_eq!(incomplete.len(), 1);
-        assert_eq!(incomplete[0].0, Range::Single(21596362.into()));
-        assert!(incomplete[0].1.contains(&DataKind::Blocks));
-        assert!(incomplete[0].1.contains(&DataKind::Transactions));
+        assert_eq!(incomplete[0].range, Range::Single(21596362.into()));
+        assert!(incomplete[0].kinds.contains(&DataKind::Blocks));
+        assert!(incomplete[0].kinds.contains(&DataKind::Transactions));
     }
 
     #[tokio::test]
@@ -790,13 +792,13 @@ mod tests {
 
         // Sort for consistent testing
         let mut sorted_incomplete = incomplete.clone();
-        sorted_incomplete.sort_by_key(|(r, _)| r.start());
+        sorted_incomplete.sort_by_key(|m| m.range.start());
 
-        assert_eq!(sorted_incomplete[0].0, Range::Single(21596362.into()));
-        assert_eq!(sorted_incomplete[0].1, vec![DataKind::Transactions]);
+        assert_eq!(sorted_incomplete[0].range, Range::Single(21596362.into()));
+        assert_eq!(sorted_incomplete[0].kinds, vec![DataKind::Transactions]);
 
-        assert_eq!(sorted_incomplete[1].0, Range::Single(21596364.into()));
-        assert_eq!(sorted_incomplete[1].1, vec![DataKind::Blocks]);
+        assert_eq!(sorted_incomplete[1].range, Range::Single(21596364.into()));
+        assert_eq!(sorted_incomplete[1].kinds, vec![DataKind::Blocks]);
     }
 
     #[tokio::test]
@@ -839,8 +841,8 @@ mod tests {
         let incomplete = storage.find_incomplete_tables(range, &tx_options).await.unwrap();
 
         assert_eq!(incomplete.len(), 1);
-        assert_eq!(incomplete[0].0, Range::Single(21596362.into()));
-        assert_eq!(incomplete[0].1, vec![DataKind::TransactionTraces]);
+        assert_eq!(incomplete[0].range, Range::Single(21596362.into()));
+        assert_eq!(incomplete[0].kinds, vec![DataKind::TransactionTraces]);
     }
 
     #[tokio::test]
@@ -875,9 +877,9 @@ mod tests {
 
         // When there are no files at all, the entire range is reported as missing
         assert_eq!(incomplete.len(), 1);
-        assert_eq!(incomplete[0].0, Range::new(21596362, 21596363));
-        assert!(incomplete[0].1.contains(&DataKind::Blocks));
-        assert!(incomplete[0].1.contains(&DataKind::Transactions));
+        assert_eq!(incomplete[0].range, Range::new(21596362, 21596363));
+        assert!(incomplete[0].kinds.contains(&DataKind::Blocks));
+        assert!(incomplete[0].kinds.contains(&DataKind::Transactions));
     }
 
     #[tokio::test]
@@ -908,8 +910,8 @@ mod tests {
         let incomplete = storage.find_incomplete_tables(range, &tx_options).await.unwrap();
 
         assert_eq!(incomplete.len(), 1);
-        assert_eq!(incomplete[0].0, Range::new(21596000, 21596999));
-        assert_eq!(incomplete[0].1, vec![DataKind::Transactions]);
+        assert_eq!(incomplete[0].range, Range::new(21596000, 21596999));
+        assert_eq!(incomplete[0].kinds, vec![DataKind::Transactions]);
     }
 
     #[tokio::test]
@@ -931,9 +933,9 @@ mod tests {
 
         // 21596101 is completely missing, so it's reported
         assert_eq!(incomplete.len(), 1);
-        assert_eq!(incomplete[0].0, Range::Single(21596101.into()));
-        assert!(incomplete[0].1.contains(&DataKind::Blocks));
-        assert!(incomplete[0].1.contains(&DataKind::Transactions));
+        assert_eq!(incomplete[0].range, Range::Single(21596101.into()));
+        assert!(incomplete[0].kinds.contains(&DataKind::Blocks));
+        assert!(incomplete[0].kinds.contains(&DataKind::Transactions));
     }
 
     #[tokio::test]
@@ -957,9 +959,9 @@ mod tests {
 
         // The gap should be reported as a missing range
         assert_eq!(incomplete.len(), 1);
-        assert_eq!(incomplete[0].0, Range::new(21596364, 21596366));
-        assert!(incomplete[0].1.contains(&DataKind::Blocks));
-        assert!(incomplete[0].1.contains(&DataKind::Transactions));
+        assert_eq!(incomplete[0].range, Range::new(21596364, 21596366));
+        assert!(incomplete[0].kinds.contains(&DataKind::Blocks));
+        assert!(incomplete[0].kinds.contains(&DataKind::Transactions));
     }
 
     #[tokio::test]
@@ -986,16 +988,16 @@ mod tests {
 
         // Sort for consistent testing
         let mut sorted = incomplete.clone();
-        sorted.sort_by_key(|(r, _)| r.start());
+        sorted.sort_by_key(|m| m.range.start());
 
         // 21596363 is incomplete (missing txes)
-        assert_eq!(sorted[0].0, Range::Single(21596363.into()));
-        assert_eq!(sorted[0].1, vec![DataKind::Transactions]);
+        assert_eq!(sorted[0].range, Range::Single(21596363.into()));
+        assert_eq!(sorted[0].kinds, vec![DataKind::Transactions]);
 
         // 21596364 is completely missing
-        assert_eq!(sorted[1].0, Range::Single(21596364.into()));
-        assert!(sorted[1].1.contains(&DataKind::Blocks));
-        assert!(sorted[1].1.contains(&DataKind::Transactions));
+        assert_eq!(sorted[1].range, Range::Single(21596364.into()));
+        assert!(sorted[1].kinds.contains(&DataKind::Blocks));
+        assert!(sorted[1].kinds.contains(&DataKind::Transactions));
     }
 
     ///
@@ -1021,8 +1023,31 @@ mod tests {
         let incomplete = storage.find_incomplete_tables(range, &tx_options).await.unwrap();
 
         assert_eq!(incomplete.len(), 1);
-        assert_eq!(incomplete[0].0, Range::new(12_345_000, 12_349_999));
-        assert_eq!(incomplete[0].1, vec![DataKind::Transactions]);
+        assert_eq!(incomplete[0].range, Range::new(12_345_000, 12_349_999));
+        assert_eq!(incomplete[0].kinds, vec![DataKind::Transactions]);
+    }
+
+    ///
+    /// A single block in a range file forms its own group, apart from the complete single block files of the same height.
+    /// The missing tables are for that range, and only such range can complete it, which a single block cannot.
+    #[tokio::test]
+    async fn test_find_incomplete_tables_single_block_range_file() {
+        let storage = create_test_storage(vec![
+            "archive/eth/021000000/021544000/021544221.block.avro",
+            "archive/eth/021000000/021544000/021544221.txes.avro",
+            "archive/eth/021000000/range-021544221_021544221.blocks.avro",
+        ]).await;
+
+        let range = Range::new(21_544_221, 21_544_221);
+        let tx_options = DataOptions::default();
+
+        let incomplete = storage.find_incomplete_tables(range, &tx_options).await.unwrap();
+
+        assert_eq!(incomplete.len(), 1);
+        assert_eq!(incomplete[0].range, Range::Multiple(21_544_221.into(), 21_544_221.into()));
+        assert_eq!(incomplete[0].kinds, vec![DataKind::Transactions]);
+        assert_eq!(incomplete[0].completion, Completion::SameRange);
+        assert_eq!(incomplete[0].chunks(1000), None);
     }
 
     #[tokio::test]
@@ -1042,8 +1067,8 @@ mod tests {
 
         // Should report the large gap as a single missing range
         assert_eq!(incomplete.len(), 1);
-        assert_eq!(incomplete[0].0, Range::new(21596363, 21596999));
-        assert!(incomplete[0].1.contains(&DataKind::Blocks));
-        assert!(incomplete[0].1.contains(&DataKind::Transactions));
+        assert_eq!(incomplete[0].range, Range::new(21596363, 21596999));
+        assert!(incomplete[0].kinds.contains(&DataKind::Blocks));
+        assert!(incomplete[0].kinds.contains(&DataKind::Transactions));
     }
 }

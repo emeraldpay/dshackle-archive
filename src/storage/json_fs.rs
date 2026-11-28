@@ -25,7 +25,7 @@ use crate::archiver::range::Range;
 use crate::formats::json;
 use crate::notify::{FileGroup, Location, RowFiles};
 use crate::record::ArchiveRow;
-use crate::storage::{ScanTarget, TargetFile, TargetFileWriter, WriteTarget};
+use crate::storage::{MissingTables, ScanTarget, TargetFile, TargetFileWriter, WriteTarget};
 
 /// Filesystem-backed JSON-per-field target.
 ///
@@ -98,7 +98,7 @@ impl ScanTarget for JsonFsStorage {
         &self,
         blocks: Range,
         tx_options: &DataOptions,
-    ) -> Result<Vec<(Range, Vec<DataKind>)>> {
+    ) -> Result<Vec<MissingTables>> {
         let mut per_height: HashMap<u64, Vec<DataKind>> = HashMap::new();
         for height in blocks.iter() {
             let entries = self.read_dir_entries(height)?;
@@ -552,8 +552,8 @@ mod tests {
             .unwrap();
         // 101 and 102 are both missing both kinds — should merge into a single range.
         assert_eq!(incomplete.len(), 1);
-        assert_eq!(incomplete[0].0, Range::new(101, 102));
-        let mut kinds = incomplete[0].1.clone();
+        assert_eq!(incomplete[0].range, Range::new(101, 102));
+        let mut kinds = incomplete[0].kinds.clone();
         kinds.sort();
         assert_eq!(kinds, vec![DataKind::Blocks, DataKind::Transactions]);
     }

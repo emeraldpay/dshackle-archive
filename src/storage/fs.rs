@@ -18,7 +18,7 @@ use crate::notify::Location;
 use crate::record::ArchiveRow;
 use crate::storage::{
     avro_reader, find_incomplete_by_listing, sorted_files, FileReference, ReadTarget, RecordStream,
-    ScanTarget, TargetFile, TargetFileReader, TargetFileWriter, WriteTarget,
+    MissingTables, ScanTarget, TargetFile, TargetFileReader, TargetFileWriter, WriteTarget,
 };
 use anyhow::{anyhow, Context, Result};
 use tokio::sync::mpsc::{Receiver, Sender};
@@ -55,7 +55,7 @@ impl ScanTarget for FsStorage {
         &self,
         blocks: Range,
         tx_options: &DataOptions,
-    ) -> Result<Vec<(Range, Vec<DataKind>)>> {
+    ) -> Result<Vec<MissingTables>> {
         find_incomplete_by_listing(self, blocks, tx_options).await
     }
 }
@@ -473,6 +473,6 @@ mod tests {
             .unwrap();
 
         assert_eq!(incomplete.len(), 1);
-        assert_eq!(incomplete[0].0, Range::new(21_597_000, 21_597_001));
+        assert_eq!(incomplete[0].range, Range::new(21_597_000, 21_597_001));
     }
 }
